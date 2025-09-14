@@ -1,6 +1,6 @@
 <?php
 /**
- * АкваСбор - Общий файл данных v2.1 - С ЗАГРУЗКОЙ ФОТО
+ * АкваСбор - Общий файл данных v2.2 - ИСПРАВЛЕНО
  * Центральное хранилище + функции сохранения + загрузка изображений
  */
 
@@ -549,7 +549,7 @@ function createProduct($data, $files = null) {
     }
 }
 
-function updateProduct($id, $data, $files = null) {
+function updateProduct($id, $data, $files = null, $newImages = null) {
     try {
         $dynamicData = initializeDynamicData();
         $products = &$dynamicData['products'];
@@ -560,43 +560,43 @@ function updateProduct($id, $data, $files = null) {
         }
 
         $product = &$products[$productIndex];
-        $oldImages = $product['images'] ?? [];
 
-        // Обрабатываем загрузку новых изображений
-        if ($files && isset($files['images']) && !empty($files['images']['name'][0])) {
-            $uploadResult = uploadProductImages($files);
-            if (!$uploadResult['success']) {
-                return $uploadResult;
+        // Если переданы новые изображения (для удаления конкретного изображения)
+        if ($newImages !== null) {
+            $product['images'] = array_values($newImages);
+        } else {
+            // Обрабатываем загрузку новых изображений
+            if ($files && isset($files['images']) && !empty($files['images']['name'][0])) {
+                $uploadResult = uploadProductImages($files);
+                if (!$uploadResult['success']) {
+                    return $uploadResult;
+                }
+                // Добавляем новые изображения к существующим
+                $product['images'] = array_merge($product['images'] ?? [], $uploadResult['images']);
             }
-
-            // Удаляем старые изображения
-            foreach ($oldImages as $oldImage) {
-                deleteProductImage($oldImage);
-            }
-
-            $product['images'] = $uploadResult['images'];
         }
 
         // Обновляем только переданные поля
-        $updatedFields = [];
         $updateableFields = [
             'name', 'description', 'short_description', 'price', 'old_price',
-            'category_id', 'stock', 'weight', 'meta_title', 'meta_description', 'meta_keywords'
+            'category_id', 'stock', 'weight', 'meta_title', 'meta_description', 'meta_keywords', 'sku'
         ];
 
         foreach ($updateableFields as $field) {
             if (isset($data[$field])) {
-                $product[$field] = $data[$field];
-                $updatedFields[] = $field;
+                if ($field === 'old_price' && empty($data[$field])) {
+                    $product[$field] = null;
+                } else {
+                    $product[$field] = $data[$field];
+                }
             }
         }
 
         // Обновляем булевы поля
         $boolFields = ['is_featured', 'is_new', 'is_active'];
         foreach ($boolFields as $field) {
-            if (isset($data[$field])) {
+            if (array_key_exists($field, $data)) {
                 $product[$field] = (bool)$data[$field];
-                $updatedFields[] = $field;
             }
         }
 
@@ -615,7 +615,7 @@ function updateProduct($id, $data, $files = null) {
         $dynamicData['last_updated'] = date('Y-m-d H:i:s');
 
         if (saveDynamicData($dynamicData)) {
-            return ['success' => true, 'message' => 'Товар обновлен успешно!', 'updated_fields' => $updatedFields];
+            return ['success' => true, 'message' => 'Товар обновлен успешно!'];
         } else {
             return ['success' => false, 'message' => 'Ошибка сохранения данных'];
         }
@@ -951,7 +951,10 @@ function getShortDescription($name) {
     }
 }
 
+// Подключаем системы корзины и заказов
+require_once 'cart_system.php';
+require_once 'date_functions.php';
+
 // Инициализируем данные при первом запуске
 initializeDynamicData();
-
 ?>
