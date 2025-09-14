@@ -1,13 +1,25 @@
 <?php
 /**
- * АкваСбор - Общий файл данных v2.0 - РАСШИРЕННАЯ ВЕРСИЯ
- * Центральное хранилище + функции сохранения
+ * АкваСбор - Общий файл данных v2.1 - С ЗАГРУЗКОЙ ФОТО
+ * Центральное хранилище + функции сохранения + загрузка изображений
  */
 
 // === КОНФИГУРАЦИЯ ===
 define('SITE_NAME', 'АкваСбор');
 define('SITE_DESCRIPTION', 'Аквариумы и их обитатели');
 define('ADMIN_PASSWORD', 'admin123');
+
+// Папки для загрузки файлов
+define('UPLOAD_DIR', 'uploads/');
+define('PRODUCT_IMAGES_DIR', UPLOAD_DIR . 'products/');
+
+// Создаем папки для загрузки если их нет
+if (!file_exists(UPLOAD_DIR)) {
+    mkdir(UPLOAD_DIR, 0755, true);
+}
+if (!file_exists(PRODUCT_IMAGES_DIR)) {
+    mkdir(PRODUCT_IMAGES_DIR, 0755, true);
+}
 
 // === УПРАВЛЕНИЕ ДИНАМИЧЕСКИМИ ДАННЫМИ ===
 
@@ -43,6 +55,67 @@ function initializeDynamicData() {
         return $initialData;
     }
     return $dynamicData;
+}
+
+// === ФУНКЦИИ ЗАГРУЗКИ ФОТО ===
+
+function uploadProductImages($files) {
+    $uploadedImages = [];
+    $allowedTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
+    $maxSize = 5 * 1024 * 1024; // 5MB
+
+    if (!isset($files['images'])) {
+        return ['success' => true, 'images' => []];
+    }
+
+    $images = $files['images'];
+
+    // Если загружается одно изображение, преобразуем в массив
+    if (!is_array($images['name'])) {
+        $images = [
+            'name' => [$images['name']],
+            'type' => [$images['type']],
+            'tmp_name' => [$images['tmp_name']],
+            'error' => [$images['error']],
+            'size' => [$images['size']]
+        ];
+    }
+
+    for ($i = 0; $i < count($images['name']); $i++) {
+        if ($images['error'][$i] === UPLOAD_ERR_NO_FILE) continue;
+
+        if ($images['error'][$i] !== UPLOAD_ERR_OK) {
+            return ['success' => false, 'message' => 'Ошибка загрузки файла: ' . $images['name'][$i]];
+        }
+
+        if ($images['size'][$i] > $maxSize) {
+            return ['success' => false, 'message' => 'Файл ' . $images['name'][$i] . ' слишком большой (макс. 5MB)'];
+        }
+
+        if (!in_array($images['type'][$i], $allowedTypes)) {
+            return ['success' => false, 'message' => 'Недопустимый тип файла: ' . $images['name'][$i]];
+        }
+
+        // Генерируем уникальное имя файла
+        $extension = pathinfo($images['name'][$i], PATHINFO_EXTENSION);
+        $fileName = 'product_' . time() . '_' . $i . '.' . $extension;
+        $filePath = PRODUCT_IMAGES_DIR . $fileName;
+
+        if (move_uploaded_file($images['tmp_name'][$i], $filePath)) {
+            $uploadedImages[] = PRODUCT_IMAGES_DIR . $fileName;
+        } else {
+            return ['success' => false, 'message' => 'Не удалось сохранить файл: ' . $images['name'][$i]];
+        }
+    }
+
+    return ['success' => true, 'images' => $uploadedImages];
+}
+
+function deleteProductImage($imagePath) {
+    if (file_exists($imagePath)) {
+        return unlink($imagePath);
+    }
+    return true;
 }
 
 // === КАТЕГОРИИ ===
@@ -413,12 +486,22 @@ function getOriginalNews() {
 
 // === ФУНКЦИИ СОЗДАНИЯ/РЕДАКТИРОВАНИЯ ===
 
-function createProduct($data) {
+function createProduct($data, $files = null) {
     try {
         $dynamicData = initializeDynamicData();
         $products = $dynamicData['products'];
 
         $newId = max(array_column($products, 'id')) + 1;
+
+        // Обрабатываем загрузку изображений
+        $images = [];
+        if ($files && isset($files['images'])) {
+            $uploadResult = uploadProductImages($files);
+            if (!$uploadResult['success']) {
+                return $uploadResult;
+            }
+            $images = $uploadResult['images'];
+        }
 
         $newProduct = [
             'id' => $newId,
@@ -438,7 +521,7 @@ function createProduct($data) {
                 'width' => (int)($data['width'] ?? 10),
                 'height' => (int)($data['height'] ?? 10)
             ],
-            'images' => [],
+            'images' => $images,
             'is_featured' => isset($data['is_featured']),
             'is_new' => isset($data['is_new']),
             'is_active' => isset($data['is_active']),
@@ -466,7 +549,7 @@ function createProduct($data) {
     }
 }
 
-function updateProduct($id, $data) {
+function updateProduct($id, $data, $files = null) {
     try {
         $dynamicData = initializeDynamicData();
         $products = &$dynamicData['products'];
@@ -477,11 +560,27 @@ function updateProduct($id, $data) {
         }
 
         $product = &$products[$productIndex];
+        $oldImages = $product['images'] ?? [];
+
+        // Обрабатываем загрузку новых изображений
+        if ($files && isset($files['images']) && !empty($files['images']['name'][0])) {
+            $uploadResult = uploadProductImages($files);
+            if (!$uploadResult['success']) {
+                return $uploadResult;
+            }
+
+            // Удаляем старые изображения
+            foreach ($oldImages as $oldImage) {
+                deleteProductImage($oldImage);
+            }
+
+            $product['images'] = $uploadResult['images'];
+        }
 
         // Обновляем только переданные поля
         $updatedFields = [];
         $updateableFields = [
-            'name', 'description', 'short_description', 'price', 'old_price', 
+            'name', 'description', 'short_description', 'price', 'old_price',
             'category_id', 'stock', 'weight', 'meta_title', 'meta_description', 'meta_keywords'
         ];
 
@@ -536,6 +635,14 @@ function deleteProduct($id) {
         }
 
         $product = $products[$productIndex];
+
+        // Удаляем изображения товара
+        if (!empty($product['images'])) {
+            foreach ($product['images'] as $image) {
+                deleteProductImage($image);
+            }
+        }
+
         array_splice($products, $productIndex, 1);
 
         $dynamicData['last_updated'] = date('Y-m-d H:i:s');
