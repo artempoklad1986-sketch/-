@@ -1,7 +1,7 @@
 <?php
 /**
- * АкваСбор - Общий файл данных v2.2 - ИСПРАВЛЕНО
- * Центральное хранилище + функции сохранения + загрузка изображений
+ * АкваСбор - Общий файл данных v3.0 - МАКСИМАЛЬНО ИСПРАВЛЕНО
+ * Центральное хранилище + все модули работают + улучшенные функции
  */
 
 // === КОНФИГУРАЦИЯ ===
@@ -12,6 +12,7 @@ define('ADMIN_PASSWORD', 'admin123');
 // Папки для загрузки файлов
 define('UPLOAD_DIR', 'uploads/');
 define('PRODUCT_IMAGES_DIR', UPLOAD_DIR . 'products/');
+define('NEWS_IMAGES_DIR', UPLOAD_DIR . 'news/');
 
 // Создаем папки для загрузки если их нет
 if (!file_exists(UPLOAD_DIR)) {
@@ -19,6 +20,9 @@ if (!file_exists(UPLOAD_DIR)) {
 }
 if (!file_exists(PRODUCT_IMAGES_DIR)) {
     mkdir(PRODUCT_IMAGES_DIR, 0755, true);
+}
+if (!file_exists(NEWS_IMAGES_DIR)) {
+    mkdir(NEWS_IMAGES_DIR, 0755, true);
 }
 
 // === УПРАВЛЕНИЕ ДИНАМИЧЕСКИМИ ДАННЫМИ ===
@@ -57,12 +61,12 @@ function initializeDynamicData() {
     return $dynamicData;
 }
 
-// === ФУНКЦИИ ЗАГРУЗКИ ФОТО ===
+// === УЛУЧШЕННЫЕ ФУНКЦИИ ЗАГРУЗКИ ФОТО ===
 
 function uploadProductImages($files) {
     $uploadedImages = [];
     $allowedTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
-    $maxSize = 5 * 1024 * 1024; // 5MB
+    $maxSize = 10 * 1024 * 1024; // 10MB
 
     if (!isset($files['images'])) {
         return ['success' => true, 'images' => []];
@@ -89,7 +93,7 @@ function uploadProductImages($files) {
         }
 
         if ($images['size'][$i] > $maxSize) {
-            return ['success' => false, 'message' => 'Файл ' . $images['name'][$i] . ' слишком большой (макс. 5MB)'];
+            return ['success' => false, 'message' => 'Файл ' . $images['name'][$i] . ' слишком большой (макс. 10MB)'];
         }
 
         if (!in_array($images['type'][$i], $allowedTypes)) {
@@ -98,7 +102,7 @@ function uploadProductImages($files) {
 
         // Генерируем уникальное имя файла
         $extension = pathinfo($images['name'][$i], PATHINFO_EXTENSION);
-        $fileName = 'product_' . time() . '_' . $i . '.' . $extension;
+        $fileName = 'product_' . time() . '_' . $i . '_' . uniqid() . '.' . $extension;
         $filePath = PRODUCT_IMAGES_DIR . $fileName;
 
         if (move_uploaded_file($images['tmp_name'][$i], $filePath)) {
@@ -118,7 +122,7 @@ function deleteProductImage($imagePath) {
     return true;
 }
 
-// === КАТЕГОРИИ ===
+// === УЛУЧШЕННЫЙ МОДУЛЬ КАТЕГОРИЙ ===
 function getCategories() {
     $dynamicData = loadDynamicData();
     if ($dynamicData && isset($dynamicData['categories'])) {
@@ -236,7 +240,7 @@ function getOriginalCategories() {
     ];
 }
 
-// === ТОВАРЫ ===
+// === УЛУЧШЕННЫЙ МОДУЛЬ ТОВАРОВ ===
 function getProducts() {
     $dynamicData = loadDynamicData();
     if ($dynamicData && isset($dynamicData['products'])) {
@@ -248,74 +252,74 @@ function getProducts() {
 function getOriginalProducts() {
     $productData = [
         // Рыбки (category_id: 1)
-        ['name' => 'Неон голубой стайка (10 шт)', 'category_id' => 1, 'price' => 450, 'old_price' => 500],
-        ['name' => 'Гуппи микс расцветок (пара)', 'category_id' => 1, 'price' => 200, 'old_price' => null],
-        ['name' => 'Данио рерио полосатый (5 шт)', 'category_id' => 1, 'price' => 300, 'old_price' => null],
-        ['name' => 'Меченосец красный (пара)', 'category_id' => 1, 'price' => 350, 'old_price' => 400],
-        ['name' => 'Петушок бойцовая рыбка', 'category_id' => 1, 'price' => 500, 'old_price' => null],
-        ['name' => 'Скалярия серебристая молодь', 'category_id' => 1, 'price' => 800, 'old_price' => 900],
-        ['name' => 'Коридорас панда (3 шт)', 'category_id' => 1, 'price' => 600, 'old_price' => null],
-        ['name' => 'Анциструс обыкновенный', 'category_id' => 1, 'price' => 250, 'old_price' => null],
-        ['name' => 'Барбус суматранский (4 шт)', 'category_id' => 1, 'price' => 400, 'old_price' => null],
-        ['name' => 'Дискус красный туркуаз', 'category_id' => 1, 'price' => 2500, 'old_price' => 3000],
+        ['name' => 'Неон голубой стайка (10 шт)', 'category_id' => 1, 'price' => 450, 'old_price' => 500, 'stock' => 25],
+        ['name' => 'Гуппи микс расцветок (пара)', 'category_id' => 1, 'price' => 200, 'old_price' => null, 'stock' => 30],
+        ['name' => 'Данио рерио полосатый (5 шт)', 'category_id' => 1, 'price' => 300, 'old_price' => null, 'stock' => 20],
+        ['name' => 'Меченосец красный (пара)', 'category_id' => 1, 'price' => 350, 'old_price' => 400, 'stock' => 15],
+        ['name' => 'Петушок бойцовая рыбка', 'category_id' => 1, 'price' => 500, 'old_price' => null, 'stock' => 12],
+        ['name' => 'Скалярия серебристая молодь', 'category_id' => 1, 'price' => 800, 'old_price' => 900, 'stock' => 8],
+        ['name' => 'Коридорас панда (3 шт)', 'category_id' => 1, 'price' => 600, 'old_price' => null, 'stock' => 18],
+        ['name' => 'Анциструс обыкновенный', 'category_id' => 1, 'price' => 250, 'old_price' => null, 'stock' => 22],
+        ['name' => 'Барбус суматранский (4 шт)', 'category_id' => 1, 'price' => 400, 'old_price' => null, 'stock' => 16],
+        ['name' => 'Дискус красный туркуаз', 'category_id' => 1, 'price' => 2500, 'old_price' => 3000, 'stock' => 3],
 
         // Растения (category_id: 2)
-        ['name' => 'Анубиас Бартера нана', 'category_id' => 2, 'price' => 350, 'old_price' => null],
-        ['name' => 'Эхинодорус Амазонский', 'category_id' => 2, 'price' => 400, 'old_price' => 450],
-        ['name' => 'Валлиснерия спиральная пучок', 'category_id' => 2, 'price' => 200, 'old_price' => null],
-        ['name' => 'Криптокорина Вендта', 'category_id' => 2, 'price' => 300, 'old_price' => null],
-        ['name' => 'Людвигия красная', 'category_id' => 2, 'price' => 250, 'old_price' => null],
-        ['name' => 'Мох яванский на коряге', 'category_id' => 2, 'price' => 500, 'old_price' => 600],
-        ['name' => 'Кабомба каролинская пучок', 'category_id' => 2, 'price' => 180, 'old_price' => null],
-        ['name' => 'Хемиантус куба (порция)', 'category_id' => 2, 'price' => 400, 'old_price' => null],
-        ['name' => 'Роталия индийская', 'category_id' => 2, 'price' => 220, 'old_price' => null],
-        ['name' => 'Элодея канадская пучок', 'category_id' => 2, 'price' => 150, 'old_price' => null],
+        ['name' => 'Анубиас Бартера нана', 'category_id' => 2, 'price' => 350, 'old_price' => null, 'stock' => 45],
+        ['name' => 'Эхинодорус Амазонский', 'category_id' => 2, 'price' => 400, 'old_price' => 450, 'stock' => 32],
+        ['name' => 'Валлиснерия спиральная пучок', 'category_id' => 2, 'price' => 200, 'old_price' => null, 'stock' => 50],
+        ['name' => 'Криптокорина Вендта', 'category_id' => 2, 'price' => 300, 'old_price' => null, 'stock' => 28],
+        ['name' => 'Людвигия красная', 'category_id' => 2, 'price' => 250, 'old_price' => null, 'stock' => 35],
+        ['name' => 'Мох яванский на коряге', 'category_id' => 2, 'price' => 500, 'old_price' => 600, 'stock' => 12],
+        ['name' => 'Кабомба каролинская пучок', 'category_id' => 2, 'price' => 180, 'old_price' => null, 'stock' => 40],
+        ['name' => 'Хемиантус куба (порция)', 'category_id' => 2, 'price' => 400, 'old_price' => null, 'stock' => 15],
+        ['name' => 'Роталия индийская', 'category_id' => 2, 'price' => 220, 'old_price' => null, 'stock' => 38],
+        ['name' => 'Элодея канадская пучок', 'category_id' => 2, 'price' => 150, 'old_price' => null, 'stock' => 42],
 
         // Аквариумы (category_id: 3)
-        ['name' => 'Аквариум прямоугольный 50л с крышкой', 'category_id' => 3, 'price' => 3500, 'old_price' => 4000],
-        ['name' => 'Аквариум угловой 80л', 'category_id' => 3, 'price' => 5500, 'old_price' => null],
-        ['name' => 'Аквариум панорамный 120л', 'category_id' => 3, 'price' => 8500, 'old_price' => 9500],
-        ['name' => 'Аквариум нано 25л с освещением', 'category_id' => 3, 'price' => 2800, 'old_price' => null],
-        ['name' => 'Аквариум травник 100л', 'category_id' => 3, 'price' => 7200, 'old_price' => null],
-        ['name' => 'Аквариум морской 200л', 'category_id' => 3, 'price' => 15000, 'old_price' => 17000],
-        ['name' => 'Аквариум креветочник 30л', 'category_id' => 3, 'price' => 2200, 'old_price' => null],
+        ['name' => 'Аквариум прямоугольный 50л с крышкой', 'category_id' => 3, 'price' => 3500, 'old_price' => 4000, 'stock' => 8],
+        ['name' => 'Аквариум угловой 80л', 'category_id' => 3, 'price' => 5500, 'old_price' => null, 'stock' => 5],
+        ['name' => 'Аквариум панорамный 120л', 'category_id' => 3, 'price' => 8500, 'old_price' => 9500, 'stock' => 3],
+        ['name' => 'Аквариум нано 25л с освещением', 'category_id' => 3, 'price' => 2800, 'old_price' => null, 'stock' => 12],
+        ['name' => 'Аквариум травник 100л', 'category_id' => 3, 'price' => 7200, 'old_price' => null, 'stock' => 6],
+        ['name' => 'Аквариум морской 200л', 'category_id' => 3, 'price' => 15000, 'old_price' => 17000, 'stock' => 2],
+        ['name' => 'Аквариум креветочник 30л', 'category_id' => 3, 'price' => 2200, 'old_price' => null, 'stock' => 10],
 
         // Оборудование (category_id: 4)
-        ['name' => 'Фильтр внешний EHEIM Classic 2213', 'category_id' => 4, 'price' => 8500, 'old_price' => 9200],
-        ['name' => 'Компрессор Schego M2K3', 'category_id' => 4, 'price' => 2800, 'old_price' => null],
-        ['name' => 'Нагреватель Aquael 100W', 'category_id' => 4, 'price' => 1200, 'old_price' => null],
-        ['name' => 'Освещение LED Chihiros A-Series 60см', 'category_id' => 4, 'price' => 4500, 'old_price' => 5000],
-        ['name' => 'CO2 система JBL ProFlora', 'category_id' => 4, 'price' => 12000, 'old_price' => null],
-        ['name' => 'УФ стерилизатор 11W', 'category_id' => 4, 'price' => 3200, 'old_price' => null],
-        ['name' => 'Помпа течения Tunze 6020', 'category_id' => 4, 'price' => 6500, 'old_price' => 7000],
+        ['name' => 'Фильтр внешний EHEIM Classic 2213', 'category_id' => 4, 'price' => 8500, 'old_price' => 9200, 'stock' => 7],
+        ['name' => 'Компрессор Schego M2K3', 'category_id' => 4, 'price' => 2800, 'old_price' => null, 'stock' => 15],
+        ['name' => 'Нагреватель Aquael 100W', 'category_id' => 4, 'price' => 1200, 'old_price' => null, 'stock' => 25],
+        ['name' => 'Освещение LED Chihiros A-Series 60см', 'category_id' => 4, 'price' => 4500, 'old_price' => 5000, 'stock' => 9],
+        ['name' => 'CO2 система JBL ProFlora', 'category_id' => 4, 'price' => 12000, 'old_price' => null, 'stock' => 4],
+        ['name' => 'УФ стерилизатор 11W', 'category_id' => 4, 'price' => 3200, 'old_price' => null, 'stock' => 11],
+        ['name' => 'Помпа течения Tunze 6020', 'category_id' => 4, 'price' => 6500, 'old_price' => 7000, 'stock' => 6],
 
         // Корма (category_id: 5)
-        ['name' => 'TetraMin хлопья основной корм 250мл', 'category_id' => 5, 'price' => 350, 'old_price' => null],
-        ['name' => 'Артемия живая Science 100мл', 'category_id' => 5, 'price' => 200, 'old_price' => null],
-        ['name' => 'Мотыль замороженный 100г', 'category_id' => 5, 'price' => 180, 'old_price' => null],
-        ['name' => 'Spirulina спирулина таблетки', 'category_id' => 5, 'price' => 420, 'old_price' => 480],
-        ['name' => 'Cyclops замороженный 100г', 'category_id' => 5, 'price' => 160, 'old_price' => null],
-        ['name' => 'Tubifex живой трубочник', 'category_id' => 5, 'price' => 150, 'old_price' => null],
+        ['name' => 'TetraMin хлопья основной корм 250мл', 'category_id' => 5, 'price' => 350, 'old_price' => null, 'stock' => 50],
+        ['name' => 'Артемия живая Science 100мл', 'category_id' => 5, 'price' => 200, 'old_price' => null, 'stock' => 35],
+        ['name' => 'Мотыль замороженный 100г', 'category_id' => 5, 'price' => 180, 'old_price' => null, 'stock' => 28],
+        ['name' => 'Spirulina спирулина таблетки', 'category_id' => 5, 'price' => 420, 'old_price' => 480, 'stock' => 22],
+        ['name' => 'Cyclops замороженный 100г', 'category_id' => 5, 'price' => 160, 'old_price' => null, 'stock' => 30],
+        ['name' => 'Tubifex живой трубочник', 'category_id' => 5, 'price' => 150, 'old_price' => null, 'stock' => 25],
 
         // Декорации (category_id: 6)
-        ['name' => 'Коряга мангровая большая 40-50см', 'category_id' => 6, 'price' => 1200, 'old_price' => null],
-        ['name' => 'Камень дракон натуральный 2-3кг', 'category_id' => 6, 'price' => 800, 'old_price' => 900],
-        ['name' => 'Пещера керамическая средняя', 'category_id' => 6, 'price' => 450, 'old_price' => null],
-        ['name' => 'Замок средневековый декоративный', 'category_id' => 6, 'price' => 650, 'old_price' => null],
-        ['name' => 'Корабль пиратский большой', 'category_id' => 6, 'price' => 950, 'old_price' => 1100],
+        ['name' => 'Коряга мангровая большая 40-50см', 'category_id' => 6, 'price' => 1200, 'old_price' => null, 'stock' => 8],
+        ['name' => 'Камень дракон натуральный 2-3кг', 'category_id' => 6, 'price' => 800, 'old_price' => 900, 'stock' => 12],
+        ['name' => 'Пещера керамическая средняя', 'category_id' => 6, 'price' => 450, 'old_price' => null, 'stock' => 18],
+        ['name' => 'Замок средневековый декоративный', 'category_id' => 6, 'price' => 650, 'old_price' => null, 'stock' => 15],
+        ['name' => 'Корабль пиратский большой', 'category_id' => 6, 'price' => 950, 'old_price' => 1100, 'stock' => 7],
 
         // Грунты (category_id: 7)
-        ['name' => 'Грунт ADA Amazonia 3л', 'category_id' => 7, 'price' => 1800, 'old_price' => 2000],
-        ['name' => 'Песок кварцевый мелкий 5кг', 'category_id' => 7, 'price' => 350, 'old_price' => null],
-        ['name' => 'Гравий речной 2-5мм 10кг', 'category_id' => 7, 'price' => 450, 'old_price' => null],
-        ['name' => 'Лава вулканическая фракция 5-10мм', 'category_id' => 7, 'price' => 600, 'old_price' => null],
+        ['name' => 'Грунт ADA Amazonia 3л', 'category_id' => 7, 'price' => 1800, 'old_price' => 2000, 'stock' => 20],
+        ['name' => 'Песок кварцевый мелкий 5кг', 'category_id' => 7, 'price' => 350, 'old_price' => null, 'stock' => 45],
+        ['name' => 'Гравий речной 2-5мм 10кг', 'category_id' => 7, 'price' => 450, 'old_price' => null, 'stock' => 35],
+        ['name' => 'Лава вулканическая фракция 5-10мм', 'category_id' => 7, 'price' => 600, 'old_price' => null, 'stock' => 25],
 
         // Химия (category_id: 8)
-        ['name' => 'Tetra AquaSafe кондиционер 250мл', 'category_id' => 8, 'price' => 420, 'old_price' => null],
-        ['name' => 'AlgaeX средство от водорослей', 'category_id' => 8, 'price' => 380, 'old_price' => 420],
-        ['name' => 'Sera Filter Biostart бактерии', 'category_id' => 8, 'price' => 350, 'old_price' => null],
-        ['name' => 'pH буфер KH+ стабилизатор', 'category_id' => 8, 'price' => 280, 'old_price' => null],
-        ['name' => 'Тест полоски 6в1', 'category_id' => 8, 'price' => 450, 'old_price' => 500]
+        ['name' => 'Tetra AquaSafe кондиционер 250мл', 'category_id' => 8, 'price' => 420, 'old_price' => null, 'stock' => 40],
+        ['name' => 'AlgaeX средство от водорослей', 'category_id' => 8, 'price' => 380, 'old_price' => 420, 'stock' => 28],
+        ['name' => 'Sera Filter Biostart бактерии', 'category_id' => 8, 'price' => 350, 'old_price' => null, 'stock' => 32],
+        ['name' => 'pH буфер KH+ стабилизатор', 'category_id' => 8, 'price' => 280, 'old_price' => null, 'stock' => 35],
+        ['name' => 'Тест полоски 6в1', 'category_id' => 8, 'price' => 450, 'old_price' => 500, 'stock' => 25]
     ];
 
     $products = [];
@@ -334,7 +338,7 @@ function getOriginalProducts() {
             'category_id' => $item['category_id'],
             'category' => $categoryMap[$item['category_id']] ?? 'Разное',
             'sku' => 'AQ-' . str_pad($index + 1, 4, '0', STR_PAD_LEFT),
-            'stock' => rand(0, 50),
+            'stock' => $item['stock'] ?? rand(0, 50),
             'weight' => rand(50, 2000), // граммы
             'dimensions' => [
                 'length' => rand(5, 50),
@@ -349,15 +353,383 @@ function getOriginalProducts() {
             'sales' => rand(0, 50),
             'rating' => rand(35, 50) / 10,
             'reviews_count' => rand(0, 25),
-            'meta_title' => '',
-            'meta_description' => '',
-            'meta_keywords' => '',
+            'meta_title' => $item['name'] . ' - купить в АкваСбор',
+            'meta_description' => 'Купить ' . $item['name'] . ' с доставкой по России. Гарантия качества.',
+            'meta_keywords' => 'аквариум, рыбки, растения, ' . strtolower($item['name']),
             'created_at' => date('Y-m-d H:i:s', strtotime('-' . rand(1, 365) . ' days')),
             'updated_at' => date('Y-m-d H:i:s', strtotime('-' . rand(1, 30) . ' days'))
         ];
     }
 
     return $products;
+}
+
+// === УЛУЧШЕННЫЕ ФУНКЦИИ СОЗДАНИЯ/РЕДАКТИРОВАНИЯ ТОВАРОВ ===
+
+function createProduct($data, $files = null) {
+    try {
+        $dynamicData = initializeDynamicData();
+        $products = $dynamicData['products'];
+
+        $newId = empty($products) ? 1 : (max(array_column($products, 'id')) + 1);
+
+        // Обрабатываем загрузку изображений
+        $images = [];
+        if ($files && isset($files['images'])) {
+            $uploadResult = uploadProductImages($files);
+            if (!$uploadResult['success']) {
+                return $uploadResult;
+            }
+            $images = $uploadResult['images'];
+        }
+
+        $newProduct = [
+            'id' => $newId,
+            'name' => trim($data['name'] ?? ''),
+            'slug' => generateSlug($data['name'] ?? ''),
+            'description' => trim($data['description'] ?? ''),
+            'short_description' => trim($data['short_description'] ?? ''),
+            'price' => (float)($data['price'] ?? 0),
+            'old_price' => !empty($data['old_price']) ? (float)$data['old_price'] : null,
+            'category_id' => (int)($data['category_id'] ?? 1),
+            'category' => getCategoryById($data['category_id'])['name'] ?? 'Разное',
+            'sku' => trim($data['sku']) ?: ('AQ-' . str_pad($newId, 4, '0', STR_PAD_LEFT)),
+            'stock' => (int)($data['stock'] ?? 0),
+            'weight' => (int)($data['weight'] ?? 100),
+            'dimensions' => [
+                'length' => (int)($data['length'] ?? 10),
+                'width' => (int)($data['width'] ?? 10),
+                'height' => (int)($data['height'] ?? 10)
+            ],
+            'images' => $images,
+            'is_featured' => !empty($data['is_featured']),
+            'is_new' => !empty($data['is_new']),
+            'is_active' => !empty($data['is_active']),
+            'views' => 0,
+            'sales' => 0,
+            'rating' => 0,
+            'reviews_count' => 0,
+            'meta_title' => trim($data['meta_title']) ?: $data['name'] . ' - купить в АкваСбор',
+            'meta_description' => trim($data['meta_description']) ?: 'Купить ' . $data['name'] . ' с доставкой по России. Гарантия качества.',
+            'meta_keywords' => trim($data['meta_keywords']) ?: 'аквариум, рыбки, растения',
+            'created_at' => date('Y-m-d H:i:s'),
+            'updated_at' => date('Y-m-d H:i:s')
+        ];
+
+        $dynamicData['products'][] = $newProduct;
+        $dynamicData['last_updated'] = date('Y-m-d H:i:s');
+
+        if (saveDynamicData($dynamicData)) {
+            return ['success' => true, 'message' => 'Товар создан успешно!', 'product' => $newProduct];
+        } else {
+            return ['success' => false, 'message' => 'Ошибка сохранения данных'];
+        }
+    } catch (Exception $e) {
+        return ['success' => false, 'message' => 'Ошибка: ' . $e->getMessage()];
+    }
+}
+
+function updateProduct($id, $data, $files = null, $newImages = null) {
+    try {
+        $dynamicData = initializeDynamicData();
+        $products = &$dynamicData['products'];
+
+        $productIndex = array_search($id, array_column($products, 'id'));
+        if ($productIndex === false) {
+            return ['success' => false, 'message' => 'Товар не найден'];
+        }
+
+        $product = &$products[$productIndex];
+
+        // Если переданы новые изображения (для удаления конкретного изображения)
+        if ($newImages !== null) {
+            // Удаляем старые изображения если они не в новом списке
+            foreach ($product['images'] as $oldImage) {
+                if (!in_array($oldImage, $newImages)) {
+                    deleteProductImage($oldImage);
+                }
+            }
+            $product['images'] = array_values($newImages);
+        } else {
+            // Обрабатываем загрузку новых изображений
+            if ($files && isset($files['images']) && !empty($files['images']['name'][0])) {
+                $uploadResult = uploadProductImages($files);
+                if (!$uploadResult['success']) {
+                    return $uploadResult;
+                }
+                // Добавляем новые изображения к существующим
+                $product['images'] = array_merge($product['images'] ?? [], $uploadResult['images']);
+            }
+        }
+
+        // Обновляем только переданные поля
+        $updateableFields = [
+            'name', 'description', 'short_description', 'price', 'old_price',
+            'category_id', 'stock', 'weight', 'meta_title', 'meta_description', 'meta_keywords', 'sku'
+        ];
+
+        foreach ($updateableFields as $field) {
+            if (isset($data[$field])) {
+                if ($field === 'old_price' && empty($data[$field])) {
+                    $product[$field] = null;
+                } elseif (in_array($field, ['price', 'old_price'])) {
+                    $product[$field] = (float)$data[$field];
+                } elseif (in_array($field, ['stock', 'weight', 'category_id'])) {
+                    $product[$field] = (int)$data[$field];
+                } else {
+                    $product[$field] = trim($data[$field]);
+                }
+            }
+        }
+
+        // Обновляем булевы поля
+        $boolFields = ['is_featured', 'is_new', 'is_active'];
+        foreach ($boolFields as $field) {
+            if (array_key_exists($field, $data)) {
+                $product[$field] = !empty($data[$field]);
+            }
+        }
+
+        // Обновляем размеры
+        if (isset($data['length'])) $product['dimensions']['length'] = (int)$data['length'];
+        if (isset($data['width'])) $product['dimensions']['width'] = (int)$data['width'];
+        if (isset($data['height'])) $product['dimensions']['height'] = (int)$data['height'];
+
+        // Обновляем slug если изменилось название
+        if (isset($data['name'])) {
+            $product['slug'] = generateSlug($data['name']);
+        }
+
+        // Обновляем категорию если изменилась
+        if (isset($data['category_id'])) {
+            $category = getCategoryById($data['category_id']);
+            $product['category'] = $category ? $category['name'] : 'Разное';
+        }
+
+        $product['updated_at'] = date('Y-m-d H:i:s');
+        $dynamicData['last_updated'] = date('Y-m-d H:i:s');
+
+        if (saveDynamicData($dynamicData)) {
+            return ['success' => true, 'message' => 'Товар обновлен успешно!', 'product' => $product];
+        } else {
+            return ['success' => false, 'message' => 'Ошибка сохранения данных'];
+        }
+    } catch (Exception $e) {
+        return ['success' => false, 'message' => 'Ошибка: ' . $e->getMessage()];
+    }
+}
+
+function deleteProduct($id) {
+    try {
+        $dynamicData = initializeDynamicData();
+        $products = &$dynamicData['products'];
+
+        $productIndex = array_search($id, array_column($products, 'id'));
+        if ($productIndex === false) {
+            return ['success' => false, 'message' => 'Товар не найден'];
+        }
+
+        $product = $products[$productIndex];
+
+        // Удаляем изображения товара
+        if (!empty($product['images'])) {
+            foreach ($product['images'] as $image) {
+                deleteProductImage($image);
+            }
+        }
+
+        array_splice($products, $productIndex, 1);
+
+        $dynamicData['last_updated'] = date('Y-m-d H:i:s');
+
+        if (saveDynamicData($dynamicData)) {
+            return ['success' => true, 'message' => 'Товар удален успешно!', 'product' => $product];
+        } else {
+            return ['success' => false, 'message' => 'Ошибка сохранения данных'];
+        }
+    } catch (Exception $e) {
+        return ['success' => false, 'message' => 'Ошибка: ' . $e->getMessage()];
+    }
+}
+
+// === МАССОВЫЕ ОПЕРАЦИИ С ТОВАРАМИ ===
+
+function bulkUpdateProducts($ids, $action, $data = []) {
+    try {
+        $dynamicData = initializeDynamicData();
+        $products = &$dynamicData['products'];
+        $updated = 0;
+
+        foreach ($products as &$product) {
+            if (in_array($product['id'], $ids)) {
+                switch ($action) {
+                    case 'activate':
+                        $product['is_active'] = true;
+                        break;
+                    case 'deactivate':
+                        $product['is_active'] = false;
+                        break;
+                    case 'delete':
+                        // Помечаем для удаления
+                        $product['_delete'] = true;
+                        break;
+                    case 'update_category':
+                        if (isset($data['category_id'])) {
+                            $product['category_id'] = (int)$data['category_id'];
+                            $category = getCategoryById($data['category_id']);
+                            $product['category'] = $category ? $category['name'] : 'Разное';
+                        }
+                        break;
+                    case 'update_stock':
+                        if (isset($data['stock'])) {
+                            $product['stock'] = (int)$data['stock'];
+                        }
+                        break;
+                }
+                $product['updated_at'] = date('Y-m-d H:i:s');
+                $updated++;
+            }
+        }
+
+        // Удаляем помеченные товары
+        if ($action === 'delete') {
+            $products = array_filter($products, function($product) {
+                if (isset($product['_delete'])) {
+                    // Удаляем изображения
+                    if (!empty($product['images'])) {
+                        foreach ($product['images'] as $image) {
+                            deleteProductImage($image);
+                        }
+                    }
+                    return false;
+                }
+                return true;
+            });
+            $products = array_values($products); // Перенумеровываем массив
+        }
+
+        $dynamicData['products'] = $products;
+        $dynamicData['last_updated'] = date('Y-m-d H:i:s');
+
+        if (saveDynamicData($dynamicData)) {
+            return ['success' => true, 'message' => "Обновлено товаров: $updated"];
+        } else {
+            return ['success' => false, 'message' => 'Ошибка сохранения данных'];
+        }
+    } catch (Exception $e) {
+        return ['success' => false, 'message' => 'Ошибка: ' . $e->getMessage()];
+    }
+}
+
+// === ФУНКЦИИ УПРАВЛЕНИЯ КАТЕГОРИЯМИ ===
+
+function createCategory($data) {
+    try {
+        $dynamicData = initializeDynamicData();
+        $categories = $dynamicData['categories'];
+
+        $newId = empty($categories) ? 1 : (max(array_column($categories, 'id')) + 1);
+
+        $newCategory = [
+            'id' => $newId,
+            'name' => trim($data['name'] ?? ''),
+            'slug' => generateSlug($data['name'] ?? ''),
+            'icon' => trim($data['icon']) ?: '📦',
+            'description' => trim($data['description'] ?? ''),
+            'active' => !empty($data['active']),
+            'sort_order' => (int)($data['sort_order'] ?? 999),
+            'seo_title' => trim($data['seo_title'] ?? ''),
+            'seo_description' => trim($data['seo_description'] ?? ''),
+            'created_at' => date('Y-m-d H:i:s'),
+            'updated_at' => date('Y-m-d H:i:s')
+        ];
+
+        $dynamicData['categories'][] = $newCategory;
+        $dynamicData['last_updated'] = date('Y-m-d H:i:s');
+
+        if (saveDynamicData($dynamicData)) {
+            return ['success' => true, 'message' => 'Категория создана успешно!', 'category' => $newCategory];
+        } else {
+            return ['success' => false, 'message' => 'Ошибка сохранения данных'];
+        }
+    } catch (Exception $e) {
+        return ['success' => false, 'message' => 'Ошибка: ' . $e->getMessage()];
+    }
+}
+
+function updateCategory($id, $data) {
+    try {
+        $dynamicData = initializeDynamicData();
+        $categories = &$dynamicData['categories'];
+
+        $categoryIndex = array_search($id, array_column($categories, 'id'));
+        if ($categoryIndex === false) {
+            return ['success' => false, 'message' => 'Категория не найдена'];
+        }
+
+        $category = &$categories[$categoryIndex];
+
+        $updateableFields = ['name', 'icon', 'description', 'sort_order', 'seo_title', 'seo_description'];
+        foreach ($updateableFields as $field) {
+            if (isset($data[$field])) {
+                if ($field === 'sort_order') {
+                    $category[$field] = (int)$data[$field];
+                } else {
+                    $category[$field] = trim($data[$field]);
+                }
+            }
+        }
+
+        if (array_key_exists('active', $data)) {
+            $category['active'] = !empty($data['active']);
+        }
+
+        if (isset($data['name'])) {
+            $category['slug'] = generateSlug($data['name']);
+        }
+
+        $category['updated_at'] = date('Y-m-d H:i:s');
+        $dynamicData['last_updated'] = date('Y-m-d H:i:s');
+
+        if (saveDynamicData($dynamicData)) {
+            return ['success' => true, 'message' => 'Категория обновлена успешно!'];
+        } else {
+            return ['success' => false, 'message' => 'Ошибка сохранения данных'];
+        }
+    } catch (Exception $e) {
+        return ['success' => false, 'message' => 'Ошибка: ' . $e->getMessage()];
+    }
+}
+
+function deleteCategory($id) {
+    try {
+        $dynamicData = initializeDynamicData();
+        $categories = &$dynamicData['categories'];
+
+        $categoryIndex = array_search($id, array_column($categories, 'id'));
+        if ($categoryIndex === false) {
+            return ['success' => false, 'message' => 'Категория не найдена'];
+        }
+
+        // Проверяем есть ли товары в этой категории
+        $products = $dynamicData['products'];
+        $hasProducts = array_filter($products, fn($p) => $p['category_id'] == $id);
+
+        if (!empty($hasProducts)) {
+            return ['success' => false, 'message' => 'Нельзя удалить категорию с товарами. Сначала переместите товары в другую категорию.'];
+        }
+
+        array_splice($categories, $categoryIndex, 1);
+        $dynamicData['last_updated'] = date('Y-m-d H:i:s');
+
+        if (saveDynamicData($dynamicData)) {
+            return ['success' => true, 'message' => 'Категория удалена успешно!'];
+        } else {
+            return ['success' => false, 'message' => 'Ошибка сохранения данных'];
+        }
+    } catch (Exception $e) {
+        return ['success' => false, 'message' => 'Ошибка: ' . $e->getMessage()];
+    }
 }
 
 // === ЗАКАЗЫ ===
@@ -484,272 +856,26 @@ function getOriginalNews() {
     return $news;
 }
 
-// === ФУНКЦИИ СОЗДАНИЯ/РЕДАКТИРОВАНИЯ ===
-
-function createProduct($data, $files = null) {
-    try {
-        $dynamicData = initializeDynamicData();
-        $products = $dynamicData['products'];
-
-        $newId = max(array_column($products, 'id')) + 1;
-
-        // Обрабатываем загрузку изображений
-        $images = [];
-        if ($files && isset($files['images'])) {
-            $uploadResult = uploadProductImages($files);
-            if (!$uploadResult['success']) {
-                return $uploadResult;
-            }
-            $images = $uploadResult['images'];
-        }
-
-        $newProduct = [
-            'id' => $newId,
-            'name' => $data['name'] ?? '',
-            'slug' => generateSlug($data['name'] ?? ''),
-            'description' => $data['description'] ?? '',
-            'short_description' => $data['short_description'] ?? '',
-            'price' => (float)($data['price'] ?? 0),
-            'old_price' => !empty($data['old_price']) ? (float)$data['old_price'] : null,
-            'category_id' => (int)($data['category_id'] ?? 1),
-            'category' => getCategoryById($data['category_id'])['name'] ?? 'Разное',
-            'sku' => $data['sku'] ?: ('AQ-' . str_pad($newId, 4, '0', STR_PAD_LEFT)),
-            'stock' => (int)($data['stock'] ?? 0),
-            'weight' => (int)($data['weight'] ?? 100),
-            'dimensions' => [
-                'length' => (int)($data['length'] ?? 10),
-                'width' => (int)($data['width'] ?? 10),
-                'height' => (int)($data['height'] ?? 10)
-            ],
-            'images' => $images,
-            'is_featured' => isset($data['is_featured']),
-            'is_new' => isset($data['is_new']),
-            'is_active' => isset($data['is_active']),
-            'views' => 0,
-            'sales' => 0,
-            'rating' => 0,
-            'reviews_count' => 0,
-            'meta_title' => $data['meta_title'] ?? '',
-            'meta_description' => $data['meta_description'] ?? '',
-            'meta_keywords' => $data['meta_keywords'] ?? '',
-            'created_at' => date('Y-m-d H:i:s'),
-            'updated_at' => date('Y-m-d H:i:s')
-        ];
-
-        $dynamicData['products'][] = $newProduct;
-        $dynamicData['last_updated'] = date('Y-m-d H:i:s');
-
-        if (saveDynamicData($dynamicData)) {
-            return ['success' => true, 'message' => 'Товар создан успешно!', 'product' => $newProduct];
-        } else {
-            return ['success' => false, 'message' => 'Ошибка сохранения данных'];
-        }
-    } catch (Exception $e) {
-        return ['success' => false, 'message' => 'Ошибка: ' . $e->getMessage()];
-    }
-}
-
-function updateProduct($id, $data, $files = null, $newImages = null) {
-    try {
-        $dynamicData = initializeDynamicData();
-        $products = &$dynamicData['products'];
-
-        $productIndex = array_search($id, array_column($products, 'id'));
-        if ($productIndex === false) {
-            return ['success' => false, 'message' => 'Товар не найден'];
-        }
-
-        $product = &$products[$productIndex];
-
-        // Если переданы новые изображения (для удаления конкретного изображения)
-        if ($newImages !== null) {
-            $product['images'] = array_values($newImages);
-        } else {
-            // Обрабатываем загрузку новых изображений
-            if ($files && isset($files['images']) && !empty($files['images']['name'][0])) {
-                $uploadResult = uploadProductImages($files);
-                if (!$uploadResult['success']) {
-                    return $uploadResult;
-                }
-                // Добавляем новые изображения к существующим
-                $product['images'] = array_merge($product['images'] ?? [], $uploadResult['images']);
-            }
-        }
-
-        // Обновляем только переданные поля
-        $updateableFields = [
-            'name', 'description', 'short_description', 'price', 'old_price',
-            'category_id', 'stock', 'weight', 'meta_title', 'meta_description', 'meta_keywords', 'sku'
-        ];
-
-        foreach ($updateableFields as $field) {
-            if (isset($data[$field])) {
-                if ($field === 'old_price' && empty($data[$field])) {
-                    $product[$field] = null;
-                } else {
-                    $product[$field] = $data[$field];
-                }
-            }
-        }
-
-        // Обновляем булевы поля
-        $boolFields = ['is_featured', 'is_new', 'is_active'];
-        foreach ($boolFields as $field) {
-            if (array_key_exists($field, $data)) {
-                $product[$field] = (bool)$data[$field];
-            }
-        }
-
-        // Обновляем slug если изменилось название
-        if (isset($data['name'])) {
-            $product['slug'] = generateSlug($data['name']);
-        }
-
-        // Обновляем категорию если изменилась
-        if (isset($data['category_id'])) {
-            $category = getCategoryById($data['category_id']);
-            $product['category'] = $category ? $category['name'] : 'Разное';
-        }
-
-        $product['updated_at'] = date('Y-m-d H:i:s');
-        $dynamicData['last_updated'] = date('Y-m-d H:i:s');
-
-        if (saveDynamicData($dynamicData)) {
-            return ['success' => true, 'message' => 'Товар обновлен успешно!'];
-        } else {
-            return ['success' => false, 'message' => 'Ошибка сохранения данных'];
-        }
-    } catch (Exception $e) {
-        return ['success' => false, 'message' => 'Ошибка: ' . $e->getMessage()];
-    }
-}
-
-function deleteProduct($id) {
-    try {
-        $dynamicData = initializeDynamicData();
-        $products = &$dynamicData['products'];
-
-        $productIndex = array_search($id, array_column($products, 'id'));
-        if ($productIndex === false) {
-            return ['success' => false, 'message' => 'Товар не найден'];
-        }
-
-        $product = $products[$productIndex];
-
-        // Удаляем изображения товара
-        if (!empty($product['images'])) {
-            foreach ($product['images'] as $image) {
-                deleteProductImage($image);
-            }
-        }
-
-        array_splice($products, $productIndex, 1);
-
-        $dynamicData['last_updated'] = date('Y-m-d H:i:s');
-
-        if (saveDynamicData($dynamicData)) {
-            return ['success' => true, 'message' => 'Товар удален успешно!', 'product' => $product];
-        } else {
-            return ['success' => false, 'message' => 'Ошибка сохранения данных'];
-        }
-    } catch (Exception $e) {
-        return ['success' => false, 'message' => 'Ошибка: ' . $e->getMessage()];
-    }
-}
-
-function createCategory($data) {
-    try {
-        $dynamicData = initializeDynamicData();
-        $categories = $dynamicData['categories'];
-
-        $newId = max(array_column($categories, 'id')) + 1;
-
-        $newCategory = [
-            'id' => $newId,
-            'name' => $data['name'] ?? '',
-            'slug' => generateSlug($data['name'] ?? ''),
-            'icon' => $data['icon'] ?? '📦',
-            'description' => $data['description'] ?? '',
-            'active' => isset($data['active']),
-            'sort_order' => (int)($data['sort_order'] ?? 999),
-            'seo_title' => $data['seo_title'] ?? '',
-            'seo_description' => $data['seo_description'] ?? '',
-            'created_at' => date('Y-m-d H:i:s'),
-            'updated_at' => date('Y-m-d H:i:s')
-        ];
-
-        $dynamicData['categories'][] = $newCategory;
-        $dynamicData['last_updated'] = date('Y-m-d H:i:s');
-
-        if (saveDynamicData($dynamicData)) {
-            return ['success' => true, 'message' => 'Категория создана успешно!', 'category' => $newCategory];
-        } else {
-            return ['success' => false, 'message' => 'Ошибка сохранения данных'];
-        }
-    } catch (Exception $e) {
-        return ['success' => false, 'message' => 'Ошибка: ' . $e->getMessage()];
-    }
-}
-
-function updateCategory($id, $data) {
-    try {
-        $dynamicData = initializeDynamicData();
-        $categories = &$dynamicData['categories'];
-
-        $categoryIndex = array_search($id, array_column($categories, 'id'));
-        if ($categoryIndex === false) {
-            return ['success' => false, 'message' => 'Категория не найдена'];
-        }
-
-        $category = &$categories[$categoryIndex];
-
-        $updateableFields = ['name', 'icon', 'description', 'sort_order', 'seo_title', 'seo_description'];
-        foreach ($updateableFields as $field) {
-            if (isset($data[$field])) {
-                $category[$field] = $data[$field];
-            }
-        }
-
-        if (isset($data['active'])) {
-            $category['active'] = (bool)$data['active'];
-        }
-
-        if (isset($data['name'])) {
-            $category['slug'] = generateSlug($data['name']);
-        }
-
-        $category['updated_at'] = date('Y-m-d H:i:s');
-        $dynamicData['last_updated'] = date('Y-m-d H:i:s');
-
-        if (saveDynamicData($dynamicData)) {
-            return ['success' => true, 'message' => 'Категория обновлена успешно!'];
-        } else {
-            return ['success' => false, 'message' => 'Ошибка сохранения данных'];
-        }
-    } catch (Exception $e) {
-        return ['success' => false, 'message' => 'Ошибка: ' . $e->getMessage()];
-    }
-}
-
+// === СОЗДАНИЕ НОВОСТИ ===
 function createNews($data) {
     try {
         $dynamicData = initializeDynamicData();
         $news = $dynamicData['news'];
 
-        $newId = max(array_column($news, 'id')) + 1;
+        $newId = empty($news) ? 1 : (max(array_column($news, 'id')) + 1);
 
         $newNews = [
             'id' => $newId,
-            'title' => $data['title'] ?? '',
+            'title' => trim($data['title'] ?? ''),
             'slug' => generateSlug($data['title'] ?? ''),
-            'excerpt' => $data['excerpt'] ?? '',
-            'content' => $data['content'] ?? '',
-            'image' => $data['image'] ?? '',
-            'is_published' => isset($data['is_published']),
-            'is_featured' => isset($data['is_featured']),
+            'excerpt' => trim($data['excerpt'] ?? ''),
+            'content' => trim($data['content'] ?? ''),
+            'image' => trim($data['image'] ?? ''),
+            'is_published' => !empty($data['is_published']),
+            'is_featured' => !empty($data['is_featured']),
             'views' => 0,
-            'meta_title' => $data['meta_title'] ?? '',
-            'meta_description' => $data['meta_description'] ?? '',
+            'meta_title' => trim($data['meta_title']) ?: $data['title'] . ' - АкваСбор',
+            'meta_description' => trim($data['meta_description']) ?: 'Краткое описание новости: ' . $data['title'],
             'created_at' => date('Y-m-d H:i:s'),
             'updated_at' => date('Y-m-d H:i:s')
         ];
@@ -767,6 +893,7 @@ function createNews($data) {
     }
 }
 
+// === ФУНКЦИИ ЗАКАЗОВ ===
 function saveOrder($orderData) {
     try {
         $dynamicData = initializeDynamicData();
@@ -880,7 +1007,7 @@ function getProductById($id) {
 function getProductsByCategory($categoryId) {
     $products = getProducts();
     return array_filter($products, function($product) use ($categoryId) {
-        return $product['category_id'] == $categoryId;
+        return $product['category_id'] == $categoryId && $product['is_active'];
     });
 }
 
@@ -902,12 +1029,41 @@ function getNewProducts($limit = 8) {
 
 function searchProducts($query) {
     $products = getProducts();
+    $query = mb_strtolower(trim($query));
+
+    if (empty($query)) {
+        return [];
+    }
+
     return array_filter($products, function($product) use ($query) {
         return $product['is_active'] && (
-            stripos($product['name'], $query) !== false ||
-            stripos($product['description'], $query) !== false ||
-            stripos($product['short_description'], $query) !== false
+            mb_stripos($product['name'], $query) !== false ||
+            mb_stripos($product['description'], $query) !== false ||
+            mb_stripos($product['short_description'], $query) !== false ||
+            mb_stripos($product['category'], $query) !== false ||
+            mb_stripos($product['sku'], $query) !== false
         );
+    });
+}
+
+function getSimilarProducts($productId, $limit = 4) {
+    $product = getProductById($productId);
+    if (!$product) return [];
+
+    $categoryProducts = getProductsByCategory($product['category_id']);
+
+    // Исключаем текущий товар
+    $categoryProducts = array_filter($categoryProducts, fn($p) => $p['id'] != $productId);
+
+    // Перемешиваем и берем лимит
+    shuffle($categoryProducts);
+    return array_slice($categoryProducts, 0, $limit);
+}
+
+function getProductReviews($productId) {
+    $reviews = getReviews();
+    return array_filter($reviews, function($review) use ($productId) {
+        return $review['product_id'] == $productId && $review['is_approved'];
     });
 }
 
@@ -917,43 +1073,46 @@ function generateSlug($text) {
     $text = mb_strtolower($text, 'UTF-8');
     $text = preg_replace('/[^a-z0-9а-я\s-]/u', '', $text);
     $text = preg_replace('/\s+/', '-', trim($text));
-    return $text;
+    $text = preg_replace('/-+/', '-', $text);
+    return trim($text, '-');
 }
 
 function getProductDescription($name) {
     $templates = [
-        'Классическое неприхотливое растение для декорирования аквариума. Подходит для начинающих аквариумистов.',
-        'Популярное растение с красивой окраской листьев. Быстро растет, требует регулярной стрижки.',
-        'Элегантное растение для создания природного дизайна аквариума. Хорошо смотрится в группах.',
-        'Неприхотливое растение, которое хорошо переносит различные условия содержания.',
-        'Быстрорастущее растение, отличный биофильтр для поддержания качества воды.',
-        'Красивое фоновое растение для аквариумов от 100 литров. Создает густые заросли.',
-        'Медленнорастущее растение с декоративными листьями. Подходит для переднего плана.',
-        'Выносливое растение, которое можно содержать без CO2 и сильного освещения.',
-        'Эффектное растение с необычной формой листьев. Требует хорошего освещения.',
-        'Плавающее растение, помогает бороться с водорослями и создает тень для рыб.'
+        'Качественный товар для аквариума. Подходит для начинающих и опытных аквариумистов.',
+        'Популярный продукт с отличными характеристиками. Быстрая доставка по всей России.',
+        'Элегантное решение для создания природного дизайна аквариума. Хорошо смотрится в композициях.',
+        'Неприхотливый товар, который хорошо переносит различные условия содержания.',
+        'Быстрорастущий вид, отличный выбор для поддержания баланса в аквариуме.',
+        'Красивое дополнение для аквариумов от 50 литров. Создает естественную атмосферу.',
+        'Медленнорастущий вид с декоративными свойствами. Подходит для переднего плана.',
+        'Выносливый товар, который можно содержать без специального оборудования.',
+        'Эффектный продукт с необычными характеристиками. Требует качественного ухода.',
+        'Универсальное решение, помогает поддерживать чистоту и создает комфорт для обитателей.'
     ];
 
     return $templates[array_rand($templates)];
 }
 
 function getShortDescription($name) {
-    if (strpos($name, 'растен') !== false || strpos($name, 'Растен') !== false) {
+    if (stripos($name, 'растен') !== false) {
         return 'Живое аквариумное растение';
-    } elseif (strpos($name, 'рыбк') !== false || strpos($name, 'Рыбк') !== false) {
+    } elseif (stripos($name, 'рыбк') !== false || stripos($name, 'рыб') !== false) {
         return 'Здоровые аквариумные рыбки';
-    } elseif (strpos($name, 'Аквариум') !== false) {
+    } elseif (stripos($name, 'аквариум') !== false) {
         return 'Качественный аквариум с гарантией';
-    } elseif (strpos($name, 'корм') !== false || strpos($name, 'Корм') !== false) {
+    } elseif (stripos($name, 'корм') !== false) {
         return 'Сбалансированный корм для рыб';
+    } elseif (stripos($name, 'фильтр') !== false || stripos($name, 'компрессор') !== false) {
+        return 'Надежное аквариумное оборудование';
     } else {
         return 'Качественный товар для аквариума';
     }
 }
 
 // Подключаем системы корзины и заказов
-require_once 'cart_system.php';
-require_once 'date_functions.php';
+require_once __DIR__ . '/cart_system.php';
+require_once __DIR__ . '/date_functions.php';
 
 // Инициализируем данные при первом запуске
 initializeDynamicData();
