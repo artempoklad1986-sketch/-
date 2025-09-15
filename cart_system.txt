@@ -1,10 +1,11 @@
 <?php
 /**
- * АкваСбор - Система корзины v2.0 - РАСШИРЕННАЯ
- * Интеграция с data.php и вашими стилями
+ * АкваСбор - Система корзины v2.1 - ИСПРАВЛЕНО
+ * Интеграция с data.php и index.php
  */
 
-session_start();
+// session_start();
+ // отключено для админки
 require_once 'data.php';
 
 // === ИНИЦИАЛИЗАЦИЯ КОРЗИНЫ ===
@@ -23,28 +24,32 @@ if (!isset($_SESSION['cart_advanced'])) {
     ];
 }
 
-// === ОБРАБОТКА ДЕЙСТВИЙ КОРЗИНЫ ===
+// === ОБРАБОТКА ДЕЙСТВИЙ КОРЗИНЫ - ИСПРАВЛЕНО ===
 $action = $_POST['action'] ?? $_GET['action'] ?? '';
 
 if ($action) {
     header('Content-Type: application/json');
 
     switch ($action) {
+        case 'add_to_cart':  // ИСПРАВЛЕНО: добавил совместимость с index.php
         case 'add':
             $result = addToCartAdvanced($_POST['product_id'], $_POST['quantity'] ?? 1);
             echo json_encode($result);
             break;
 
+        case 'update_cart':  // ИСПРАВЛЕНО: добавил совместимость с index.php
         case 'update':
             $result = updateCartItemAdvanced($_POST['product_id'], $_POST['quantity']);
             echo json_encode($result);
             break;
 
+        case 'remove_from_cart':  // ИСПРАВЛЕНО: добавил совместимость с index.php
         case 'remove':
             $result = removeFromCartAdvanced($_POST['product_id']);
             echo json_encode($result);
             break;
 
+        case 'clear_cart':  // ИСПРАВЛЕНО: добавил совместимость с index.php
         case 'clear':
             $result = clearCartAdvanced();
             echo json_encode($result);
@@ -61,7 +66,7 @@ if ($action) {
             break;
 
         default:
-            echo json_encode(['success' => false, 'message' => 'Неизвестное действие']);
+            echo json_encode(['success' => false, 'message' => 'Неизвестное действие: ' . $action]);
     }
     exit;
 }
