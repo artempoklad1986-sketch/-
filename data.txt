@@ -1,1119 +1,661 @@
 <?php
-/**
- * АкваСбор - Общий файл данных v3.0 - МАКСИМАЛЬНО ИСПРАВЛЕНО
- * Центральное хранилище + все модули работают + улучшенные функции
- */
+session_start();
 
-// === КОНФИГУРАЦИЯ ===
-define('SITE_NAME', 'АкваСбор');
-define('SITE_DESCRIPTION', 'Аквариумы и их обитатели');
-define('ADMIN_PASSWORD', 'admin123');
-
-// Папки для загрузки файлов
-define('UPLOAD_DIR', 'uploads/');
-define('PRODUCT_IMAGES_DIR', UPLOAD_DIR . 'products/');
-define('NEWS_IMAGES_DIR', UPLOAD_DIR . 'news/');
-
-// Создаем папки для загрузки если их нет
-if (!file_exists(UPLOAD_DIR)) {
-    mkdir(UPLOAD_DIR, 0755, true);
-}
-if (!file_exists(PRODUCT_IMAGES_DIR)) {
-    mkdir(PRODUCT_IMAGES_DIR, 0755, true);
-}
-if (!file_exists(NEWS_IMAGES_DIR)) {
-    mkdir(NEWS_IMAGES_DIR, 0755, true);
+// Проверка на уже установленную систему
+if (file_exists('config/database.php') && file_exists('config/.installed')) {
+    die('Система уже установлена! Удалите файл config/.installed для переустановки.');
 }
 
-// === УПРАВЛЕНИЕ ДИНАМИЧЕСКИМИ ДАННЫМИ ===
+$step = isset($_GET['step']) ? (int)$_GET['step'] : 1;
+$errors = [];
+$success = [];
 
-function loadDynamicData() {
-    $jsonFile = __DIR__ . '/data.json';
-    if (file_exists($jsonFile)) {
-        $data = json_decode(file_get_contents($jsonFile), true);
-        return $data ?: null;
-    }
-    return null;
-}
+// Обработка POST запросов
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    switch ($step) {
+        case 2: // Проверка БД
+            $db_host = trim($_POST['db_host']);
+            $db_name = trim($_POST['db_name']);
+            $db_user = trim($_POST['db_user']);
+            $db_pass = trim($_POST['db_pass']);
 
-function saveDynamicData($data) {
-    $jsonFile = __DIR__ . '/data.json';
-    $result = file_put_contents($jsonFile, json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
-    return $result !== false;
-}
+            try {
+                $pdo = new PDO("mysql:host={$db_host};dbname={$db_name};charset=utf8mb4", 
+                              $db_user, $db_pass, [
+                    PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+                    PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC
+                ]);
 
-function initializeDynamicData() {
-    $dynamicData = loadDynamicData();
-    if (!$dynamicData) {
-        // Создаем JSON из исходных данных
-        $initialData = [
-            'products' => getOriginalProducts(),
-            'categories' => getOriginalCategories(),
-            'orders' => getOriginalOrders(),
-            'reviews' => getOriginalReviews(),
-            'news' => getOriginalNews(),
-            'settings' => getSiteSettings(),
-            'last_updated' => date('Y-m-d H:i:s')
-        ];
-        saveDynamicData($initialData);
-        return $initialData;
-    }
-    return $dynamicData;
-}
+                // Сохраняем данные в сессии
+                $_SESSION['db_config'] = compact('db_host', 'db_name', 'db_user', 'db_pass');
 
-// === УЛУЧШЕННЫЕ ФУНКЦИИ ЗАГРУЗКИ ФОТО ===
-
-function uploadProductImages($files) {
-    $uploadedImages = [];
-    $allowedTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
-    $maxSize = 10 * 1024 * 1024; // 10MB
-
-    if (!isset($files['images'])) {
-        return ['success' => true, 'images' => []];
-    }
-
-    $images = $files['images'];
-
-    // Если загружается одно изображение, преобразуем в массив
-    if (!is_array($images['name'])) {
-        $images = [
-            'name' => [$images['name']],
-            'type' => [$images['type']],
-            'tmp_name' => [$images['tmp_name']],
-            'error' => [$images['error']],
-            'size' => [$images['size']]
-        ];
-    }
-
-    for ($i = 0; $i < count($images['name']); $i++) {
-        if ($images['error'][$i] === UPLOAD_ERR_NO_FILE) continue;
-
-        if ($images['error'][$i] !== UPLOAD_ERR_OK) {
-            return ['success' => false, 'message' => 'Ошибка загрузки файла: ' . $images['name'][$i]];
-        }
-
-        if ($images['size'][$i] > $maxSize) {
-            return ['success' => false, 'message' => 'Файл ' . $images['name'][$i] . ' слишком большой (макс. 10MB)'];
-        }
-
-        if (!in_array($images['type'][$i], $allowedTypes)) {
-            return ['success' => false, 'message' => 'Недопустимый тип файла: ' . $images['name'][$i]];
-        }
-
-        // Генерируем уникальное имя файла
-        $extension = pathinfo($images['name'][$i], PATHINFO_EXTENSION);
-        $fileName = 'product_' . time() . '_' . $i . '_' . uniqid() . '.' . $extension;
-        $filePath = PRODUCT_IMAGES_DIR . $fileName;
-
-        if (move_uploaded_file($images['tmp_name'][$i], $filePath)) {
-            $uploadedImages[] = PRODUCT_IMAGES_DIR . $fileName;
-        } else {
-            return ['success' => false, 'message' => 'Не удалось сохранить файл: ' . $images['name'][$i]];
-        }
-    }
-
-    return ['success' => true, 'images' => $uploadedImages];
-}
-
-function deleteProductImage($imagePath) {
-    if (file_exists($imagePath)) {
-        return unlink($imagePath);
-    }
-    return true;
-}
-
-// === УЛУЧШЕННЫЙ МОДУЛЬ КАТЕГОРИЙ ===
-function getCategories() {
-    $dynamicData = loadDynamicData();
-    if ($dynamicData && isset($dynamicData['categories'])) {
-        return $dynamicData['categories'];
-    }
-    return getOriginalCategories();
-}
-
-function getOriginalCategories() {
-    return [
-        [
-            'id' => 1,
-            'name' => 'Рыбки',
-            'slug' => 'fish',
-            'icon' => '🐠',
-            'description' => 'Тропические и пресноводные рыбки',
-            'active' => true,
-            'sort_order' => 1,
-            'seo_title' => 'Аквариумные рыбки - купить в АкваСбор',
-            'seo_description' => 'Большой выбор аквариумных рыбок. Доставка по России.',
-            'created_at' => date('Y-m-d H:i:s'),
-            'updated_at' => date('Y-m-d H:i:s')
-        ],
-        [
-            'id' => 2,
-            'name' => 'Растения',
-            'slug' => 'plants',
-            'icon' => '🌱',
-            'description' => 'Аквариумные растения всех видов',
-            'active' => true,
-            'sort_order' => 2,
-            'seo_title' => 'Аквариумные растения - каталог АкваСбор',
-            'seo_description' => 'Живые аквариумные растения для любого аквариума.',
-            'created_at' => date('Y-m-d H:i:s'),
-            'updated_at' => date('Y-m-d H:i:s')
-        ],
-        [
-            'id' => 3,
-            'name' => 'Аквариумы',
-            'slug' => 'aquariums',
-            'icon' => '🏠',
-            'description' => 'Аквариумы разных размеров',
-            'active' => true,
-            'sort_order' => 3,
-            'seo_title' => 'Купить аквариум - АкваСбор',
-            'seo_description' => 'Аквариумы от 25 до 500 литров. Гарантия качества.',
-            'created_at' => date('Y-m-d H:i:s'),
-            'updated_at' => date('Y-m-d H:i:s')
-        ],
-        [
-            'id' => 4,
-            'name' => 'Оборудование',
-            'slug' => 'equipment',
-            'icon' => '⚙️',
-            'description' => 'Фильтры, компрессоры, освещение',
-            'active' => true,
-            'sort_order' => 4,
-            'seo_title' => 'Аквариумное оборудование - АкваСбор',
-            'seo_description' => 'Фильтры, освещение, нагреватели для аквариумов.',
-            'created_at' => date('Y-m-d H:i:s'),
-            'updated_at' => date('Y-m-d H:i:s')
-        ],
-        [
-            'id' => 5,
-            'name' => 'Корма',
-            'slug' => 'food',
-            'icon' => '🍽️',
-            'description' => 'Сухие и живые корма',
-            'active' => true,
-            'sort_order' => 5,
-            'seo_title' => 'Корм для рыб - АкваСбор',
-            'seo_description' => 'Качественные корма для аквариумных рыб и креветок.',
-            'created_at' => date('Y-m-d H:i:s'),
-            'updated_at' => date('Y-m-d H:i:s')
-        ],
-        [
-            'id' => 6,
-            'name' => 'Декорации',
-            'slug' => 'decorations',
-            'icon' => '🗿',
-            'description' => 'Коряги, камни, украшения',
-            'active' => true,
-            'sort_order' => 6,
-            'seo_title' => 'Декор для аквариума - АкваСбор',
-            'seo_description' => 'Натуральные коряги, камни, декорации для аквариумов.',
-            'created_at' => date('Y-m-d H:i:s'),
-            'updated_at' => date('Y-m-d H:i:s')
-        ],
-        [
-            'id' => 7,
-            'name' => 'Грунты',
-            'slug' => 'substrates',
-            'icon' => '🏔️',
-            'description' => 'Грунты и субстраты',
-            'active' => true,
-            'sort_order' => 7,
-            'seo_title' => 'Грунт для аквариума - АкваСбор',
-            'seo_description' => 'Питательные грунты, песок, галька для аквариумов.',
-            'created_at' => date('Y-m-d H:i:s'),
-            'updated_at' => date('Y-m-d H:i:s')
-        ],
-        [
-            'id' => 8,
-            'name' => 'Химия',
-            'slug' => 'chemistry',
-            'icon' => '🧪',
-            'description' => 'Препараты для воды',
-            'active' => true,
-            'sort_order' => 8,
-            'seo_title' => 'Химия для аквариума - АкваСбор',
-            'seo_description' => 'Кондиционеры, удобрения, тесты для аквариумной воды.',
-            'created_at' => date('Y-m-d H:i:s'),
-            'updated_at' => date('Y-m-d H:i:s')
-        ]
-    ];
-}
-
-// === УЛУЧШЕННЫЙ МОДУЛЬ ТОВАРОВ ===
-function getProducts() {
-    $dynamicData = loadDynamicData();
-    if ($dynamicData && isset($dynamicData['products'])) {
-        return $dynamicData['products'];
-    }
-    return getOriginalProducts();
-}
-
-function getOriginalProducts() {
-    $productData = [
-        // Рыбки (category_id: 1)
-        ['name' => 'Неон голубой стайка (10 шт)', 'category_id' => 1, 'price' => 450, 'old_price' => 500, 'stock' => 25],
-        ['name' => 'Гуппи микс расцветок (пара)', 'category_id' => 1, 'price' => 200, 'old_price' => null, 'stock' => 30],
-        ['name' => 'Данио рерио полосатый (5 шт)', 'category_id' => 1, 'price' => 300, 'old_price' => null, 'stock' => 20],
-        ['name' => 'Меченосец красный (пара)', 'category_id' => 1, 'price' => 350, 'old_price' => 400, 'stock' => 15],
-        ['name' => 'Петушок бойцовая рыбка', 'category_id' => 1, 'price' => 500, 'old_price' => null, 'stock' => 12],
-        ['name' => 'Скалярия серебристая молодь', 'category_id' => 1, 'price' => 800, 'old_price' => 900, 'stock' => 8],
-        ['name' => 'Коридорас панда (3 шт)', 'category_id' => 1, 'price' => 600, 'old_price' => null, 'stock' => 18],
-        ['name' => 'Анциструс обыкновенный', 'category_id' => 1, 'price' => 250, 'old_price' => null, 'stock' => 22],
-        ['name' => 'Барбус суматранский (4 шт)', 'category_id' => 1, 'price' => 400, 'old_price' => null, 'stock' => 16],
-        ['name' => 'Дискус красный туркуаз', 'category_id' => 1, 'price' => 2500, 'old_price' => 3000, 'stock' => 3],
-
-        // Растения (category_id: 2)
-        ['name' => 'Анубиас Бартера нана', 'category_id' => 2, 'price' => 350, 'old_price' => null, 'stock' => 45],
-        ['name' => 'Эхинодорус Амазонский', 'category_id' => 2, 'price' => 400, 'old_price' => 450, 'stock' => 32],
-        ['name' => 'Валлиснерия спиральная пучок', 'category_id' => 2, 'price' => 200, 'old_price' => null, 'stock' => 50],
-        ['name' => 'Криптокорина Вендта', 'category_id' => 2, 'price' => 300, 'old_price' => null, 'stock' => 28],
-        ['name' => 'Людвигия красная', 'category_id' => 2, 'price' => 250, 'old_price' => null, 'stock' => 35],
-        ['name' => 'Мох яванский на коряге', 'category_id' => 2, 'price' => 500, 'old_price' => 600, 'stock' => 12],
-        ['name' => 'Кабомба каролинская пучок', 'category_id' => 2, 'price' => 180, 'old_price' => null, 'stock' => 40],
-        ['name' => 'Хемиантус куба (порция)', 'category_id' => 2, 'price' => 400, 'old_price' => null, 'stock' => 15],
-        ['name' => 'Роталия индийская', 'category_id' => 2, 'price' => 220, 'old_price' => null, 'stock' => 38],
-        ['name' => 'Элодея канадская пучок', 'category_id' => 2, 'price' => 150, 'old_price' => null, 'stock' => 42],
-
-        // Аквариумы (category_id: 3)
-        ['name' => 'Аквариум прямоугольный 50л с крышкой', 'category_id' => 3, 'price' => 3500, 'old_price' => 4000, 'stock' => 8],
-        ['name' => 'Аквариум угловой 80л', 'category_id' => 3, 'price' => 5500, 'old_price' => null, 'stock' => 5],
-        ['name' => 'Аквариум панорамный 120л', 'category_id' => 3, 'price' => 8500, 'old_price' => 9500, 'stock' => 3],
-        ['name' => 'Аквариум нано 25л с освещением', 'category_id' => 3, 'price' => 2800, 'old_price' => null, 'stock' => 12],
-        ['name' => 'Аквариум травник 100л', 'category_id' => 3, 'price' => 7200, 'old_price' => null, 'stock' => 6],
-        ['name' => 'Аквариум морской 200л', 'category_id' => 3, 'price' => 15000, 'old_price' => 17000, 'stock' => 2],
-        ['name' => 'Аквариум креветочник 30л', 'category_id' => 3, 'price' => 2200, 'old_price' => null, 'stock' => 10],
-
-        // Оборудование (category_id: 4)
-        ['name' => 'Фильтр внешний EHEIM Classic 2213', 'category_id' => 4, 'price' => 8500, 'old_price' => 9200, 'stock' => 7],
-        ['name' => 'Компрессор Schego M2K3', 'category_id' => 4, 'price' => 2800, 'old_price' => null, 'stock' => 15],
-        ['name' => 'Нагреватель Aquael 100W', 'category_id' => 4, 'price' => 1200, 'old_price' => null, 'stock' => 25],
-        ['name' => 'Освещение LED Chihiros A-Series 60см', 'category_id' => 4, 'price' => 4500, 'old_price' => 5000, 'stock' => 9],
-        ['name' => 'CO2 система JBL ProFlora', 'category_id' => 4, 'price' => 12000, 'old_price' => null, 'stock' => 4],
-        ['name' => 'УФ стерилизатор 11W', 'category_id' => 4, 'price' => 3200, 'old_price' => null, 'stock' => 11],
-        ['name' => 'Помпа течения Tunze 6020', 'category_id' => 4, 'price' => 6500, 'old_price' => 7000, 'stock' => 6],
-
-        // Корма (category_id: 5)
-        ['name' => 'TetraMin хлопья основной корм 250мл', 'category_id' => 5, 'price' => 350, 'old_price' => null, 'stock' => 50],
-        ['name' => 'Артемия живая Science 100мл', 'category_id' => 5, 'price' => 200, 'old_price' => null, 'stock' => 35],
-        ['name' => 'Мотыль замороженный 100г', 'category_id' => 5, 'price' => 180, 'old_price' => null, 'stock' => 28],
-        ['name' => 'Spirulina спирулина таблетки', 'category_id' => 5, 'price' => 420, 'old_price' => 480, 'stock' => 22],
-        ['name' => 'Cyclops замороженный 100г', 'category_id' => 5, 'price' => 160, 'old_price' => null, 'stock' => 30],
-        ['name' => 'Tubifex живой трубочник', 'category_id' => 5, 'price' => 150, 'old_price' => null, 'stock' => 25],
-
-        // Декорации (category_id: 6)
-        ['name' => 'Коряга мангровая большая 40-50см', 'category_id' => 6, 'price' => 1200, 'old_price' => null, 'stock' => 8],
-        ['name' => 'Камень дракон натуральный 2-3кг', 'category_id' => 6, 'price' => 800, 'old_price' => 900, 'stock' => 12],
-        ['name' => 'Пещера керамическая средняя', 'category_id' => 6, 'price' => 450, 'old_price' => null, 'stock' => 18],
-        ['name' => 'Замок средневековый декоративный', 'category_id' => 6, 'price' => 650, 'old_price' => null, 'stock' => 15],
-        ['name' => 'Корабль пиратский большой', 'category_id' => 6, 'price' => 950, 'old_price' => 1100, 'stock' => 7],
-
-        // Грунты (category_id: 7)
-        ['name' => 'Грунт ADA Amazonia 3л', 'category_id' => 7, 'price' => 1800, 'old_price' => 2000, 'stock' => 20],
-        ['name' => 'Песок кварцевый мелкий 5кг', 'category_id' => 7, 'price' => 350, 'old_price' => null, 'stock' => 45],
-        ['name' => 'Гравий речной 2-5мм 10кг', 'category_id' => 7, 'price' => 450, 'old_price' => null, 'stock' => 35],
-        ['name' => 'Лава вулканическая фракция 5-10мм', 'category_id' => 7, 'price' => 600, 'old_price' => null, 'stock' => 25],
-
-        // Химия (category_id: 8)
-        ['name' => 'Tetra AquaSafe кондиционер 250мл', 'category_id' => 8, 'price' => 420, 'old_price' => null, 'stock' => 40],
-        ['name' => 'AlgaeX средство от водорослей', 'category_id' => 8, 'price' => 380, 'old_price' => 420, 'stock' => 28],
-        ['name' => 'Sera Filter Biostart бактерии', 'category_id' => 8, 'price' => 350, 'old_price' => null, 'stock' => 32],
-        ['name' => 'pH буфер KH+ стабилизатор', 'category_id' => 8, 'price' => 280, 'old_price' => null, 'stock' => 35],
-        ['name' => 'Тест полоски 6в1', 'category_id' => 8, 'price' => 450, 'old_price' => 500, 'stock' => 25]
-    ];
-
-    $products = [];
-    $categories = getOriginalCategories();
-    $categoryMap = array_column($categories, 'name', 'id');
-
-    foreach ($productData as $index => $item) {
-        $products[] = [
-            'id' => $index + 1,
-            'name' => $item['name'],
-            'slug' => generateSlug($item['name']),
-            'description' => getProductDescription($item['name']),
-            'short_description' => getShortDescription($item['name']),
-            'price' => $item['price'],
-            'old_price' => $item['old_price'],
-            'category_id' => $item['category_id'],
-            'category' => $categoryMap[$item['category_id']] ?? 'Разное',
-            'sku' => 'AQ-' . str_pad($index + 1, 4, '0', STR_PAD_LEFT),
-            'stock' => $item['stock'] ?? rand(0, 50),
-            'weight' => rand(50, 2000), // граммы
-            'dimensions' => [
-                'length' => rand(5, 50),
-                'width' => rand(5, 30),
-                'height' => rand(5, 25)
-            ],
-            'images' => [], // Массив изображений
-            'is_featured' => rand(0, 4) == 0, // 25% популярных
-            'is_new' => rand(0, 5) == 0, // 20% новых
-            'is_active' => rand(0, 10) > 0, // 90% активных
-            'views' => rand(10, 500),
-            'sales' => rand(0, 50),
-            'rating' => rand(35, 50) / 10,
-            'reviews_count' => rand(0, 25),
-            'meta_title' => $item['name'] . ' - купить в АкваСбор',
-            'meta_description' => 'Купить ' . $item['name'] . ' с доставкой по России. Гарантия качества.',
-            'meta_keywords' => 'аквариум, рыбки, растения, ' . strtolower($item['name']),
-            'created_at' => date('Y-m-d H:i:s', strtotime('-' . rand(1, 365) . ' days')),
-            'updated_at' => date('Y-m-d H:i:s', strtotime('-' . rand(1, 30) . ' days'))
-        ];
-    }
-
-    return $products;
-}
-
-// === УЛУЧШЕННЫЕ ФУНКЦИИ СОЗДАНИЯ/РЕДАКТИРОВАНИЯ ТОВАРОВ ===
-
-function createProduct($data, $files = null) {
-    try {
-        $dynamicData = initializeDynamicData();
-        $products = $dynamicData['products'];
-
-        $newId = empty($products) ? 1 : (max(array_column($products, 'id')) + 1);
-
-        // Обрабатываем загрузку изображений
-        $images = [];
-        if ($files && isset($files['images'])) {
-            $uploadResult = uploadProductImages($files);
-            if (!$uploadResult['success']) {
-                return $uploadResult;
+                $success[] = 'Подключение к базе данных успешно!';
+                $step = 3;
+            } catch (PDOException $e) {
+                $errors[] = 'Ошибка подключения к БД: ' . $e->getMessage();
             }
-            $images = $uploadResult['images'];
-        }
+            break;
 
-        $newProduct = [
-            'id' => $newId,
-            'name' => trim($data['name'] ?? ''),
-            'slug' => generateSlug($data['name'] ?? ''),
-            'description' => trim($data['description'] ?? ''),
-            'short_description' => trim($data['short_description'] ?? ''),
-            'price' => (float)($data['price'] ?? 0),
-            'old_price' => !empty($data['old_price']) ? (float)$data['old_price'] : null,
-            'category_id' => (int)($data['category_id'] ?? 1),
-            'category' => getCategoryById($data['category_id'])['name'] ?? 'Разное',
-            'sku' => trim($data['sku']) ?: ('AQ-' . str_pad($newId, 4, '0', STR_PAD_LEFT)),
-            'stock' => (int)($data['stock'] ?? 0),
-            'weight' => (int)($data['weight'] ?? 100),
-            'dimensions' => [
-                'length' => (int)($data['length'] ?? 10),
-                'width' => (int)($data['width'] ?? 10),
-                'height' => (int)($data['height'] ?? 10)
-            ],
-            'images' => $images,
-            'is_featured' => !empty($data['is_featured']),
-            'is_new' => !empty($data['is_new']),
-            'is_active' => !empty($data['is_active']),
-            'views' => 0,
-            'sales' => 0,
-            'rating' => 0,
-            'reviews_count' => 0,
-            'meta_title' => trim($data['meta_title']) ?: $data['name'] . ' - купить в АкваСбор',
-            'meta_description' => trim($data['meta_description']) ?: 'Купить ' . $data['name'] . ' с доставкой по России. Гарантия качества.',
-            'meta_keywords' => trim($data['meta_keywords']) ?: 'аквариум, рыбки, растения',
-            'created_at' => date('Y-m-d H:i:s'),
-            'updated_at' => date('Y-m-d H:i:s')
-        ];
-
-        $dynamicData['products'][] = $newProduct;
-        $dynamicData['last_updated'] = date('Y-m-d H:i:s');
-
-        if (saveDynamicData($dynamicData)) {
-            return ['success' => true, 'message' => 'Товар создан успешно!', 'product' => $newProduct];
-        } else {
-            return ['success' => false, 'message' => 'Ошибка сохранения данных'];
-        }
-    } catch (Exception $e) {
-        return ['success' => false, 'message' => 'Ошибка: ' . $e->getMessage()];
-    }
-}
-
-function updateProduct($id, $data, $files = null, $newImages = null) {
-    try {
-        $dynamicData = initializeDynamicData();
-        $products = &$dynamicData['products'];
-
-        $productIndex = array_search($id, array_column($products, 'id'));
-        if ($productIndex === false) {
-            return ['success' => false, 'message' => 'Товар не найден'];
-        }
-
-        $product = &$products[$productIndex];
-
-        // Если переданы новые изображения (для удаления конкретного изображения)
-        if ($newImages !== null) {
-            // Удаляем старые изображения если они не в новом списке
-            foreach ($product['images'] as $oldImage) {
-                if (!in_array($oldImage, $newImages)) {
-                    deleteProductImage($oldImage);
-                }
-            }
-            $product['images'] = array_values($newImages);
-        } else {
-            // Обрабатываем загрузку новых изображений
-            if ($files && isset($files['images']) && !empty($files['images']['name'][0])) {
-                $uploadResult = uploadProductImages($files);
-                if (!$uploadResult['success']) {
-                    return $uploadResult;
-                }
-                // Добавляем новые изображения к существующим
-                $product['images'] = array_merge($product['images'] ?? [], $uploadResult['images']);
-            }
-        }
-
-        // Обновляем только переданные поля
-        $updateableFields = [
-            'name', 'description', 'short_description', 'price', 'old_price',
-            'category_id', 'stock', 'weight', 'meta_title', 'meta_description', 'meta_keywords', 'sku'
-        ];
-
-        foreach ($updateableFields as $field) {
-            if (isset($data[$field])) {
-                if ($field === 'old_price' && empty($data[$field])) {
-                    $product[$field] = null;
-                } elseif (in_array($field, ['price', 'old_price'])) {
-                    $product[$field] = (float)$data[$field];
-                } elseif (in_array($field, ['stock', 'weight', 'category_id'])) {
-                    $product[$field] = (int)$data[$field];
+        case 3: // Создание таблиц
+            if (isset($_POST['create_tables'])) {
+                if (createTables()) {
+                    $success[] = 'Таблицы созданы успешно!';
+                    $step = 4;
                 } else {
-                    $product[$field] = trim($data[$field]);
+                    $errors[] = 'Ошибка создания таблиц!';
                 }
             }
-        }
+            break;
 
-        // Обновляем булевы поля
-        $boolFields = ['is_featured', 'is_new', 'is_active'];
-        foreach ($boolFields as $field) {
-            if (array_key_exists($field, $data)) {
-                $product[$field] = !empty($data[$field]);
-            }
-        }
+        case 4: // Создание админа
+            $admin_login = trim($_POST['admin_login']);
+            $admin_email = trim($_POST['admin_email']);
+            $admin_pass = trim($_POST['admin_pass']);
+            $admin_pass2 = trim($_POST['admin_pass2']);
 
-        // Обновляем размеры
-        if (isset($data['length'])) $product['dimensions']['length'] = (int)$data['length'];
-        if (isset($data['width'])) $product['dimensions']['width'] = (int)$data['width'];
-        if (isset($data['height'])) $product['dimensions']['height'] = (int)$data['height'];
-
-        // Обновляем slug если изменилось название
-        if (isset($data['name'])) {
-            $product['slug'] = generateSlug($data['name']);
-        }
-
-        // Обновляем категорию если изменилась
-        if (isset($data['category_id'])) {
-            $category = getCategoryById($data['category_id']);
-            $product['category'] = $category ? $category['name'] : 'Разное';
-        }
-
-        $product['updated_at'] = date('Y-m-d H:i:s');
-        $dynamicData['last_updated'] = date('Y-m-d H:i:s');
-
-        if (saveDynamicData($dynamicData)) {
-            return ['success' => true, 'message' => 'Товар обновлен успешно!', 'product' => $product];
-        } else {
-            return ['success' => false, 'message' => 'Ошибка сохранения данных'];
-        }
-    } catch (Exception $e) {
-        return ['success' => false, 'message' => 'Ошибка: ' . $e->getMessage()];
-    }
-}
-
-function deleteProduct($id) {
-    try {
-        $dynamicData = initializeDynamicData();
-        $products = &$dynamicData['products'];
-
-        $productIndex = array_search($id, array_column($products, 'id'));
-        if ($productIndex === false) {
-            return ['success' => false, 'message' => 'Товар не найден'];
-        }
-
-        $product = $products[$productIndex];
-
-        // Удаляем изображения товара
-        if (!empty($product['images'])) {
-            foreach ($product['images'] as $image) {
-                deleteProductImage($image);
-            }
-        }
-
-        array_splice($products, $productIndex, 1);
-
-        $dynamicData['last_updated'] = date('Y-m-d H:i:s');
-
-        if (saveDynamicData($dynamicData)) {
-            return ['success' => true, 'message' => 'Товар удален успешно!', 'product' => $product];
-        } else {
-            return ['success' => false, 'message' => 'Ошибка сохранения данных'];
-        }
-    } catch (Exception $e) {
-        return ['success' => false, 'message' => 'Ошибка: ' . $e->getMessage()];
-    }
-}
-
-// === МАССОВЫЕ ОПЕРАЦИИ С ТОВАРАМИ ===
-
-function bulkUpdateProducts($ids, $action, $data = []) {
-    try {
-        $dynamicData = initializeDynamicData();
-        $products = &$dynamicData['products'];
-        $updated = 0;
-
-        foreach ($products as &$product) {
-            if (in_array($product['id'], $ids)) {
-                switch ($action) {
-                    case 'activate':
-                        $product['is_active'] = true;
-                        break;
-                    case 'deactivate':
-                        $product['is_active'] = false;
-                        break;
-                    case 'delete':
-                        // Помечаем для удаления
-                        $product['_delete'] = true;
-                        break;
-                    case 'update_category':
-                        if (isset($data['category_id'])) {
-                            $product['category_id'] = (int)$data['category_id'];
-                            $category = getCategoryById($data['category_id']);
-                            $product['category'] = $category ? $category['name'] : 'Разное';
-                        }
-                        break;
-                    case 'update_stock':
-                        if (isset($data['stock'])) {
-                            $product['stock'] = (int)$data['stock'];
-                        }
-                        break;
-                }
-                $product['updated_at'] = date('Y-m-d H:i:s');
-                $updated++;
-            }
-        }
-
-        // Удаляем помеченные товары
-        if ($action === 'delete') {
-            $products = array_filter($products, function($product) {
-                if (isset($product['_delete'])) {
-                    // Удаляем изображения
-                    if (!empty($product['images'])) {
-                        foreach ($product['images'] as $image) {
-                            deleteProductImage($image);
-                        }
-                    }
-                    return false;
-                }
-                return true;
-            });
-            $products = array_values($products); // Перенумеровываем массив
-        }
-
-        $dynamicData['products'] = $products;
-        $dynamicData['last_updated'] = date('Y-m-d H:i:s');
-
-        if (saveDynamicData($dynamicData)) {
-            return ['success' => true, 'message' => "Обновлено товаров: $updated"];
-        } else {
-            return ['success' => false, 'message' => 'Ошибка сохранения данных'];
-        }
-    } catch (Exception $e) {
-        return ['success' => false, 'message' => 'Ошибка: ' . $e->getMessage()];
-    }
-}
-
-// === ФУНКЦИИ УПРАВЛЕНИЯ КАТЕГОРИЯМИ ===
-
-function createCategory($data) {
-    try {
-        $dynamicData = initializeDynamicData();
-        $categories = $dynamicData['categories'];
-
-        $newId = empty($categories) ? 1 : (max(array_column($categories, 'id')) + 1);
-
-        $newCategory = [
-            'id' => $newId,
-            'name' => trim($data['name'] ?? ''),
-            'slug' => generateSlug($data['name'] ?? ''),
-            'icon' => trim($data['icon']) ?: '📦',
-            'description' => trim($data['description'] ?? ''),
-            'active' => !empty($data['active']),
-            'sort_order' => (int)($data['sort_order'] ?? 999),
-            'seo_title' => trim($data['seo_title'] ?? ''),
-            'seo_description' => trim($data['seo_description'] ?? ''),
-            'created_at' => date('Y-m-d H:i:s'),
-            'updated_at' => date('Y-m-d H:i:s')
-        ];
-
-        $dynamicData['categories'][] = $newCategory;
-        $dynamicData['last_updated'] = date('Y-m-d H:i:s');
-
-        if (saveDynamicData($dynamicData)) {
-            return ['success' => true, 'message' => 'Категория создана успешно!', 'category' => $newCategory];
-        } else {
-            return ['success' => false, 'message' => 'Ошибка сохранения данных'];
-        }
-    } catch (Exception $e) {
-        return ['success' => false, 'message' => 'Ошибка: ' . $e->getMessage()];
-    }
-}
-
-function updateCategory($id, $data) {
-    try {
-        $dynamicData = initializeDynamicData();
-        $categories = &$dynamicData['categories'];
-
-        $categoryIndex = array_search($id, array_column($categories, 'id'));
-        if ($categoryIndex === false) {
-            return ['success' => false, 'message' => 'Категория не найдена'];
-        }
-
-        $category = &$categories[$categoryIndex];
-
-        $updateableFields = ['name', 'icon', 'description', 'sort_order', 'seo_title', 'seo_description'];
-        foreach ($updateableFields as $field) {
-            if (isset($data[$field])) {
-                if ($field === 'sort_order') {
-                    $category[$field] = (int)$data[$field];
+            if (empty($admin_login) || empty($admin_email) || empty($admin_pass)) {
+                $errors[] = 'Все поля обязательны для заполнения!';
+            } elseif ($admin_pass !== $admin_pass2) {
+                $errors[] = 'Пароли не совпадают!';
+            } elseif (strlen($admin_pass) < 6) {
+                $errors[] = 'Пароль должен быть не менее 6 символов!';
+            } else {
+                if (createAdmin($admin_login, $admin_email, $admin_pass)) {
+                    $success[] = 'Администратор создан успешно!';
+                    $step = 5;
                 } else {
-                    $category[$field] = trim($data[$field]);
+                    $errors[] = 'Ошибка создания администратора!';
                 }
+            }
+            break;
+
+        case 5: // Финализация
+            if (isset($_POST['finalize'])) {
+                if (finalizeInstallation()) {
+                    $success[] = 'Установка завершена успешно!';
+                    $step = 6;
+                } else {
+                    $errors[] = 'Ошибка финализации установки!';
+                }
+            }
+            break;
+    }
+}
+
+// Функции установки
+function checkRequirements() {
+    $requirements = [
+        'PHP версия >= 7.4' => version_compare(PHP_VERSION, '7.4.0', '>='),
+        'PDO расширение' => extension_loaded('pdo'),
+        'PDO MySQL' => extension_loaded('pdo_mysql'),
+        'GD расширение' => extension_loaded('gd'),
+        'cURL расширение' => extension_loaded('curl'),
+        'JSON расширение' => extension_loaded('json'),
+        'Запись в config/' => is_writable('config/'),
+        'Запись в uploads/' => is_writable('uploads/') || mkdir('uploads/', 0755, true)
+    ];
+
+    return $requirements;
+}
+
+function createTables() {
+    try {
+        $db_config = $_SESSION['db_config'];
+        $pdo = new PDO("mysql:host={$db_config['db_host']};dbname={$db_config['db_name']};charset=utf8mb4", 
+                      $db_config['db_user'], $db_config['db_pass']);
+
+        $sql = "
+        -- Админы
+        CREATE TABLE IF NOT EXISTS `admins` (
+            `id` int(11) NOT NULL AUTO_INCREMENT,
+            `login` varchar(50) NOT NULL UNIQUE,
+            `email` varchar(100) NOT NULL UNIQUE,
+            `password` varchar(255) NOT NULL,
+            `role` varchar(20) DEFAULT 'admin',
+            `status` tinyint(1) DEFAULT 1,
+            `created_at` timestamp DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (`id`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+        -- Категории товаров
+        CREATE TABLE IF NOT EXISTS `categories` (
+            `id` int(11) NOT NULL AUTO_INCREMENT,
+            `parent_id` int(11) DEFAULT 0,
+            `name` varchar(255) NOT NULL,
+            `slug` varchar(255) NOT NULL UNIQUE,
+            `description` text,
+            `image` varchar(255) DEFAULT NULL,
+            `sort_order` int(11) DEFAULT 0,
+            `status` tinyint(1) DEFAULT 1,
+            `seo_title` varchar(255) DEFAULT NULL,
+            `seo_description` varchar(500) DEFAULT NULL,
+            `created_at` timestamp DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (`id`),
+            KEY `parent_id` (`parent_id`),
+            KEY `status` (`status`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+        -- Товары
+        CREATE TABLE IF NOT EXISTS `products` (
+            `id` int(11) NOT NULL AUTO_INCREMENT,
+            `category_id` int(11) NOT NULL,
+            `name` varchar(255) NOT NULL,
+            `slug` varchar(255) NOT NULL UNIQUE,
+            `description` text,
+            `short_description` varchar(500) DEFAULT NULL,
+            `price` decimal(10,2) NOT NULL DEFAULT 0.00,
+            `old_price` decimal(10,2) DEFAULT NULL,
+            `sku` varchar(100) DEFAULT NULL,
+            `stock_quantity` int(11) DEFAULT 0,
+            `images` text,
+            `status` tinyint(1) DEFAULT 1,
+            `featured` tinyint(1) DEFAULT 0,
+            `views` int(11) DEFAULT 0,
+            `seo_title` varchar(255) DEFAULT NULL,
+            `seo_description` varchar(500) DEFAULT NULL,
+            `created_at` timestamp DEFAULT CURRENT_TIMESTAMP,
+            `updated_at` timestamp DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            PRIMARY KEY (`id`),
+            KEY `category_id` (`category_id`),
+            KEY `status` (`status`),
+            KEY `featured` (`featured`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+        -- Заказы
+        CREATE TABLE IF NOT EXISTS `orders` (
+            `id` int(11) NOT NULL AUTO_INCREMENT,
+            `order_number` varchar(50) NOT NULL UNIQUE,
+            `customer_name` varchar(255) NOT NULL,
+            `customer_email` varchar(255) NOT NULL,
+            `customer_phone` varchar(50) NOT NULL,
+            `customer_address` text NOT NULL,
+            `total_amount` decimal(10,2) NOT NULL,
+            `status` enum('new','processing','shipped','delivered','cancelled') DEFAULT 'new',
+            `payment_method` varchar(50) DEFAULT NULL,
+            `payment_status` enum('pending','paid','failed') DEFAULT 'pending',
+            `notes` text,
+            `created_at` timestamp DEFAULT CURRENT_TIMESTAMP,
+            `updated_at` timestamp DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            PRIMARY KEY (`id`),
+            KEY `status` (`status`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+        -- Позиции заказа
+        CREATE TABLE IF NOT EXISTS `order_items` (
+            `id` int(11) NOT NULL AUTO_INCREMENT,
+            `order_id` int(11) NOT NULL,
+            `product_id` int(11) NOT NULL,
+            `product_name` varchar(255) NOT NULL,
+            `product_price` decimal(10,2) NOT NULL,
+            `quantity` int(11) NOT NULL DEFAULT 1,
+            PRIMARY KEY (`id`),
+            KEY `order_id` (`order_id`),
+            KEY `product_id` (`product_id`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+        -- Отзывы
+        CREATE TABLE IF NOT EXISTS `reviews` (
+            `id` int(11) NOT NULL AUTO_INCREMENT,
+            `product_id` int(11) NOT NULL,
+            `customer_name` varchar(255) NOT NULL,
+            `customer_email` varchar(255) NOT NULL,
+            `rating` tinyint(1) NOT NULL DEFAULT 5,
+            `comment` text,
+            `status` enum('pending','approved','rejected') DEFAULT 'pending',
+            `created_at` timestamp DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (`id`),
+            KEY `product_id` (`product_id`),
+            KEY `status` (`status`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+        -- Настройки сайта
+        CREATE TABLE IF NOT EXISTS `settings` (
+            `key` varchar(100) NOT NULL,
+            `value` text,
+            `type` varchar(20) DEFAULT 'string',
+            `description` varchar(500) DEFAULT NULL,
+            PRIMARY KEY (`key`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+        -- Новости/статьи
+        CREATE TABLE IF NOT EXISTS `news` (
+            `id` int(11) NOT NULL AUTO_INCREMENT,
+            `title` varchar(255) NOT NULL,
+            `slug` varchar(255) NOT NULL UNIQUE,
+            `excerpt` varchar(500) DEFAULT NULL,
+            `content` text,
+            `image` varchar(255) DEFAULT NULL,
+            `status` tinyint(1) DEFAULT 1,
+            `views` int(11) DEFAULT 0,
+            `seo_title` varchar(255) DEFAULT NULL,
+            `seo_description` varchar(500) DEFAULT NULL,
+            `created_at` timestamp DEFAULT CURRENT_TIMESTAMP,
+            `updated_at` timestamp DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            PRIMARY KEY (`id`),
+            KEY `status` (`status`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        ";
+
+        $pdo->exec($sql);
+
+        // Добавляем базовые настройки
+        $settings = [
+            ['site_name', 'АкваСбор - аквариумы и их обитатели', 'string', 'Название сайта'],
+            ['site_description', 'Магазин аквариумных растений и рыбок', 'string', 'Описание сайта'],
+            ['site_email', 'info@akvasbor.ru', 'string', 'Email сайта'],
+            ['site_phone', '+7 (999) 123-45-67', 'string', 'Телефон сайта'],
+            ['currency_symbol', '₽', 'string', 'Символ валюты'],
+            ['products_per_page', '12', 'number', 'Товаров на странице'],
+            ['delivery_cost', '300', 'number', 'Стоимость доставки'],
+            ['free_delivery_from', '3000', 'number', 'Бесплатная доставка от суммы']
+        ];
+
+        $stmt = $pdo->prepare("INSERT INTO settings (`key`, value, type, description) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE value = VALUES(value)");
+        foreach ($settings as $setting) {
+            $stmt->execute($setting);
+        }
+
+        return true;
+    } catch (Exception $e) {
+        return false;
+    }
+}
+
+function createAdmin($login, $email, $password) {
+    try {
+        $db_config = $_SESSION['db_config'];
+        $pdo = new PDO("mysql:host={$db_config['db_host']};dbname={$db_config['db_name']};charset=utf8mb4", 
+                      $db_config['db_user'], $db_config['db_pass']);
+
+        $stmt = $pdo->prepare("INSERT INTO admins (login, email, password, role) VALUES (?, ?, ?, 'super_admin')");
+        return $stmt->execute([$login, $email, password_hash($password, PASSWORD_DEFAULT)]);
+    } catch (Exception $e) {
+        return false;
+    }
+}
+
+function finalizeInstallation() {
+    try {
+        $db_config = $_SESSION['db_config'];
+
+        // Создаем конфиг БД
+        $config_content = "<?php
+return [
+    'host' => '{$db_config['db_host']}',
+    'database' => '{$db_config['db_name']}',
+    'username' => '{$db_config['db_user']}',
+    'password' => '{$db_config['db_pass']}',
+    'charset' => 'utf8mb4',
+    'options' => [
+        PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+        PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC
+    ]
+];
+";
+        file_put_contents('config/database.php', $config_content);
+
+        // Создаем основные настройки
+        $settings_content = "<?php
+return [
+    'debug' => false,
+    'timezone' => 'Europe/Moscow',
+    'upload_max_size' => 5 * 1024 * 1024, // 5MB
+    'allowed_extensions' => ['jpg', 'jpeg', 'png', 'webp'],
+    'session_lifetime' => 7200, // 2 часа
+    'csrf_token_lifetime' => 3600, // 1 час
+    'pagination' => [
+        'per_page' => 12,
+        'max_links' => 5
+    ]
+];
+";
+        file_put_contents('config/settings.php', $settings_content);
+
+        // Создаем конфиг модулей
+        $modules_content = "<?php
+return [
+    'frontend' => [
+        'catalog' => ['enabled' => true, 'cache' => true],
+        'cart' => ['enabled' => true, 'session_lifetime' => 3600],
+        'checkout' => ['enabled' => true, 'payment_methods' => ['cash', 'card']],
+        'search' => ['enabled' => true, 'min_length' => 3],
+        'news' => ['enabled' => true, 'per_page' => 10]
+    ],
+    'admin' => [
+        'dashboard' => ['enabled' => true],
+        'products' => ['enabled' => true],
+        'categories' => ['enabled' => true],
+        'orders' => ['enabled' => true],
+        'reviews' => ['enabled' => true],
+        'analytics' => ['enabled' => true],
+        'settings' => ['enabled' => true]
+    ],
+    'api' => [
+        'enabled' => false,
+        'rate_limit' => 1000, // запросов в час
+        'auth_required' => true
+    ]
+];
+";
+        file_put_contents('config/modules.php', $modules_content);
+
+        // Создаем .htaccess
+        $htaccess_content = "RewriteEngine On
+
+# Блокировка доступа к служебным файлам
+<Files ~ \"^\.htaccess|\.git|config/|install\.php\">
+    Order allow,deny
+    Deny from all
+</Files>
+
+# Перенаправление на HTTPS (раскомментируйте если нужно)
+# RewriteCond %{HTTPS} off
+# RewriteRule ^(.*)$ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
+
+# Удаление index.php из URL
+RewriteCond %{THE_REQUEST} /index\.php[?\s] [NC]
+RewriteRule ^index\.php$ / [R=301,L]
+
+# Основные правила роутинга
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteRule ^admin/?(.*)$ admin.php?route=\$1 [QSA,L]
+
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteRule ^(.*)$ index.php?route=\$1 [QSA,L]
+";
+        file_put_contents('.htaccess', $htaccess_content);
+
+        // Создаем файл установки
+        file_put_contents('config/.installed', date('Y-m-d H:i:s'));
+
+        // Создаем директории
+        $dirs = ['uploads', 'uploads/products', 'uploads/categories', 'uploads/news', 'cache'];
+        foreach ($dirs as $dir) {
+            if (!is_dir($dir)) {
+                mkdir($dir, 0755, true);
             }
         }
 
-        if (array_key_exists('active', $data)) {
-            $category['active'] = !empty($data['active']);
-        }
+        // Очищаем сессию
+        unset($_SESSION['db_config']);
 
-        if (isset($data['name'])) {
-            $category['slug'] = generateSlug($data['name']);
-        }
-
-        $category['updated_at'] = date('Y-m-d H:i:s');
-        $dynamicData['last_updated'] = date('Y-m-d H:i:s');
-
-        if (saveDynamicData($dynamicData)) {
-            return ['success' => true, 'message' => 'Категория обновлена успешно!'];
-        } else {
-            return ['success' => false, 'message' => 'Ошибка сохранения данных'];
-        }
+        return true;
     } catch (Exception $e) {
-        return ['success' => false, 'message' => 'Ошибка: ' . $e->getMessage()];
+        return false;
     }
 }
-
-function deleteCategory($id) {
-    try {
-        $dynamicData = initializeDynamicData();
-        $categories = &$dynamicData['categories'];
-
-        $categoryIndex = array_search($id, array_column($categories, 'id'));
-        if ($categoryIndex === false) {
-            return ['success' => false, 'message' => 'Категория не найдена'];
-        }
-
-        // Проверяем есть ли товары в этой категории
-        $products = $dynamicData['products'];
-        $hasProducts = array_filter($products, fn($p) => $p['category_id'] == $id);
-
-        if (!empty($hasProducts)) {
-            return ['success' => false, 'message' => 'Нельзя удалить категорию с товарами. Сначала переместите товары в другую категорию.'];
-        }
-
-        array_splice($categories, $categoryIndex, 1);
-        $dynamicData['last_updated'] = date('Y-m-d H:i:s');
-
-        if (saveDynamicData($dynamicData)) {
-            return ['success' => true, 'message' => 'Категория удалена успешно!'];
-        } else {
-            return ['success' => false, 'message' => 'Ошибка сохранения данных'];
-        }
-    } catch (Exception $e) {
-        return ['success' => false, 'message' => 'Ошибка: ' . $e->getMessage()];
-    }
-}
-
-// === ЗАКАЗЫ ===
-function getOrders() {
-    $dynamicData = loadDynamicData();
-    if ($dynamicData && isset($dynamicData['orders'])) {
-        return $dynamicData['orders'];
-    }
-    return getOriginalOrders();
-}
-
-function getOriginalOrders() {
-    $statuses = ['new', 'processing', 'shipped', 'delivered', 'cancelled'];
-    $statusLabels = [
-        'new' => 'Новый',
-        'processing' => 'Обрабатывается',
-        'shipped' => 'Отправлен',
-        'delivered' => 'Доставлен',
-        'cancelled' => 'Отменен'
-    ];
-
-    $orders = [];
-    for ($i = 1; $i <= 50; $i++) {
-        $status = $statuses[array_rand($statuses)];
-        $orderDate = date('Y-m-d H:i:s', strtotime('-' . rand(1, 90) . ' days'));
-
-        $orders[] = [
-            'id' => $i,
-            'order_number' => 'AQ-' . date('Y', strtotime($orderDate)) . '-' . str_pad($i, 4, '0', STR_PAD_LEFT),
-            'customer_name' => 'Покупатель ' . $i,
-            'customer_email' => 'customer' . $i . '@example.com',
-            'customer_phone' => '+7 (999) ' . rand(100, 999) . '-' . rand(10, 99) . '-' . rand(10, 99),
-            'total_amount' => rand(500, 15000),
-            'status' => $status,
-            'status_label' => $statusLabels[$status],
-            'payment_method' => rand(0, 1) ? 'card' : 'cash',
-            'delivery_method' => rand(0, 1) ? 'delivery' : 'pickup',
-            'delivery_address' => 'г. ' . ['Москва', 'СПб', 'Казань', 'Минск', 'Алматы'][rand(0, 4)] . ', ул. Примерная ' . rand(1, 100),
-            'items_count' => rand(1, 8),
-            'notes' => rand(0, 3) == 0 ? 'Комментарий к заказу №' . $i : '',
-            'created_at' => $orderDate,
-            'updated_at' => date('Y-m-d H:i:s', strtotime($orderDate . ' +' . rand(1, 5) . ' days'))
-        ];
-    }
-
-    return $orders;
-}
-
-// === ОТЗЫВЫ ===
-function getReviews() {
-    $dynamicData = loadDynamicData();
-    if ($dynamicData && isset($dynamicData['reviews'])) {
-        return $dynamicData['reviews'];
-    }
-    return getOriginalReviews();
-}
-
-function getOriginalReviews() {
-    $reviews = [];
-    $products = getProducts();
-
-    for ($i = 1; $i <= 75; $i++) {
-        $product = $products[array_rand($products)];
-        $rating = rand(3, 5);
-
-        $reviews[] = [
-            'id' => $i,
-            'product_id' => $product['id'],
-            'product_name' => $product['name'],
-            'customer_name' => 'Покупатель ' . $i,
-            'customer_email' => 'customer' . $i . '@example.com',
-            'rating' => $rating,
-            'title' => $rating >= 4 ? 'Отличный товар!' : 'Неплохо',
-            'text' => $rating >= 4 ? 'Очень доволен покупкой, рекомендую!' : 'Товар соответствует описанию.',
-            'is_approved' => rand(0, 5) > 0, // 80% одобренных
-            'is_featured' => rand(0, 10) == 0, // 10% избранных
-            'created_at' => date('Y-m-d H:i:s', strtotime('-' . rand(1, 180) . ' days'))
-        ];
-    }
-
-    return $reviews;
-}
-
-// === НОВОСТИ ===
-function getNews() {
-    $dynamicData = loadDynamicData();
-    if ($dynamicData && isset($dynamicData['news'])) {
-        return $dynamicData['news'];
-    }
-    return getOriginalNews();
-}
-
-function getOriginalNews() {
-    $newsData = [
-        'Новое поступление редких растений',
-        'Скидки на аквариумы до 30%',
-        'Открытие нового раздела морской аквариумистики',
-        'Весенняя распродажа оборудования',
-        'Поступление японских рыбок',
-        'Мастер-класс по запуску аквариума',
-        'Новая линейка кормов премиум класса',
-        'Расширение географии доставки'
-    ];
-
-    $news = [];
-    foreach ($newsData as $index => $title) {
-        $news[] = [
-            'id' => $index + 1,
-            'title' => $title,
-            'slug' => generateSlug($title),
-            'excerpt' => 'Краткое описание новости: ' . $title,
-            'content' => '<p>Полный текст новости о ' . strtolower($title) . '. Здесь будет подробная информация для покупателей.</p>',
-            'image' => '',
-            'is_published' => rand(0, 3) > 0, // 75% опубликованных
-            'is_featured' => rand(0, 4) == 0, // 25% важных
-            'views' => rand(50, 500),
-            'meta_title' => $title . ' - АкваСбор',
-            'meta_description' => 'Краткое описание новости: ' . $title,
-            'created_at' => date('Y-m-d H:i:s', strtotime('-' . rand(1, 60) . ' days')),
-            'updated_at' => date('Y-m-d H:i:s', strtotime('-' . rand(1, 30) . ' days'))
-        ];
-    }
-
-    return $news;
-}
-
-// === СОЗДАНИЕ НОВОСТИ ===
-function createNews($data) {
-    try {
-        $dynamicData = initializeDynamicData();
-        $news = $dynamicData['news'];
-
-        $newId = empty($news) ? 1 : (max(array_column($news, 'id')) + 1);
-
-        $newNews = [
-            'id' => $newId,
-            'title' => trim($data['title'] ?? ''),
-            'slug' => generateSlug($data['title'] ?? ''),
-            'excerpt' => trim($data['excerpt'] ?? ''),
-            'content' => trim($data['content'] ?? ''),
-            'image' => trim($data['image'] ?? ''),
-            'is_published' => !empty($data['is_published']),
-            'is_featured' => !empty($data['is_featured']),
-            'views' => 0,
-            'meta_title' => trim($data['meta_title']) ?: $data['title'] . ' - АкваСбор',
-            'meta_description' => trim($data['meta_description']) ?: 'Краткое описание новости: ' . $data['title'],
-            'created_at' => date('Y-m-d H:i:s'),
-            'updated_at' => date('Y-m-d H:i:s')
-        ];
-
-        $dynamicData['news'][] = $newNews;
-        $dynamicData['last_updated'] = date('Y-m-d H:i:s');
-
-        if (saveDynamicData($dynamicData)) {
-            return ['success' => true, 'message' => 'Новость создана успешно!', 'news' => $newNews];
-        } else {
-            return ['success' => false, 'message' => 'Ошибка сохранения данных'];
-        }
-    } catch (Exception $e) {
-        return ['success' => false, 'message' => 'Ошибка: ' . $e->getMessage()];
-    }
-}
-
-// === ФУНКЦИИ ЗАКАЗОВ ===
-function saveOrder($orderData) {
-    try {
-        $dynamicData = initializeDynamicData();
-        $orders = $dynamicData['orders'] ?? [];
-
-        $newId = empty($orders) ? 1 : (max(array_column($orders, 'id')) + 1);
-
-        $newOrder = array_merge($orderData, [
-            'id' => $newId,
-            'created_at' => date('Y-m-d H:i:s'),
-            'updated_at' => date('Y-m-d H:i:s')
-        ]);
-
-        $dynamicData['orders'][] = $newOrder;
-        $dynamicData['last_updated'] = date('Y-m-d H:i:s');
-
-        if (saveDynamicData($dynamicData)) {
-            return ['success' => true, 'message' => 'Заказ сохранен успешно!', 'order' => $newOrder];
-        } else {
-            return ['success' => false, 'message' => 'Ошибка сохранения заказа'];
-        }
-    } catch (Exception $e) {
-        return ['success' => false, 'message' => 'Ошибка: ' . $e->getMessage()];
-    }
-}
-
-function updateOrderStatus($id, $status) {
-    try {
-        $dynamicData = initializeDynamicData();
-        $orders = &$dynamicData['orders'];
-
-        $orderIndex = array_search($id, array_column($orders, 'id'));
-        if ($orderIndex === false) {
-            return ['success' => false, 'message' => 'Заказ не найден'];
-        }
-
-        $statusLabels = [
-            'new' => 'Новый',
-            'processing' => 'Обрабатывается',
-            'shipped' => 'Отправлен',
-            'delivered' => 'Доставлен',
-            'cancelled' => 'Отменен'
-        ];
-
-        $orders[$orderIndex]['status'] = $status;
-        $orders[$orderIndex]['status_label'] = $statusLabels[$status] ?? $status;
-        $orders[$orderIndex]['updated_at'] = date('Y-m-d H:i:s');
-        $dynamicData['last_updated'] = date('Y-m-d H:i:s');
-
-        if (saveDynamicData($dynamicData)) {
-            return ['success' => true, 'message' => 'Статус заказа обновлен!'];
-        } else {
-            return ['success' => false, 'message' => 'Ошибка сохранения данных'];
-        }
-    } catch (Exception $e) {
-        return ['success' => false, 'message' => 'Ошибка: ' . $e->getMessage()];
-    }
-}
-
-// === НАСТРОЙКИ САЙТА ===
-function getSiteSettings() {
-    $dynamicData = loadDynamicData();
-    if ($dynamicData && isset($dynamicData['settings'])) {
-        return $dynamicData['settings'];
-    }
-
-    return [
-        'site_name' => 'АкваСбор',
-        'site_description' => 'Аквариумы и их обитатели',
-        'site_keywords' => 'аквариум, рыбки, растения, оборудование',
-        'admin_email' => 'admin@akvasbor.ru',
-        'phone' => '+7 (999) 123-45-67',
-        'address' => 'Россия, доставка по СНГ',
-        'working_hours' => 'Ежедневно 9:00-21:00',
-        'currency' => '₽',
-        'products_per_page' => 12,
-        'min_order_amount' => 500,
-        'free_shipping_from' => 2000,
-        'social_vk' => '',
-        'social_telegram' => '',
-        'social_instagram' => '',
-        'social_youtube' => '',
-        'google_analytics' => '',
-        'yandex_metrika' => '',
-        'maintenance_mode' => false
-    ];
-}
-
-// === ФУНКЦИИ ДЛЯ РАБОТЫ С ДАННЫМИ ===
-
-function getCategoryById($id) {
-    $categories = getCategories();
-    foreach ($categories as $category) {
-        if ($category['id'] == $id) {
-            return $category;
-        }
-    }
-    return null;
-}
-
-function getProductById($id) {
-    $products = getProducts();
-    foreach ($products as $product) {
-        if ($product['id'] == $id) {
-            return $product;
-        }
-    }
-    return null;
-}
-
-function getProductsByCategory($categoryId) {
-    $products = getProducts();
-    return array_filter($products, function($product) use ($categoryId) {
-        return $product['category_id'] == $categoryId && $product['is_active'];
-    });
-}
-
-function getFeaturedProducts($limit = 9) {
-    $products = getProducts();
-    $featured = array_filter($products, function($product) {
-        return $product['is_featured'] && $product['is_active'];
-    });
-    return array_slice($featured, 0, $limit);
-}
-
-function getNewProducts($limit = 8) {
-    $products = getProducts();
-    $new = array_filter($products, function($product) {
-        return $product['is_new'] && $product['is_active'];
-    });
-    return array_slice($new, 0, $limit);
-}
-
-function searchProducts($query) {
-    $products = getProducts();
-    $query = mb_strtolower(trim($query));
-
-    if (empty($query)) {
-        return [];
-    }
-
-    return array_filter($products, function($product) use ($query) {
-        return $product['is_active'] && (
-            mb_stripos($product['name'], $query) !== false ||
-            mb_stripos($product['description'], $query) !== false ||
-            mb_stripos($product['short_description'], $query) !== false ||
-            mb_stripos($product['category'], $query) !== false ||
-            mb_stripos($product['sku'], $query) !== false
-        );
-    });
-}
-
-function getSimilarProducts($productId, $limit = 4) {
-    $product = getProductById($productId);
-    if (!$product) return [];
-
-    $categoryProducts = getProductsByCategory($product['category_id']);
-
-    // Исключаем текущий товар
-    $categoryProducts = array_filter($categoryProducts, fn($p) => $p['id'] != $productId);
-
-    // Перемешиваем и берем лимит
-    shuffle($categoryProducts);
-    return array_slice($categoryProducts, 0, $limit);
-}
-
-function getProductReviews($productId) {
-    $reviews = getReviews();
-    return array_filter($reviews, function($review) use ($productId) {
-        return $review['product_id'] == $productId && $review['is_approved'];
-    });
-}
-
-// === ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ===
-
-function generateSlug($text) {
-    $text = mb_strtolower($text, 'UTF-8');
-    $text = preg_replace('/[^a-z0-9а-я\s-]/u', '', $text);
-    $text = preg_replace('/\s+/', '-', trim($text));
-    $text = preg_replace('/-+/', '-', $text);
-    return trim($text, '-');
-}
-
-function getProductDescription($name) {
-    $templates = [
-        'Качественный товар для аквариума. Подходит для начинающих и опытных аквариумистов.',
-        'Популярный продукт с отличными характеристиками. Быстрая доставка по всей России.',
-        'Элегантное решение для создания природного дизайна аквариума. Хорошо смотрится в композициях.',
-        'Неприхотливый товар, который хорошо переносит различные условия содержания.',
-        'Быстрорастущий вид, отличный выбор для поддержания баланса в аквариуме.',
-        'Красивое дополнение для аквариумов от 50 литров. Создает естественную атмосферу.',
-        'Медленнорастущий вид с декоративными свойствами. Подходит для переднего плана.',
-        'Выносливый товар, который можно содержать без специального оборудования.',
-        'Эффектный продукт с необычными характеристиками. Требует качественного ухода.',
-        'Универсальное решение, помогает поддерживать чистоту и создает комфорт для обитателей.'
-    ];
-
-    return $templates[array_rand($templates)];
-}
-
-function getShortDescription($name) {
-    if (stripos($name, 'растен') !== false) {
-        return 'Живое аквариумное растение';
-    } elseif (stripos($name, 'рыбк') !== false || stripos($name, 'рыб') !== false) {
-        return 'Здоровые аквариумные рыбки';
-    } elseif (stripos($name, 'аквариум') !== false) {
-        return 'Качественный аквариум с гарантией';
-    } elseif (stripos($name, 'корм') !== false) {
-        return 'Сбалансированный корм для рыб';
-    } elseif (stripos($name, 'фильтр') !== false || stripos($name, 'компрессор') !== false) {
-        return 'Надежное аквариумное оборудование';
-    } else {
-        return 'Качественный товар для аквариума';
-    }
-}
-
-// Подключаем системы корзины и заказов
-require_once __DIR__ . '/cart_system.php';
-require_once __DIR__ . '/date_functions.php';
-
-// Инициализируем данные при первом запуске
-initializeDynamicData();
 ?>
+
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Установка АкваСбор CMS</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css" rel="stylesheet">
+    <style>
+        body { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); min-height: 100vh; }
+        .install-card { background: rgba(255,255,255,0.95); backdrop-filter: blur(10px); }
+        .step-indicator { background: #f8f9fa; border-radius: 10px; padding: 1rem; margin-bottom: 2rem; }
+        .step { display: inline-block; width: 40px; height: 40px; line-height: 40px; border-radius: 50%; 
+                text-align: center; margin-right: 1rem; font-weight: bold; }
+        .step.active { background: #28a745; color: white; }
+        .step.completed { background: #20c997; color: white; }
+        .step.pending { background: #e9ecef; color: #6c757d; }
+        .logo { font-size: 2rem; font-weight: bold; color: #28a745; text-align: center; margin-bottom: 2rem; }
+    </style>
+</head>
+<body>
+    <div class="container py-5">
+        <div class="row justify-content-center">
+            <div class="col-md-8">
+                <div class="card install-card shadow-lg">
+                    <div class="card-header bg-success text-white">
+                        <div class="logo">
+                            <i class="bi bi-water"></i> АкваСбор CMS
+                        </div>
+                        <h4 class="text-center mb-0">Мастер установки</h4>
+                    </div>
+                    <div class="card-body">
+                        <!-- Индикатор шагов -->
+                        <div class="step-indicator">
+                            <div class="step <?= $step == 1 ? 'active' : ($step > 1 ? 'completed' : 'pending') ?>">1</div>
+                            <div class="step <?= $step == 2 ? 'active' : ($step > 2 ? 'completed' : 'pending') ?>">2</div>
+                            <div class="step <?= $step == 3 ? 'active' : ($step > 3 ? 'completed' : 'pending') ?>">3</div>
+                            <div class="step <?= $step == 4 ? 'active' : ($step > 4 ? 'completed' : 'pending') ?>">4</div>
+                            <div class="step <?= $step == 5 ? 'active' : ($step > 5 ? 'completed' : 'pending') ?>">5</div>
+                            <div class="step <?= $step == 6 ? 'active' : 'pending' ?>">6</div>
+                        </div>
+
+                        <!-- Сообщения -->
+                        <?php if ($errors): ?>
+                            <?php foreach ($errors as $error): ?>
+                                <div class="alert alert-danger"><i class="bi bi-exclamation-triangle"></i> <?= htmlspecialchars($error) ?></div>
+                            <?php endforeach; ?>
+                        <?php endif; ?>
+
+                        <?php if ($success): ?>
+                            <?php foreach ($success as $msg): ?>
+                                <div class="alert alert-success"><i class="bi bi-check-circle"></i> <?= htmlspecialchars($msg) ?></div>
+                            <?php endforeach; ?>
+                        <?php endif; ?>
+
+                        <!-- Шаг 1: Проверка требований -->
+                        <?php if ($step == 1): ?>
+                            <h5><i class="bi bi-gear"></i> Шаг 1: Проверка системных требований</h5>
+                            <hr>
+
+                            <?php 
+                            $requirements = checkRequirements();
+                            $all_passed = true;
+                            ?>
+
+                            <div class="table-responsive">
+                                <table class="table table-bordered">
+                                    <thead class="table-light">
+                                        <tr>
+                                            <th>Требование</th>
+                                            <th width="100">Статус</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <?php foreach ($requirements as $req => $passed): ?>
+                                            <tr>
+                                                <td><?= $req ?></td>
+                                                <td>
+                                                    <?php if ($passed): ?>
+                                                        <span class="badge bg-success">OK</span>
+                                                    <?php else: ?>
+                                                        <span class="badge bg-danger">НЕ ВЫПОЛНЕНО</span>
+                                                        <?php $all_passed = false; ?>
+                                                    <?php endif; ?>
+                                                </td>
+                                            </tr>
+                                        <?php endforeach; ?>
+                                    </tbody>
+                                </table>
+                            </div>
+
+                            <?php if ($all_passed): ?>
+                                <div class="d-grid">
+                                    <a href="?step=2" class="btn btn-success btn-lg">
+                                        <i class="bi bi-arrow-right"></i> Продолжить установку
+                                    </a>
+                                </div>
+                            <?php else: ?>
+                                <div class="alert alert-warning">
+                                    <i class="bi bi-exclamation-triangle"></i>
+                                    Необходимо устранить все проблемы перед продолжением установки.
+                                </div>
+                            <?php endif; ?>
+                        <?php endif; ?>
+
+                        <!-- Шаг 2: Настройка БД -->
+                        <?php if ($step == 2): ?>
+                            <h5><i class="bi bi-database"></i> Шаг 2: Подключение к базе данных</h5>
+                            <hr>
+
+                            <form method="post">
+                                <div class="row">
+                                    <div class="col-md-6 mb-3">
+                                        <label class="form-label">Хост БД</label>
+                                        <input type="text" class="form-control" name="db_host" value="localhost" required>
+                                    </div>
+                                    <div class="col-md-6 mb-3">
+                                        <label class="form-label">Имя базы данных</label>
+                                        <input type="text" class="form-control" name="db_name" placeholder="akvasbor_db" required>
+                                    </div>
+                                </div>
+                                <div class="row">
+                                    <div class="col-md-6 mb-3">
+                                        <label class="form-label">Пользователь</label>
+                                        <input type="text" class="form-control" name="db_user" placeholder="root" required>
+                                    </div>
+                                    <div class="col-md-6 mb-3">
+                                        <label class="form-label">Пароль</label>
+                                        <input type="password" class="form-control" name="db_pass" placeholder="">
+                                    </div>
+                                </div>
+
+                                <div class="alert alert-info">
+                                    <i class="bi bi-info-circle"></i>
+                                    <strong>Важно!</strong> База данных должна быть создана заранее. Система создаст только таблицы.
+                                </div>
+
+                                <div class="d-grid">
+                                    <button type="submit" class="btn btn-success btn-lg">
+                                        <i class="bi bi-database-check"></i> Проверить подключение
+                                    </button>
+                                </div>
+                            </form>
+                        <?php endif; ?>
+
+                        <!-- Шаг 3: Создание таблиц -->
+                        <?php if ($step == 3): ?>
+                            <h5><i class="bi bi-table"></i> Шаг 3: Создание структуры базы данных</h5>
+                            <hr>
+
+                            <p>Будут созданы следующие таблицы:</p>
+                            <ul>
+                                <li><code>admins</code> - администраторы системы</li>
+                                <li><code>categories</code> - категории товаров</li>
+                                <li><code>products</code> - товары (аквариумные растения)</li>
+                                <li><code>orders</code> - заказы покупателей</li>
+                                <li><code>order_items</code> - позиции заказов</li>
+                                <li><code>reviews</code> - отзывы о товарах</li>
+                                <li><code>settings</code> - настройки сайта</li>
+                                <li><code>news</code> - новости и статьи</li>
+                            </ul>
+
+                            <form method="post">
+                                <div class="d-grid">
+                                    <button type="submit" name="create_tables" class="btn btn-success btn-lg">
+                                        <i class="bi bi-play-circle"></i> Создать таблицы
+                                    </button>
+                                </div>
+                            </form>
+                        <?php endif; ?>
+
+                        <!-- Шаг 4: Создание админа -->
+                        <?php if ($step == 4): ?>
+                            <h5><i class="bi bi-person-gear"></i> Шаг 4: Создание администратора</h5>
+                            <hr>
+
+                            <form method="post">
+                                <div class="mb-3">
+                                    <label class="form-label">Логин администратора</label>
+                                    <input type="text" class="form-control" name="admin_login" value="admin" required>
+                                </div>
+                                <div class="mb-3">
+                                    <label class="form-label">Email администратора</label>
+                                    <input type="email" class="form-control" name="admin_email" placeholder="admin@akvasbor.ru" required>
+                                </div>
+                                <div class="row">
+                                    <div class="col-md-6 mb-3">
+                                        <label class="form-label">Пароль</label>
+                                        <input type="password" class="form-control" name="admin_pass" minlength="6" required>
+                                    </div>
+                                    <div class="col-md-6 mb-3">
+                                        <label class="form-label">Повторите пароль</label>
+                                        <input type="password" class="form-control" name="admin_pass2" minlength="6" required>
+                                    </div>
+                                </div>
+
+                                <div class="d-grid">
+                                    <button type="submit" class="btn btn-success btn-lg">
+                                        <i class="bi bi-person-plus"></i> Создать администратора
+                                    </button>
+                                </div>
+                            </form>
+                        <?php endif; ?>
+
+                        <!-- Шаг 5: Финализация -->
+                        <?php if ($step == 5): ?>
+                            <h5><i class="bi bi-gear-fill"></i> Шаг 5: Финализация установки</h5>
+                            <hr>
+
+                            <p>На этом шаге будут созданы:</p>
+                            <ul>
+                                <li>Конфигурационные файлы</li>
+                                <li>Файл .htaccess для правильной маршрутизации</li>
+                                <li>Директории для загрузки файлов</li>
+                                <li>Базовые настройки системы</li>
+                            </ul>
+
+                            <form method="post">
+                                <div class="d-grid">
+                                    <button type="submit" name="finalize" class="btn btn-success btn-lg">
+                                        <i class="bi bi-check-circle"></i> Завершить установку
+                                    </button>
+                                </div>
+                            </form>
+                        <?php endif; ?>
+
+                        <!-- Шаг 6: Завершение -->
+                        <?php if ($step == 6): ?>
+                            <div class="text-center">
+                                <div class="mb-4">
+                                    <i class="bi bi-check-circle-fill text-success" style="font-size: 4rem;"></i>
+                                </div>
+                                <h4 class="text-success">Установка завершена успешно!</h4>
+                                <p class="text-muted">АкваСбор CMS готова к использованию</p>
+
+                                <div class="row mt-4">
+                                    <div class="col-md-6">
+                                        <div class="card h-100">
+                                            <div class="card-body text-center">
+                                                <i class="bi bi-house-door text-primary" style="font-size: 2rem;"></i>
+                                                <h6 class="mt-2">Фронтенд сайта</h6>
+                                                <a href="index.php" class="btn btn-primary btn-sm">Перейти</a>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="col-md-6">
+                                        <div class="card h-100">
+                                            <div class="card-body text-center">
+                                                <i class="bi bi-gear text-success" style="font-size: 2rem;"></i>
+                                                <h6 class="mt-2">Админ-панель</h6>
+                                                <a href="admin.php" class="btn btn-success btn-sm">Войти</a>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div class="alert alert-warning mt-4">
+                                    <i class="bi bi-shield-exclamation"></i>
+                                    <strong>Безопасность:</strong> Удалите файл <code>install.php</code> после установки!
+                                </div>
+                            </div>
+                        <?php endif; ?>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>
