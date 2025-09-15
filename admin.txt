@@ -1,17 +1,30 @@
 <?php
 /**
- * АкваСбор - ПОЛНАЯ Админ-панель v5.0 - ИНТЕГРАЦИЯ с data.php и index.php
+ * АкваСбор - ПОЛНАЯ Админ-панель v6.0 - ИНТЕГРАЦИЯ с data.php и index.php
  * Все модули работают + полная интеграция + AJAX + управление данными
  */
 session_start();
 
-// Подключаем существующие файлы
+// Подключаем все необходимые файлы
 require_once 'data.php';
+
+// Проверяем наличие дополнительных файлов и подключаем если есть
 if (file_exists('date_functions.php')) {
     require_once 'date_functions.php';
 }
 if (file_exists('cart_system.php')) {
     require_once 'cart_system.php';
+}
+
+// Создаем недостающие функции если файлы отсутствуют
+if (!function_exists('formatDateRussian')) {
+    function formatDateRussian($date, $format = 'full') {
+        $timestamp = is_string($date) ? strtotime($date) : $date;
+        if ($format === 'short') {
+            return date('d.m.Y', $timestamp);
+        }
+        return date('d.m.Y H:i', $timestamp);
+    }
 }
 
 // Простая авторизация
@@ -20,6 +33,10 @@ if (!isset($_SESSION['admin_logged_in'])) {
         $_SESSION['admin_logged_in'] = true;
         $_SESSION['admin_name'] = 'Администратор';
         $_SESSION['admin_role'] = 'Супер-админ';
+
+        // Логируем вход
+        logAdminAction('AUTH', 'Администратор вошел в систему');
+
         header('Location: admin.php');
         exit;
     } elseif (!empty($_POST['admin_password'])) {
@@ -29,6 +46,7 @@ if (!isset($_SESSION['admin_logged_in'])) {
 
 // Выход
 if (($_GET['action'] ?? '') === 'logout') {
+    logAdminAction('AUTH', 'Администратор вышел из системы');
     session_destroy();
     header('Location: admin.php');
     exit;
@@ -39,91 +57,91 @@ if (!isset($_SESSION['admin_logged_in'])) {
     $error = $login_error ?? '';
     ?>
     <!DOCTYPE html>
-    <html lang="ru">
+    <html lang='ru'>
     <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <meta charset='UTF-8'>
+        <meta name='viewport' content='width=device-width, initial-scale=1.0'>
         <title>🐠 Админ-панель - АкваСбор</title>
-        <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+        <link href='https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap' rel='stylesheet'>
         <style>
             * { margin: 0; padding: 0; box-sizing: border-box; }
-            body { 
-                font-family: 'Inter', sans-serif; 
+            body {
+                font-family: 'Inter', sans-serif;
                 background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                min-height: 100vh; 
-                display: flex; 
-                align-items: center; 
+                min-height: 100vh;
+                display: flex;
+                align-items: center;
                 justify-content: center;
                 padding: 20px;
             }
-            .login-container { 
-                background: white; 
-                padding: 40px; 
-                border-radius: 20px; 
+            .login-container {
+                background: white;
+                padding: 40px;
+                border-radius: 20px;
                 box-shadow: 0 20px 60px rgba(0,0,0,0.2);
-                max-width: 400px; 
+                max-width: 400px;
                 width: 100%;
                 text-align: center;
             }
             .logo { font-size: 60px; margin-bottom: 20px; animation: float 3s ease-in-out infinite; }
             @keyframes float { 0%, 100% { transform: translateY(0px); } 50% { transform: translateY(-10px); } }
             h2 { color: #2c3e50; margin-bottom: 30px; font-size: 28px; }
-            input, button { 
-                width: 100%; 
-                padding: 15px; 
-                margin: 10px 0; 
-                border: 2px solid #e0e6ed; 
-                border-radius: 10px; 
+            input, button {
+                width: 100%;
+                padding: 15px;
+                margin: 10px 0;
+                border: 2px solid #e0e6ed;
+                border-radius: 10px;
                 font-size: 16px;
                 transition: all 0.3s ease;
             }
-            input:focus { 
-                border-color: #667eea; 
-                outline: none; 
+            input:focus {
+                border-color: #667eea;
+                outline: none;
                 box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
             }
-            button { 
-                background: linear-gradient(135deg, #667eea, #764ba2); 
-                color: white; 
-                border: none; 
-                cursor: pointer; 
+            button {
+                background: linear-gradient(135deg, #667eea, #764ba2);
+                color: white;
+                border: none;
+                cursor: pointer;
                 font-weight: 600;
                 text-transform: uppercase;
                 letter-spacing: 1px;
             }
-            button:hover { 
-                transform: translateY(-2px); 
+            button:hover {
+                transform: translateY(-2px);
                 box-shadow: 0 10px 30px rgba(102, 126, 234, 0.3);
             }
-            .error { 
-                background: #fee; 
-                color: #c33; 
-                padding: 15px; 
-                border-radius: 10px; 
-                margin-bottom: 20px; 
+            .error {
+                background: #fee;
+                color: #c33;
+                padding: 15px;
+                border-radius: 10px;
+                margin-bottom: 20px;
                 border: 1px solid #fcc;
             }
-            .hint { 
-                margin-top: 20px; 
-                padding: 15px; 
-                background: #f8f9ff; 
-                border-radius: 10px; 
-                color: #666; 
+            .hint {
+                margin-top: 20px;
+                padding: 15px;
+                background: #f8f9ff;
+                border-radius: 10px;
+                color: #666;
                 font-size: 14px;
             }
         </style>
     </head>
     <body>
-        <div class="login-container">
-            <div class="logo">🐠</div>
+        <div class='login-container'>
+            <div class='logo'>🐠</div>
             <h2>Админ-панель</h2>
-            <form method="post">
+            <form method='post'>
                 <?php if ($error): ?>
-                    <div class="error">❌ <?= htmlspecialchars($error) ?></div>
+                    <div class='error'>❌ <?= htmlspecialchars($error) ?></div>
                 <?php endif; ?>
-                <input type="password" name="admin_password" placeholder="🔑 Введите пароль" required autofocus>
-                <button type="submit">Войти в панель</button>
-                <div class="hint">
+                <input type='password' name='admin_password' placeholder='🔑 Введите пароль' required autofocus>
+                <button type='submit'>Войти в панель</button>
+                <div class='hint'>
                     💡 <strong>Пароль:</strong> admin123<br>
                     🔒 После входа будет доступен полный функционал
                 </div>
@@ -138,6 +156,206 @@ if (!isset($_SESSION['admin_logged_in'])) {
 // Получаем данные
 $section = $_GET['section'] ?? 'dashboard';
 $action = $_POST['action'] ?? $_GET['action'] ?? '';
+
+// === ДОПОЛНИТЕЛЬНЫЕ ФУНКЦИИ АДМИНКИ ===
+
+function logAdminAction($context, $message, $data = null) {
+    $logDir = __DIR__ . '/logs';
+    if (!file_exists($logDir)) {
+        mkdir($logDir, 0755, true);
+    }
+
+    $logFile = $logDir . '/admin_' . date('Y-m-d') . '.log';
+    $timestamp = date('Y-m-d H:i:s');
+    $ip = $_SERVER['REMOTE_ADDR'] ?? 'unknown';
+
+    $logEntry = "[$timestamp] [$context] $message IP:$ip\n";
+    file_put_contents($logFile, $logEntry, FILE_APPEND | LOCK_EX);
+
+    // JSON лог для админки
+    $jsonLogFile = $logDir . '/admin_logs.json';
+    $logs = [];
+    if (file_exists($jsonLogFile)) {
+        $logs = json_decode(file_get_contents($jsonLogFile), true) ?: [];
+    }
+
+    array_unshift($logs, [
+        'timestamp' => $timestamp,
+        'level' => 'INFO',
+        'context' => $context,
+        'message' => $message,
+        'ip' => $ip,
+        'data' => $data
+    ]);
+
+    $logs = array_slice($logs, 0, 1000);
+    file_put_contents($jsonLogFile, json_encode($logs, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
+}
+
+function getAdminLogs($limit = 50) {
+    $jsonLogFile = __DIR__ . '/logs/admin_logs.json';
+    if (!file_exists($jsonLogFile)) {
+        return [];
+    }
+
+    $logs = json_decode(file_get_contents($jsonLogFile), true) ?: [];
+    return array_slice($logs, 0, $limit);
+}
+
+function updateSiteSettings($data) {
+    try {
+        $dynamicData = initializeDynamicData();
+        $settings = &$dynamicData['settings'];
+
+        $allowedFields = [
+            'site_name', 'site_description', 'site_keywords',
+            'admin_email', 'phone', 'address', 'working_hours',
+            'currency', 'products_per_page', 'min_order_amount',
+            'free_shipping_from'
+        ];
+
+        foreach ($allowedFields as $field) {
+            if (isset($data[$field])) {
+                if (in_array($field, ['products_per_page', 'min_order_amount', 'free_shipping_from'])) {
+                    $settings[$field] = (int)$data[$field];
+                } else {
+                    $settings[$field] = trim($data[$field]);
+                }
+            }
+        }
+
+        $dynamicData['last_updated'] = date('Y-m-d H:i:s');
+
+        if (saveDynamicData($dynamicData)) {
+            logAdminAction('SETTINGS', 'Настройки сайта обновлены');
+            return ['success' => true, 'message' => 'Настройки сохранены успешно!'];
+        } else {
+            return ['success' => false, 'message' => 'Ошибка сохранения настроек'];
+        }
+    } catch (Exception $e) {
+        return ['success' => false, 'message' => 'Ошибка: ' . $e->getMessage()];
+    }
+}
+
+function getStaticPages() {
+    $dynamicData = loadDynamicData();
+    if ($dynamicData && isset($dynamicData['pages'])) {
+        return $dynamicData['pages'];
+    }
+
+    return [
+        [
+            'id' => 1,
+            'slug' => 'about',
+            'title' => 'О нас',
+            'content' => '<h2>О магазине АкваСбор</h2><p>Мы специализируемся на продаже аквариумов и всего необходимого для их содержания.</p>',
+            'meta_title' => 'О нас - АкваСбор',
+            'meta_description' => 'Информация о магазине АкваСбор',
+            'is_published' => true,
+            'created_at' => date('Y-m-d H:i:s'),
+            'updated_at' => date('Y-m-d H:i:s')
+        ],
+        [
+            'id' => 2,
+            'slug' => 'contact',
+            'title' => 'Контакты',
+            'content' => '<h2>Как с нами связаться</h2><p>Телефон, email, адрес</p>',
+            'meta_title' => 'Контакты - АкваСбор',
+            'meta_description' => 'Контактная информация АкваСбор',
+            'is_published' => true,
+            'created_at' => date('Y-m-d H:i:s'),
+            'updated_at' => date('Y-m-d H:i:s')
+        ]
+    ];
+}
+
+function createStaticPage($data) {
+    try {
+        $dynamicData = initializeDynamicData();
+        if (!isset($dynamicData['pages'])) {
+            $dynamicData['pages'] = getStaticPages();
+        }
+
+        $pages = $dynamicData['pages'];
+        $newId = empty($pages) ? 1 : (max(array_column($pages, 'id')) + 1);
+
+        $newPage = [
+            'id' => $newId,
+            'slug' => generateSlug($data['slug'] ?? $data['title']),
+            'title' => trim($data['title']),
+            'content' => trim($data['content']),
+            'meta_title' => trim($data['meta_title']) ?: $data['title'],
+            'meta_description' => trim($data['meta_description']),
+            'is_published' => !empty($data['is_published']),
+            'created_at' => date('Y-m-d H:i:s'),
+            'updated_at' => date('Y-m-d H:i:s')
+        ];
+
+        $dynamicData['pages'][] = $newPage;
+        $dynamicData['last_updated'] = date('Y-m-d H:i:s');
+
+        if (saveDynamicData($dynamicData)) {
+            logAdminAction('PAGES', 'Создана страница: ' . $newPage['title']);
+            return ['success' => true, 'message' => 'Страница создана!', 'page' => $newPage];
+        } else {
+            return ['success' => false, 'message' => 'Ошибка сохранения'];
+        }
+    } catch (Exception $e) {
+        return ['success' => false, 'message' => 'Ошибка: ' . $e->getMessage()];
+    }
+}
+
+function getAdvancedAnalytics() {
+    $products = getProducts();
+    $orders = getOrders();
+    $reviews = getReviews();
+
+    // Продажи по дням (последние 30 дней)
+    $salesByDay = [];
+    for ($i = 29; $i >= 0; $i--) {
+        $date = date('Y-m-d', strtotime("-{$i} days"));
+        $dayOrders = array_filter($orders, fn($o) => date('Y-m-d', strtotime($o['created_at'])) === $date);
+        $salesByDay[] = [
+            'date' => $date,
+            'date_formatted' => date('d.m', strtotime($date)),
+            'orders' => count($dayOrders),
+            'revenue' => array_sum(array_column($dayOrders, 'total_amount'))
+        ];
+    }
+
+    // Топ категории
+    $categories = getCategories();
+    $categoryStats = [];
+    foreach ($categories as $category) {
+        $categoryProducts = array_filter($products, fn($p) => $p['category_id'] == $category['id']);
+        $categoryStats[] = [
+            'name' => $category['name'],
+            'icon' => $category['icon'],
+            'products_count' => count($categoryProducts),
+            'total_sales' => array_sum(array_column($categoryProducts, 'sales'))
+        ];
+    }
+
+    // Топ товары
+    $topProducts = $products;
+    usort($topProducts, fn($a, $b) => $b['sales'] - $a['sales']);
+    $topProducts = array_slice($topProducts, 0, 10);
+
+    return [
+        'sales_by_day' => $salesByDay,
+        'category_stats' => $categoryStats,
+        'top_products' => $topProducts,
+        'summary' => [
+            'total_products' => count($products),
+            'active_products' => count(array_filter($products, fn($p) => $p['is_active'])),
+            'total_orders' => count($orders),
+            'total_revenue' => array_sum(array_column($orders, 'total_amount')),
+            'avg_order_value' => count($orders) > 0 ? array_sum(array_column($orders, 'total_amount')) / count($orders) : 0,
+            'total_reviews' => count($reviews),
+            'avg_rating' => count($reviews) > 0 ? array_sum(array_column($reviews, 'rating')) / count($reviews) : 0
+        ]
+    ];
+}
 
 // Обработка AJAX запросов
 if (isset($_POST['ajax']) || isset($_GET['ajax'])) {
@@ -226,6 +444,24 @@ if ($action && !isset($_POST['ajax'])) {
             ];
             header('Location: admin.php?section=categories');
             exit;
+
+        case 'create_news':
+            $result = createNews($_POST);
+            $_SESSION['admin_message'] = [
+                'text' => $result['message'],
+                'type' => $result['success'] ? 'success' : 'error'
+            ];
+            header('Location: admin.php?section=news');
+            exit;
+
+        case 'create_page':
+            $result = createStaticPage($_POST);
+            $_SESSION['admin_message'] = [
+                'text' => $result['message'],
+                'type' => $result['success'] ? 'success' : 'error'
+            ];
+            header('Location: admin.php?section=pages');
+            exit;
     }
 }
 
@@ -233,15 +469,15 @@ if ($action && !isset($_POST['ajax'])) {
 $adminData = getAdminData($section);
 
 ?><!DOCTYPE html>
-<html lang="ru">
+<html lang='ru'>
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title><?= $adminData['title'] ?? 'Админ-панель' ?> - АкваСбор CRM v5.0</title>
+    <meta charset='UTF-8'>
+    <meta name='viewport' content='width=device-width, initial-scale=1.0'>
+    <title><?= $adminData['title'] ?? 'Админ-панель' ?> - АкваСбор CRM v6.0</title>
 
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐠</text></svg>">
+    <link href='https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap' rel='stylesheet'>
+    <link rel='stylesheet' href='https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css'>
+    <link rel='icon' href='data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y=".9em" font-size="90">🐠</text></svg>'>
 
     <style>
         :root {
@@ -1223,19 +1459,6 @@ $adminData = getAdminData($section);
 
         .cursor-pointer { cursor: pointer; }
 
-        /* ===== ТЕМНАЯ ТЕМА (АВТОМАТИЧЕСКАЯ) ===== */
-        @media (prefers-color-scheme: dark) {
-            :root {
-                --bg-primary: #1a1a1a;
-                --bg-secondary: #2d2d2d;
-                --bg-tertiary: #404040;
-                --text-primary: #ffffff;
-                --text-secondary: #cccccc;
-                --text-muted: #999999;
-                --border-color: #404040;
-            }
-        }
-
         /* ===== АНИМАЦИИ ПОЯВЛЕНИЯ ===== */
         .fade-in {
             animation: fadeIn 0.6s ease-out;
@@ -1257,125 +1480,125 @@ $adminData = getAdminData($section);
     </style>
 </head>
 <body>
-    <div class="admin-layout">
+    <div class='admin-layout'>
         <!-- Боковая панель -->
-        <aside class="sidebar" id="sidebar">
-            <div class="sidebar-header">
-                <div class="admin-logo">
-                    <div class="logo-icon">🐠</div>
-                    <div class="logo-text">
-                        <div class="logo-title">АкваСбор</div>
-                        <div class="logo-subtitle">MEGA CRM v5.0</div>
+        <aside class='sidebar' id='sidebar'>
+            <div class='sidebar-header'>
+                <div class='admin-logo'>
+                    <div class='logo-icon'>🐠</div>
+                    <div class='logo-text'>
+                        <div class='logo-title'>АкваСбор</div>
+                        <div class='logo-subtitle'>MEGA CRM v6.0</div>
                     </div>
                 </div>
             </div>
 
-            <nav class="sidebar-nav">
-                <div class="nav-section">
-                    <div class="nav-title">📊 Аналитика & KPI</div>
-                    <a href="admin.php?section=dashboard" class="sidebar-link <?= $section === 'dashboard' ? 'active' : '' ?>">
-                        <i class="fas fa-chart-pie"></i>
-                        <span class="sidebar-link-text">KPI Дашборд</span>
+            <nav class='sidebar-nav'>
+                <div class='nav-section'>
+                    <div class='nav-title'>📊 Аналитика & KPI</div>
+                    <a href='admin.php?section=dashboard' class='sidebar-link <?= $section === 'dashboard' ? 'active' : '' ?>'>
+                        <i class='fas fa-chart-pie'></i>
+                        <span class='sidebar-link-text'>KPI Дашборд</span>
                     </a>
-                    <a href="admin.php?section=analytics" class="sidebar-link <?= $section === 'analytics' ? 'active' : '' ?>">
-                        <i class="fas fa-chart-line"></i>
-                        <span class="sidebar-link-text">Графики продаж</span>
-                        <span class="sidebar-badge badge-success">LIVE</span>
-                    </a>
-                </div>
-
-                <div class="nav-section">
-                    <div class="nav-title">🛒 Интернет-магазин</div>
-                    <a href="admin.php?section=products" class="sidebar-link <?= $section === 'products' ? 'active' : '' ?>">
-                        <i class="fas fa-fish"></i>
-                        <span class="sidebar-link-text">Товары</span>
-                        <span class="sidebar-badge"><?= count(getProducts()) ?></span>
-                    </a>
-                    <a href="admin.php?section=categories" class="sidebar-link <?= $section === 'categories' ? 'active' : '' ?>">
-                        <i class="fas fa-tags"></i>
-                        <span class="sidebar-link-text">Категории</span>
-                        <span class="sidebar-badge"><?= count(getCategories()) ?></span>
-                    </a>
-                    <a href="admin.php?section=orders" class="sidebar-link <?= $section === 'orders' ? 'active' : '' ?>">
-                        <i class="fas fa-shopping-bag"></i>
-                        <span class="sidebar-link-text">Заказы</span>
-                        <span class="sidebar-badge badge-warning"><?= count(array_filter(getOrders(), fn($o) => $o['status'] === 'new')) ?></span>
-                    </a>
-                    <a href="admin.php?section=reviews" class="sidebar-link <?= $section === 'reviews' ? 'active' : '' ?>">
-                        <i class="fas fa-star"></i>
-                        <span class="sidebar-link-text">Отзывы</span>
-                        <span class="sidebar-badge badge-danger"><?= count(array_filter(getReviews(), fn($r) => !$r['is_approved'])) ?></span>
+                    <a href='admin.php?section=analytics' class='sidebar-link <?= $section === 'analytics' ? 'active' : '' ?>'>
+                        <i class='fas fa-chart-line'></i>
+                        <span class='sidebar-link-text'>Графики продаж</span>
+                        <span class='sidebar-badge badge-success'>LIVE</span>
                     </a>
                 </div>
 
-                <div class="nav-section">
-                    <div class="nav-title">📝 Контент & SEO</div>
-                    <a href="admin.php?section=news" class="sidebar-link <?= $section === 'news' ? 'active' : '' ?>">
-                        <i class="fas fa-newspaper"></i>
-                        <span class="sidebar-link-text">Новости</span>
-                        <span class="sidebar-badge"><?= count(getNews()) ?></span>
+                <div class='nav-section'>
+                    <div class='nav-title'>🛒 Интернет-магазин</div>
+                    <a href='admin.php?section=products' class='sidebar-link <?= $section === 'products' ? 'active' : '' ?>'>
+                        <i class='fas fa-fish'></i>
+                        <span class='sidebar-link-text'>Товары</span>
+                        <span class='sidebar-badge'><?= count(getProducts()) ?></span>
                     </a>
-                    <a href="admin.php?section=pages" class="sidebar-link <?= $section === 'pages' ? 'active' : '' ?>">
-                        <i class="fas fa-file-alt"></i>
-                        <span class="sidebar-link-text">Страницы</span>
+                    <a href='admin.php?section=categories' class='sidebar-link <?= $section === 'categories' ? 'active' : '' ?>'>
+                        <i class='fas fa-tags'></i>
+                        <span class='sidebar-link-text'>Категории</span>
+                        <span class='sidebar-badge'><?= count(getCategories()) ?></span>
+                    </a>
+                    <a href='admin.php?section=orders' class='sidebar-link <?= $section === 'orders' ? 'active' : '' ?>'>
+                        <i class='fas fa-shopping-bag'></i>
+                        <span class='sidebar-link-text'>Заказы</span>
+                        <span class='sidebar-badge badge-warning'><?= count(array_filter(getOrders(), fn($o) => $o['status'] === 'new')) ?></span>
+                    </a>
+                    <a href='admin.php?section=reviews' class='sidebar-link <?= $section === 'reviews' ? 'active' : '' ?>'>
+                        <i class='fas fa-star'></i>
+                        <span class='sidebar-link-text'>Отзывы</span>
+                        <span class='sidebar-badge badge-danger'><?= count(array_filter(getReviews(), fn($r) => !$r['is_approved'])) ?></span>
                     </a>
                 </div>
 
-                <div class="nav-section">
-                    <div class="nav-title">⚙️ Система & настройки</div>
-                    <a href="admin.php?section=settings" class="sidebar-link <?= $section === 'settings' ? 'active' : '' ?>">
-                        <i class="fas fa-cog"></i>
-                        <span class="sidebar-link-text">Настройки</span>
-                        <span class="sidebar-badge badge-success">PRO</span>
+                <div class='nav-section'>
+                    <div class='nav-title'>📝 Контент & SEO</div>
+                    <a href='admin.php?section=news' class='sidebar-link <?= $section === 'news' ? 'active' : '' ?>'>
+                        <i class='fas fa-newspaper'></i>
+                        <span class='sidebar-link-text'>Новости</span>
+                        <span class='sidebar-badge'><?= count(getNews()) ?></span>
                     </a>
-                    <a href="admin.php?section=logs" class="sidebar-link <?= $section === 'logs' ? 'active' : '' ?>">
-                        <i class="fas fa-list-alt"></i>
-                        <span class="sidebar-link-text">Логи системы</span>
+                    <a href='admin.php?section=pages' class='sidebar-link <?= $section === 'pages' ? 'active' : '' ?>'>
+                        <i class='fas fa-file-alt'></i>
+                        <span class='sidebar-link-text'>Страницы</span>
+                    </a>
+                </div>
+
+                <div class='nav-section'>
+                    <div class='nav-title'>⚙️ Система & настройки</div>
+                    <a href='admin.php?section=settings' class='sidebar-link <?= $section === 'settings' ? 'active' : '' ?>'>
+                        <i class='fas fa-cog'></i>
+                        <span class='sidebar-link-text'>Настройки</span>
+                        <span class='sidebar-badge badge-success'>PRO</span>
+                    </a>
+                    <a href='admin.php?section=logs' class='sidebar-link <?= $section === 'logs' ? 'active' : '' ?>'>
+                        <i class='fas fa-list-alt'></i>
+                        <span class='sidebar-link-text'>Логи системы</span>
                     </a>
                 </div>
             </nav>
 
-            <div class="sidebar-footer">
-                <div class="admin-profile">
-                    <div class="admin-avatar">👤</div>
-                    <div class="admin-info">
-                        <div class="admin-name"><?= $_SESSION['admin_name'] ?></div>
-                        <div class="admin-role"><?= $_SESSION['admin_role'] ?></div>
+            <div class='sidebar-footer'>
+                <div class='admin-profile'>
+                    <div class='admin-avatar'>👤</div>
+                    <div class='admin-info'>
+                        <div class='admin-name'><?= $_SESSION['admin_name'] ?></div>
+                        <div class='admin-role'><?= $_SESSION['admin_role'] ?></div>
                     </div>
-                    <a href="admin.php?action=logout" class="logout-btn" title="Выход из системы">
-                        <i class="fas fa-sign-out-alt"></i>
+                    <a href='admin.php?action=logout' class='logout-btn' title='Выход из системы'>
+                        <i class='fas fa-sign-out-alt'></i>
                     </a>
                 </div>
             </div>
         </aside>
 
         <!-- Основной контент -->
-        <main class="main-content">
+        <main class='main-content'>
             <!-- Верхняя панель -->
-            <header class="top-bar">
-                <div class="top-bar-left">
-                    <h1 class="page-title">
-                        <i class="<?= getPageIcon($section) ?>"></i>
+            <header class='top-bar'>
+                <div class='top-bar-left'>
+                    <h1 class='page-title'>
+                        <i class='<?= getPageIcon($section) ?>'></i>
                         <?= $adminData['title'] ?? 'Админ-панель' ?>
                     </h1>
                 </div>
 
-                <div class="top-bar-right">
-                    <button class="btn btn-outline" onclick="toggleSidebar()" title="Переключить меню">
-                        <i class="fas fa-bars"></i>
+                <div class='top-bar-right'>
+                    <button class='btn btn-outline' onclick='toggleSidebar()' title='Переключить меню'>
+                        <i class='fas fa-bars'></i>
                     </button>
-                    <a href="index.php" class="btn btn-primary" target="_blank">
-                        <i class="fas fa-external-link-alt"></i>
+                    <a href='index.php' class='btn btn-primary' target='_blank'>
+                        <i class='fas fa-external-link-alt'></i>
                         Перейти на сайт
                     </a>
                 </div>
             </header>
 
             <!-- Контент страницы -->
-            <div class="page-content">
+            <div class='page-content'>
                 <?php if (isset($_SESSION['admin_message'])): ?>
-                    <div class="notification notification-<?= $_SESSION['admin_message']['type'] ?>" id="adminNotification">
-                        <i class="fas fa-<?= $_SESSION['admin_message']['type'] === 'success' ? 'check-circle' : 'exclamation-circle' ?>"></i>
+                    <div class='notification notification-<?= $_SESSION['admin_message']['type'] ?>' id='adminNotification'>
+                        <i class='fas fa-<?= $_SESSION['admin_message']['type'] === 'success' ? 'check-circle' : 'exclamation-circle' ?>'></i>
                         <?= htmlspecialchars($_SESSION['admin_message']['text']) ?>
                     </div>
                     <?php unset($_SESSION['admin_message']); ?>
@@ -1387,8 +1610,8 @@ $adminData = getAdminData($section);
     </div>
 
     <!-- Лоадер -->
-    <div class="loading-overlay" id="loadingOverlay">
-        <div class="spinner"></div>
+    <div class='loading-overlay' id='loadingOverlay'>
+        <div class='spinner'></div>
     </div>
 
     <!-- Скрипты -->
@@ -1414,7 +1637,7 @@ $adminData = getAdminData($section);
             const notification = document.createElement('div');
             notification.className = `notification notification-${type}`;
             notification.innerHTML = `
-                <i class="fas fa-${type === 'success' ? 'check-circle' : type === 'error' ? 'exclamation-circle' : type === 'warning' ? 'exclamation-triangle' : 'info-circle'}"></i>
+                <i class='fas fa-${type === 'success' ? 'check-circle' : type === 'error' ? 'exclamation-circle' : type === 'warning' ? 'exclamation-triangle' : 'info-circle'}'></i>
                 ${message}
             `;
 
@@ -1619,8 +1842,8 @@ $adminData = getAdminData($section);
 
         function updateStatsDisplay(stats) {
             for (let key in stats) {
-                const valueElement = document.querySelector(`[data-stat="${key}"] .stat-value`);
-                const changeElement = document.querySelector(`[data-stat="${key}"] .stat-change`);
+                const valueElement = document.querySelector(`[data-stat='${key}'] .stat-value`);
+                const changeElement = document.querySelector(`[data-stat='${key}'] .stat-change`);
 
                 if (valueElement) {
                     valueElement.textContent = stats[key].value;
@@ -1703,7 +1926,12 @@ function getAdminData($section) {
         case 'logs':
             return [
                 'title' => 'Системные логи',
-                'logs' => getSystemLogs()
+                'logs' => getAdminLogs()
+            ];
+        case 'pages':
+            return [
+                'title' => 'Управление страницами',
+                'pages' => getStaticPages()
             ];
         default:
             return [
@@ -1805,14 +2033,14 @@ function getRecentActivity() {
         [
             'time' => '8 мин назад',
             'action' => 'Новый отзыв',
-            'details' => 'Отзыв на товар "Анубиас Бартера нана"',
+            'details' => 'Отзыв на товар \'Анубиас Бартера нана\'',
             'icon' => 'fas fa-star',
             'type' => 'info'
         ],
         [
             'time' => '15 мин назад',
             'action' => 'Товар обновлен',
-            'details' => 'Обновлен товар "Скалярия серебристая"',
+            'details' => 'Обновлен товар \'Скалярия серебристая\'',
             'icon' => 'fas fa-edit',
             'type' => 'primary'
         ],
@@ -1826,7 +2054,7 @@ function getRecentActivity() {
         [
             'time' => '2 часа назад',
             'action' => 'Новая категория',
-            'details' => 'Добавлена категория "Морские рыбки"',
+            'details' => 'Добавлена категория \'Морские рыбки\'',
             'icon' => 'fas fa-plus',
             'type' => 'success'
         ]
@@ -1928,35 +2156,6 @@ function generateCategoriesChartData() {
     return $data;
 }
 
-function getSystemLogs() {
-    return [
-        [
-            'timestamp' => date('Y-m-d H:i:s'),
-            'level' => 'INFO',
-            'message' => 'Пользователь вошел в админ-панель',
-            'context' => 'AUTH'
-        ],
-        [
-            'timestamp' => date('Y-m-d H:i:s', strtotime('-5 minutes')),
-            'level' => 'SUCCESS',
-            'message' => 'Создан новый товар ID: ' . rand(100, 999),
-            'context' => 'PRODUCTS'
-        ],
-        [
-            'timestamp' => date('Y-m-d H:i:s', strtotime('-15 minutes')),
-            'level' => 'WARNING',
-            'message' => 'Товар заканчивается на складе ID: ' . rand(100, 999),
-            'context' => 'INVENTORY'
-        ],
-        [
-            'timestamp' => date('Y-m-d H:i:s', strtotime('-30 minutes')),
-            'level' => 'INFO',
-            'message' => 'Обновлены настройки сайта',
-            'context' => 'SETTINGS'
-        ]
-    ];
-}
-
 // === ФУНКЦИИ ОБРАБОТКИ ДАННЫХ ===
 
 function toggleProductStatus($productId, $isActive) {
@@ -1979,6 +2178,7 @@ function toggleProductStatus($productId, $isActive) {
 
         if (saveDynamicData($dynamicData)) {
             $status = $isActive ? 'активирован' : 'деактивирован';
+            logAdminAction('PRODUCTS', "Товар $status: {$products[$productIndex]['name']}");
             return ['success' => true, 'message' => "Товар $status"];
         } else {
             return ['success' => false, 'message' => 'Ошибка сохранения'];
@@ -2006,6 +2206,7 @@ function approveReview($reviewId) {
         $dynamicData['last_updated'] = date('Y-m-d H:i:s');
 
         if (saveDynamicData($dynamicData)) {
+            logAdminAction('REVIEWS', "Отзыв одобрен ID:$reviewId");
             return ['success' => true, 'message' => 'Отзыв одобрен'];
         } else {
             return ['success' => false, 'message' => 'Ошибка сохранения'];
@@ -2033,6 +2234,7 @@ function deleteReview($reviewId) {
         $dynamicData['last_updated'] = date('Y-m-d H:i:s');
 
         if (saveDynamicData($dynamicData)) {
+            logAdminAction('REVIEWS', "Отзыв удален ID:$reviewId");
             return ['success' => true, 'message' => 'Отзыв удален'];
         } else {
             return ['success' => false, 'message' => 'Ошибка сохранения'];
@@ -2073,6 +2275,9 @@ function renderAdminSection($section, $data) {
         case 'logs':
             renderLogsSection($data);
             break;
+        case 'pages':
+            renderPagesSection($data);
+            break;
         default:
             renderDefaultSection($section, $data);
     }
@@ -2084,95 +2289,52 @@ function renderDashboard($data) {
     $activity = $data['recent_activity'] ?? [];
     ?>
     <!-- KPI Карточки -->
-    <div class="stats-grid">
+    <div class='stats-grid'>
         <?php foreach ($stats as $key => $stat): ?>
-            <div class="stat-card stat-<?= $stat['trend'] === 'positive' ? 'success' : ($stat['trend'] === 'negative' ? 'danger' : 'primary') ?>" data-stat="<?= $key ?>">
-                <div class="stat-header">
-                    <div class="stat-icon stat-<?= $stat['trend'] === 'positive' ? 'success' : ($stat['trend'] === 'negative' ? 'danger' : 'primary') ?>">
-                        <i class="<?= $stat['icon'] ?>"></i>
+            <div class='stat-card stat-<?= $stat['trend'] === 'positive' ? 'success' : ($stat['trend'] === 'negative' ? 'danger' : 'primary') ?>' data-stat='<?= $key ?>'>
+                <div class='stat-header'>
+                    <div class='stat-icon stat-<?= $stat['trend'] === 'positive' ? 'success' : ($stat['trend'] === 'negative' ? 'danger' : 'primary') ?>'>
+                        <i class='<?= $stat['icon'] ?>'></i>
                     </div>
-                    <div class="stat-trend">
-                        <i class="fas fa-<?= $stat['trend'] === 'positive' ? 'arrow-up' : ($stat['trend'] === 'negative' ? 'arrow-down' : 'minus') ?>"></i>
+                    <div class='stat-trend'>
+                        <i class='fas fa-<?= $stat['trend'] === 'positive' ? 'arrow-up' : ($stat['trend'] === 'negative' ? 'arrow-down' : 'minus') ?>'></i>
                     </div>
                 </div>
 
-                <div class="stat-value"><?= $stat['value'] ?></div>
-                <div class="stat-label"><?= $stat['label'] ?></div>
-                <div class="stat-change <?= $stat['trend'] ?>">
-                    <i class="fas fa-<?= $stat['trend'] === 'positive' ? 'arrow-up' : ($stat['trend'] === 'negative' ? 'arrow-down' : 'minus') ?>"></i>
+                <div class='stat-value'><?= $stat['value'] ?></div>
+                <div class='stat-label'><?= $stat['label'] ?></div>
+                <div class='stat-change <?= $stat['trend'] ?>'>
+                    <i class='fas fa-<?= $stat['trend'] === 'positive' ? 'arrow-up' : ($stat['trend'] === 'negative' ? 'arrow-down' : 'minus') ?>'></i>
                     <?= $stat['change'] ?>
                 </div>
             </div>
         <?php endforeach; ?>
     </div>
 
-    <!-- Графики продаж (заглушка) -->
-    <div style="display: grid; grid-template-columns: 2fr 1fr; gap: 32px; margin-bottom: 40px;">
-        <div class="content-card">
-            <div class="content-card-header">
-                <h3 class="content-card-title">
-                    <i class="fas fa-chart-line"></i>
-                    Продажи за последние 30 дней
-                </h3>
-                <button class="btn btn-outline btn-sm">
-                    <i class="fas fa-sync-alt"></i>
-                    Обновить
-                </button>
-            </div>
-            <div class="content-card-body">
-                <div style="height: 300px; background: linear-gradient(135deg, #f8f9ff, #e9ecef); border-radius: var(--border-radius-lg); display: flex; align-items: center; justify-content: center; color: var(--text-muted);">
-                    <div style="text-align: center;">
-                        <i class="fas fa-chart-line" style="font-size: 48px; margin-bottom: 16px; opacity: 0.5;"></i>
-                        <h4>График продаж</h4>
-                        <p>Подключите Chart.js для отображения графиков</p>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <div class="content-card">
-            <div class="content-card-header">
-                <h3 class="content-card-title">
-                    <i class="fas fa-chart-pie"></i>
-                    Топ категории
-                </h3>
-            </div>
-            <div class="content-card-body">
-                <div style="height: 300px; background: linear-gradient(135deg, #f8f9ff, #e9ecef); border-radius: var(--border-radius-lg); display: flex; align-items: center; justify-content: center; color: var(--text-muted);">
-                    <div style="text-align: center;">
-                        <i class="fas fa-chart-pie" style="font-size: 48px; margin-bottom: 16px; opacity: 0.5;"></i>
-                        <h4>Диаграмма категорий</h4>
-                        <p>Статистика по категориям</p>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-
     <!-- Последняя активность -->
-    <div class="content-card">
-        <div class="content-card-header">
-            <h3 class="content-card-title">
-                <i class="fas fa-clock"></i>
+    <div class='content-card'>
+        <div class='content-card-header'>
+            <h3 class='content-card-title'>
+                <i class='fas fa-clock'></i>
                 Последняя активность
             </h3>
-            <button class="btn btn-outline btn-sm" onclick="location.reload()">
-                <i class="fas fa-sync-alt"></i>
+            <button class='btn btn-outline btn-sm' onclick='location.reload()'>
+                <i class='fas fa-sync-alt'></i>
                 Обновить
             </button>
         </div>
-        <div class="content-card-body">
-            <div style="display: grid; gap: 16px;">
+        <div class='content-card-body'>
+            <div style='display: grid; gap: 16px;'>
                 <?php foreach ($activity as $item): ?>
-                    <div style="display: flex; align-items: center; gap: 16px; padding: 16px; background: var(--bg-secondary); border-radius: var(--border-radius-lg); border-left: 4px solid var(--<?= $item['type'] === 'success' ? 'success' : ($item['type'] === 'primary' ? 'primary' : 'info') ?>-color);">
-                        <div style="width: 40px; height: 40px; border-radius: 50%; background: var(--<?= $item['type'] === 'success' ? 'success' : ($item['type'] === 'primary' ? 'primary' : 'info') ?>-color); display: flex; align-items: center; justify-content: center; color: white;">
-                            <i class="<?= $item['icon'] ?>"></i>
+                    <div style='display: flex; align-items: center; gap: 16px; padding: 16px; background: var(--bg-secondary); border-radius: var(--border-radius-lg); border-left: 4px solid var(--<?= $item['type'] === 'success' ? 'success' : ($item['type'] === 'primary' ? 'primary' : 'info') ?>-color);'>
+                        <div style='width: 40px; height: 40px; border-radius: 50%; background: var(--<?= $item['type'] === 'success' ? 'success' : ($item['type'] === 'primary' ? 'primary' : 'info') ?>-color); display: flex; align-items: center; justify-content: center; color: white;'>
+                            <i class='<?= $item['icon'] ?>'></i>
                         </div>
-                        <div style="flex: 1;">
-                            <div style="font-weight: 600; margin-bottom: 4px;"><?= $item['action'] ?></div>
-                            <div style="color: var(--text-secondary); font-size: 14px;"><?= $item['details'] ?></div>
+                        <div style='flex: 1;'>
+                            <div style='font-weight: 600; margin-bottom: 4px;'><?= $item['action'] ?></div>
+                            <div style='color: var(--text-secondary); font-size: 14px;'><?= $item['details'] ?></div>
                         </div>
-                        <div style="color: var(--text-muted); font-size: 13px; white-space: nowrap;">
+                        <div style='color: var(--text-muted); font-size: 13px; white-space: nowrap;'>
                             <?= $item['time'] ?>
                         </div>
                     </div>
@@ -2190,126 +2352,126 @@ function renderProductsSection($data) {
     $stats = $data['stats'];
     ?>
     <!-- Статистика товаров -->
-    <div class="stats-grid" style="grid-template-columns: repeat(4, 1fr); margin-bottom: 32px;">
-        <div class="stat-card stat-primary">
-            <div class="stat-value"><?= $stats['total'] ?></div>
-            <div class="stat-label">Всего товаров</div>
+    <div class='stats-grid' style='grid-template-columns: repeat(4, 1fr); margin-bottom: 32px;'>
+        <div class='stat-card stat-primary'>
+            <div class='stat-value'><?= $stats['total'] ?></div>
+            <div class='stat-label'>Всего товаров</div>
         </div>
-        <div class="stat-card stat-success">
-            <div class="stat-value"><?= $stats['active'] ?></div>
-            <div class="stat-label">Активных</div>
+        <div class='stat-card stat-success'>
+            <div class='stat-value'><?= $stats['active'] ?></div>
+            <div class='stat-label'>Активных</div>
         </div>
-        <div class="stat-card stat-warning">
-            <div class="stat-value"><?= $stats['featured'] ?></div>
-            <div class="stat-label">Популярных</div>
+        <div class='stat-card stat-warning'>
+            <div class='stat-value'><?= $stats['featured'] ?></div>
+            <div class='stat-label'>Популярных</div>
         </div>
-        <div class="stat-card stat-danger">
-            <div class="stat-value"><?= $stats['low_stock'] ?></div>
-            <div class="stat-label">Мало товара</div>
+        <div class='stat-card stat-danger'>
+            <div class='stat-value'><?= $stats['low_stock'] ?></div>
+            <div class='stat-label'>Мало товара</div>
         </div>
     </div>
 
     <!-- Действия -->
-    <div class="d-flex justify-content-between align-items-center mb-4">
-        <div>
-            <button class="btn btn-success btn-lg" onclick="openModal('addProductModal')">
-                <i class="fas fa-plus"></i>
-                Добавить товар
-            </button>
-            <button class="btn btn-outline" onclick="exportProducts()">
-                <i class="fas fa-download"></i>
+<div class='d-flex justify-content-between align-items-center mb-4'>
+    <div>
+        <button class='btn btn-success btn-lg' onclick='window.open("http://akva.принтсс.рф/product_editor_advanced.php", "_blank")'>
+            <i class='fas fa-plus'></i>
+            Добавить товар
+        </button>
+        <button class='btn btn-outline' onclick='exportProducts()'>
+            <i class='fas fa-download'></i>
                 Экспорт
             </button>
         </div>
 
         <!-- Поиск и фильтры -->
-        <div class="d-flex gap-2">
-            <input type="text" placeholder="Поиск товаров..." class="form-input" style="width: 250px;" onkeyup="searchProducts(this.value)">
-            <select class="form-select" onchange="filterByCategory(this.value)">
-                <option value="">Все категории</option>
+        <div class='d-flex gap-2'>
+            <input type='text' placeholder='Поиск товаров...' class='form-input' style='width: 250px;' onkeyup='searchProducts(this.value)'>
+            <select class='form-select' onchange='filterByCategory(this.value)'>
+                <option value=''>Все категории</option>
                 <?php foreach ($categories as $category): ?>
-                    <option value="<?= $category['id'] ?>"><?= $category['icon'] ?> <?= htmlspecialchars($category['name']) ?></option>
+                    <option value='<?= $category['id'] ?>'><?= $category['icon'] ?> <?= htmlspecialchars($category['name']) ?></option>
                 <?php endforeach; ?>
             </select>
         </div>
     </div>
 
     <!-- Таблица товаров -->
-    <div class="content-card">
-        <div class="table-container">
-            <table class="table" id="productsTable">
+    <div class='content-card'>
+        <div class='table-container'>
+            <table class='table' id='productsTable'>
                 <thead>
                     <tr>
-                        <th style="width: 60px;">Фото</th>
+                        <th style='width: 60px;'>Фото</th>
                         <th>Товар</th>
                         <th>Категория</th>
                         <th>Цена</th>
                         <th>Остаток</th>
                         <th>Статус</th>
-                        <th style="width: 120px;">Действия</th>
+                        <th style='width: 120px;'>Действия</th>
                     </tr>
                 </thead>
                 <tbody>
                     <?php foreach ($products as $product): ?>
-                        <tr data-category="<?= $product['category_id'] ?>" data-name="<?= strtolower($product['name']) ?>">
+                        <tr data-category='<?= $product['category_id'] ?>' data-name='<?= strtolower($product['name']) ?>'>
                             <td>
-                                <div style="width: 50px; height: 50px; border-radius: var(--border-radius); overflow: hidden; background: var(--bg-tertiary); display: flex; align-items: center; justify-content: center;">
+                                <div style='width: 50px; height: 50px; border-radius: var(--border-radius); overflow: hidden; background: var(--bg-tertiary); display: flex; align-items: center; justify-content: center;'>
                                     <?php if (!empty($product['images'])): ?>
-                                        <img src="<?= htmlspecialchars($product['images'][0]) ?>" alt="<?= htmlspecialchars($product['name']) ?>" style="width: 100%; height: 100%; object-fit: cover;">
+                                        <img src='<?= htmlspecialchars($product['images'][0]) ?>' alt='<?= htmlspecialchars($product['name']) ?>' style='width: 100%; height: 100%; object-fit: cover;'>
                                     <?php else: ?>
-                                        <i class="fas fa-image" style="color: var(--text-muted);"></i>
+                                        <i class='fas fa-image' style='color: var(--text-muted);'></i>
                                     <?php endif; ?>
                                 </div>
                             </td>
                             <td>
-                                <div style="font-weight: 600; margin-bottom: 4px;"><?= htmlspecialchars(mb_substr($product['name'], 0, 50)) ?><?= mb_strlen($product['name']) > 50 ? '...' : '' ?></div>
-                                <div style="font-size: 12px; color: var(--text-muted);">
+                                <div style='font-weight: 600; margin-bottom: 4px;'><?= htmlspecialchars(mb_substr($product['name'], 0, 50)) ?><?= mb_strlen($product['name']) > 50 ? '...' : '' ?></div>
+                                <div style='font-size: 12px; color: var(--text-muted);'>
                                     Артикул: <?= $product['sku'] ?> | ID: <?= $product['id'] ?>
                                 </div>
-                                <div style="margin-top: 4px;">
+                                <div style='margin-top: 4px;'>
                                     <?php if ($product['is_featured']): ?>
-                                        <span class="status-badge" style="background: gold; color: white;">🔥 ХИТ</span>
+                                        <span class='status-badge' style='background: gold; color: white;'>🔥 ХИТ</span>
                                     <?php endif; ?>
                                     <?php if ($product['is_new']): ?>
-                                        <span class="status-badge status-new">✨ НОВИНКА</span>
+                                        <span class='status-badge status-new'>✨ НОВИНКА</span>
                                     <?php endif; ?>
                                 </div>
                             </td>
                             <td>
-                                <span class="status-badge status-new">
+                                <span class='status-badge status-new'>
                                     <?= htmlspecialchars($product['category']) ?>
                                 </span>
                             </td>
                             <td>
-                                <div style="font-weight: 600; color: var(--success-color);"><?= number_format($product['price'], 0, '', ' ') ?> ₽</div>
+                                <div style='font-weight: 600; color: var(--success-color);'><?= number_format($product['price'], 0, '', ' ') ?> ₽</div>
                                 <?php if ($product['old_price']): ?>
-                                    <div style="font-size: 11px; color: var(--text-muted); text-decoration: line-through;">
+                                    <div style='font-size: 11px; color: var(--text-muted); text-decoration: line-through;'>
                                         <?= number_format($product['old_price'], 0, '', ' ') ?> ₽
                                     </div>
                                 <?php endif; ?>
                             </td>
                             <td>
-                                <span class="status-badge <?= $product['stock'] <= 0 ? 'status-cancelled' : ($product['stock'] <= 5 ? 'status-processing' : 'status-completed') ?>">
+                                <span class='status-badge <?= $product['stock'] <= 0 ? 'status-cancelled' : ($product['stock'] <= 5 ? 'status-processing' : 'status-completed') ?>'>
                                     <?= $product['stock'] ?> шт
                                 </span>
                             </td>
                             <td>
-                                <label style="display: flex; align-items: center; cursor: pointer;">
-                                    <input type="checkbox" <?= $product['is_active'] ? 'checked' : '' ?>
-                                           onchange="toggleProductStatus(<?= $product['id'] ?>, this.checked)"
-                                           style="margin-right: 8px;">
-                                    <span class="status-badge <?= $product['is_active'] ? 'status-active' : 'status-inactive' ?>">
+                                <label style='display: flex; align-items: center; cursor: pointer;'>
+                                    <input type='checkbox' <?= $product['is_active'] ? 'checked' : '' ?>
+                                           onchange='toggleProductStatus(<?= $product['id'] ?>, this.checked)'
+                                           style='margin-right: 8px;'>
+                                    <span class='status-badge <?= $product['is_active'] ? 'status-active' : 'status-inactive' ?>'>
                                         <?= $product['is_active'] ? 'Активен' : 'Скрыт' ?>
                                     </span>
                                 </label>
                             </td>
                             <td>
-                                <div class="d-flex gap-1">
-                                    <button class="btn btn-primary btn-sm" title="Редактировать">
-                                        <i class="fas fa-edit"></i>
+                                <div class='d-flex gap-1'>
+                                    <button class='btn btn-primary btn-sm' title='Редактировать'>
+                                        <i class='fas fa-edit'></i>
                                     </button>
-                                    <button class="btn btn-danger btn-sm" onclick="deleteProduct(<?= $product['id'] ?>)" title="Удалить">
-                                        <i class="fas fa-trash"></i>
+                                    <button class='btn btn-danger btn-sm' onclick='deleteProduct(<?= $product['id'] ?>)' title='Удалить'>
+                                        <i class='fas fa-trash'></i>
                                     </button>
                                 </div>
                             </td>
@@ -2321,71 +2483,71 @@ function renderProductsSection($data) {
     </div>
 
     <!-- Модальное окно добавления товара -->
-    <div class="modal" id="addProductModal">
-        <div class="modal-dialog" style="max-width: 800px;">
-            <form method="post" enctype="multipart/form-data">
-                <input type="hidden" name="action" value="create_product">
-                <div class="modal-header">
-                    <h3 class="modal-title">Добавить новый товар</h3>
-                    <button type="button" class="modal-close" onclick="closeModal('addProductModal')">&times;</button>
+    <div class='modal' id='addProductModal'>
+        <div class='modal-dialog' style='max-width: 800px;'>
+            <form method='post' enctype='multipart/form-data'>
+                <input type='hidden' name='action' value='create_product'>
+                <div class='modal-header'>
+                    <h3 class='modal-title'>Добавить новый товар</h3>
+                    <button type='button' class='modal-close' onclick='closeModal("addProductModal")'>&times;</button>
                 </div>
-                <div class="modal-body">
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label class="form-label">Название товара *</label>
-                            <input type="text" name="name" class="form-input" required>
+                <div class='modal-body'>
+                    <div class='form-row'>
+                        <div class='form-group'>
+                            <label class='form-label'>Название товара *</label>
+                            <input type='text' name='name' class='form-input' required>
                         </div>
-                        <div class="form-group">
-                            <label class="form-label">Категория *</label>
-                            <select name="category_id" class="form-select" required>
-                                <option value="">Выберите категорию</option>
+                        <div class='form-group'>
+                            <label class='form-label'>Категория *</label>
+                            <select name='category_id' class='form-select' required>
+                                <option value=''>Выберите категорию</option>
                                 <?php foreach ($categories as $category): ?>
-                                    <option value="<?= $category['id'] ?>"><?= $category['icon'] ?> <?= htmlspecialchars($category['name']) ?></option>
+                                    <option value='<?= $category['id'] ?>'><?= $category['icon'] ?> <?= htmlspecialchars($category['name']) ?></option>
                                 <?php endforeach; ?>
                             </select>
                         </div>
                     </div>
 
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label class="form-label">Цена (₽) *</label>
-                            <input type="number" name="price" class="form-input" min="0" step="0.01" required>
+                    <div class='form-row'>
+                        <div class='form-group'>
+                            <label class='form-label'>Цена (₽) *</label>
+                            <input type='number' name='price' class='form-input' min='0' step='0.01' required>
                         </div>
-                        <div class="form-group">
-                            <label class="form-label">Количество *</label>
-                            <input type="number" name="stock" class="form-input" min="0" value="1" required>
+                        <div class='form-group'>
+                            <label class='form-label'>Количество *</label>
+                            <input type='number' name='stock' class='form-input' min='0' value='1' required>
                         </div>
                     </div>
 
-                    <div class="form-group">
-                        <label class="form-label">Краткое описание</label>
-                        <textarea name="short_description" class="form-textarea" rows="2"></textarea>
+                    <div class='form-group'>
+                        <label class='form-label'>Краткое описание</label>
+                        <textarea name='short_description' class='form-textarea' rows='2'></textarea>
                     </div>
 
-                    <div class="form-group">
-                        <label class="form-label">Полное описание</label>
-                        <textarea name="description" class="form-textarea" rows="4"></textarea>
+                    <div class='form-group'>
+                        <label class='form-label'>Полное описание</label>
+                        <textarea name='description' class='form-textarea' rows='4'></textarea>
                     </div>
 
-                    <div style="display: flex; gap: 20px; align-items: center;">
-                        <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
-                            <input type="checkbox" name="is_featured">
+                    <div style='display: flex; gap: 20px; align-items: center;'>
+                        <label style='display: flex; align-items: center; gap: 8px; cursor: pointer;'>
+                            <input type='checkbox' name='is_featured'>
                             <span>🔥 Популярный товар</span>
                         </label>
-                        <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
-                            <input type="checkbox" name="is_new">
+                        <label style='display: flex; align-items: center; gap: 8px; cursor: pointer;'>
+                            <input type='checkbox' name='is_new'>
                             <span>✨ Новинка</span>
                         </label>
-                        <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
-                            <input type="checkbox" name="is_active" checked>
+                        <label style='display: flex; align-items: center; gap: 8px; cursor: pointer;'>
+                            <input type='checkbox' name='is_active' checked>
                             <span>👁️ Активен</span>
                         </label>
                     </div>
                 </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-outline" onclick="closeModal('addProductModal')">Отмена</button>
-                    <button type="submit" class="btn btn-success">
-                        <i class="fas fa-save"></i>
+                <div class='modal-footer'>
+                    <button type='button' class='btn btn-outline' onclick='closeModal("addProductModal")'>Отмена</button>
+                    <button type='submit' class='btn btn-success'>
+                        <i class='fas fa-save'></i>
                         Сохранить товар
                     </button>
                 </div>
@@ -2429,59 +2591,59 @@ function renderCategoriesSection($data) {
     $stats = $data['stats'];
     ?>
     <!-- Статистика категорий -->
-    <div class="stats-grid" style="grid-template-columns: repeat(2, 1fr); margin-bottom: 32px;">
-        <div class="stat-card stat-primary">
-            <div class="stat-value"><?= $stats['total'] ?></div>
-            <div class="stat-label">Всего категорий</div>
+    <div class='stats-grid' style='grid-template-columns: repeat(2, 1fr); margin-bottom: 32px;'>
+        <div class='stat-card stat-primary'>
+            <div class='stat-value'><?= $stats['total'] ?></div>
+            <div class='stat-label'>Всего категорий</div>
         </div>
-        <div class="stat-card stat-success">
-            <div class="stat-value"><?= $stats['active'] ?></div>
-            <div class="stat-label">Активных</div>
+        <div class='stat-card stat-success'>
+            <div class='stat-value'><?= $stats['active'] ?></div>
+            <div class='stat-label'>Активных</div>
         </div>
     </div>
 
     <!-- Действия -->
-    <div class="d-flex justify-content-between align-items-center mb-4">
-        <button class="btn btn-success btn-lg" onclick="openModal('addCategoryModal')">
-            <i class="fas fa-plus"></i>
+    <div class='d-flex justify-content-between align-items-center mb-4'>
+        <button class='btn btn-success btn-lg' onclick='openModal("addCategoryModal")'>
+            <i class='fas fa-plus'></i>
             Добавить категорию
         </button>
     </div>
 
     <!-- Сетка категорий -->
-    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(350px, 1fr)); gap: 24px;">
+    <div style='display: grid; grid-template-columns: repeat(auto-fit, minmax(350px, 1fr)); gap: 24px;'>
         <?php foreach ($categories as $category): ?>
-            <div class="content-card" style="cursor: pointer; transition: var(--transition);" onclick="editCategory(<?= $category['id'] ?>)">
-                <div class="content-card-body">
-                    <div class="d-flex align-items-center justify-content-between mb-3">
-                        <div class="d-flex align-items-center gap-3">
-                            <div style="font-size: 48px;"><?= $category['icon'] ?></div>
+            <div class='content-card' style='cursor: pointer; transition: var(--transition);' onclick='editCategory(<?= $category['id'] ?>)'>
+                <div class='content-card-body'>
+                    <div class='d-flex align-items-center justify-content-between mb-3'>
+                        <div class='d-flex align-items-center gap-3'>
+                            <div style='font-size: 48px;'><?= $category['icon'] ?></div>
                             <div>
-                                <h3 style="margin: 0; font-size: 20px;"><?= htmlspecialchars($category['name']) ?></h3>
-                                <p style="margin: 4px 0 0; color: var(--text-muted); font-size: 12px;">
+                                <h3 style='margin: 0; font-size: 20px;'><?= htmlspecialchars($category['name']) ?></h3>
+                                <p style='margin: 4px 0 0; color: var(--text-muted); font-size: 12px;'>
                                     ID: <?= $category['id'] ?> | Порядок: <?= $category['sort_order'] ?>
                                 </p>
                             </div>
                         </div>
-                        <span class="status-badge <?= $category['active'] ? 'status-active' : 'status-inactive' ?>">
+                        <span class='status-badge <?= $category['active'] ? 'status-active' : 'status-inactive' ?>'>
                             <?= $category['active'] ? 'Активна' : 'Скрыта' ?>
                         </span>
                     </div>
 
-                    <p style="color: var(--text-secondary); margin-bottom: 20px; font-size: 14px; line-height: 1.5;">
+                    <p style='color: var(--text-secondary); margin-bottom: 20px; font-size: 14px; line-height: 1.5;'>
                         <?= htmlspecialchars($category['description']) ?>
                     </p>
 
-                    <div class="d-flex justify-content-between align-items-center" onclick="event.stopPropagation()">
-                        <div style="color: var(--text-muted); font-size: 14px;">
+                    <div class='d-flex justify-content-between align-items-center' onclick='event.stopPropagation()'>
+                        <div style='color: var(--text-muted); font-size: 14px;'>
                             <?= count(getProductsByCategory($category['id'])) ?> товаров
                         </div>
-                        <div class="d-flex gap-2">
-                            <button class="btn btn-primary btn-sm" onclick="editCategory(<?= $category['id'] ?>)">
-                                <i class="fas fa-edit"></i>
+                        <div class='d-flex gap-2'>
+                            <button class='btn btn-primary btn-sm' onclick='editCategory(<?= $category['id'] ?>)'>
+                                <i class='fas fa-edit'></i>
                             </button>
-                            <button class="btn btn-outline btn-sm" onclick="viewCategoryProducts(<?= $category['id'] ?>)">
-                                <i class="fas fa-eye"></i>
+                            <button class='btn btn-outline btn-sm' onclick='viewCategoryProducts(<?= $category['id'] ?>)'>
+                                <i class='fas fa-eye'></i>
                             </button>
                         </div>
                     </div>
@@ -2491,47 +2653,47 @@ function renderCategoriesSection($data) {
     </div>
 
     <!-- Модальное окно добавления категории -->
-    <div class="modal" id="addCategoryModal">
-        <div class="modal-dialog">
-            <form method="post">
-                <input type="hidden" name="action" value="create_category">
-                <div class="modal-header">
-                    <h3 class="modal-title">Добавить новую категорию</h3>
-                    <button type="button" class="modal-close" onclick="closeModal('addCategoryModal')">&times;</button>
+    <div class='modal' id='addCategoryModal'>
+        <div class='modal-dialog'>
+            <form method='post'>
+                <input type='hidden' name='action' value='create_category'>
+                <div class='modal-header'>
+                    <h3 class='modal-title'>Добавить новую категорию</h3>
+                    <button type='button' class='modal-close' onclick='closeModal("addCategoryModal")'>&times;</button>
                 </div>
-                <div class="modal-body">
-                    <div class="form-group">
-                        <label class="form-label">Название категории *</label>
-                        <input type="text" name="name" class="form-input" required>
+                <div class='modal-body'>
+                    <div class='form-group'>
+                        <label class='form-label'>Название категории *</label>
+                        <input type='text' name='name' class='form-input' required>
                     </div>
 
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label class="form-label">Иконка (emoji)</label>
-                            <input type="text" name="icon" class="form-input" placeholder="🐠" maxlength="4" style="text-align: center; font-size: 24px;">
+                    <div class='form-row'>
+                        <div class='form-group'>
+                            <label class='form-label'>Иконка (emoji)</label>
+                            <input type='text' name='icon' class='form-input' placeholder='🐠' maxlength='4' style='text-align: center; font-size: 24px;'>
                         </div>
-                        <div class="form-group">
-                            <label class="form-label">Порядок сортировки</label>
-                            <input type="number" name="sort_order" class="form-input" min="1" value="<?= count($categories) + 1 ?>">
+                        <div class='form-group'>
+                            <label class='form-label'>Порядок сортировки</label>
+                            <input type='number' name='sort_order' class='form-input' min='1' value='<?= count($categories) + 1 ?>'>
                         </div>
                     </div>
 
-                    <div class="form-group">
-                        <label class="form-label">Описание</label>
-                        <textarea name="description" class="form-textarea" rows="3"></textarea>
+                    <div class='form-group'>
+                        <label class='form-label'>Описание</label>
+                        <textarea name='description' class='form-textarea' rows='3'></textarea>
                     </div>
 
-                    <div class="form-group">
-                        <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
-                            <input type="checkbox" name="active" checked>
+                    <div class='form-group'>
+                        <label style='display: flex; align-items: center; gap: 8px; cursor: pointer;'>
+                            <input type='checkbox' name='active' checked>
                             <span>Активная категория</span>
                         </label>
                     </div>
                 </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-outline" onclick="closeModal('addCategoryModal')">Отмена</button>
-                    <button type="submit" class="btn btn-success">
-                        <i class="fas fa-save"></i>
+                <div class='modal-footer'>
+                    <button type='button' class='btn btn-outline' onclick='closeModal("addCategoryModal")'>Отмена</button>
+                    <button type='submit' class='btn btn-success'>
+                        <i class='fas fa-save'></i>
                         Создать категорию
                     </button>
                 </div>
@@ -2557,55 +2719,55 @@ function renderOrdersSection($data) {
     $stats = $data['stats'];
     ?>
     <!-- Статистика заказов -->
-    <div class="stats-grid" style="margin-bottom: 32px;">
-        <div class="stat-card stat-primary">
-            <div class="stat-value"><?= $stats['total'] ?></div>
-            <div class="stat-label">Всего заказов</div>
+    <div class='stats-grid' style='margin-bottom: 32px;'>
+        <div class='stat-card stat-primary'>
+            <div class='stat-value'><?= $stats['total'] ?></div>
+            <div class='stat-label'>Всего заказов</div>
         </div>
-        <div class="stat-card stat-warning">
-            <div class="stat-value"><?= $stats['new'] ?></div>
-            <div class="stat-label">Новые</div>
+        <div class='stat-card stat-warning'>
+            <div class='stat-value'><?= $stats['new'] ?></div>
+            <div class='stat-label'>Новые</div>
         </div>
-        <div class="stat-card stat-primary">
-            <div class="stat-value"><?= $stats['processing'] ?></div>
-            <div class="stat-label">В обработке</div>
+        <div class='stat-card stat-primary'>
+            <div class='stat-value'><?= $stats['processing'] ?></div>
+            <div class='stat-label'>В обработке</div>
         </div>
-        <div class="stat-card stat-success">
-            <div class="stat-value"><?= $stats['completed'] ?></div>
-            <div class="stat-label">Выполнено</div>
+        <div class='stat-card stat-success'>
+            <div class='stat-value'><?= $stats['completed'] ?></div>
+            <div class='stat-label'>Выполнено</div>
         </div>
-        <div class="stat-card stat-success" style="grid-column: span 2;">
-            <div class="stat-value"><?= number_format($stats['total_amount'], 0, '', ' ') ?> ₽</div>
-            <div class="stat-label">Общая сумма заказов</div>
+        <div class='stat-card stat-success' style='grid-column: span 2;'>
+            <div class='stat-value'><?= number_format($stats['total_amount'], 0, '', ' ') ?> ₽</div>
+            <div class='stat-label'>Общая сумма заказов</div>
         </div>
     </div>
 
     <!-- Фильтры -->
-    <div class="d-flex justify-content-between align-items-center mb-4">
+    <div class='d-flex justify-content-between align-items-center mb-4'>
         <div>
-            <button class="btn btn-outline" onclick="exportOrders()">
-                <i class="fas fa-download"></i>
+            <button class='btn btn-outline' onclick='exportOrders()'>
+                <i class='fas fa-download'></i>
                 Экспорт заказов
             </button>
         </div>
 
-        <div class="d-flex gap-2">
-            <select class="form-select" onchange="filterOrdersByStatus(this.value)">
-                <option value="">Все статусы</option>
-                <option value="new">Новые</option>
-                <option value="processing">В обработке</option>
-                <option value="shipped">Отправлен</option>
-                <option value="delivered">Доставлен</option>
-                <option value="cancelled">Отменен</option>
+        <div class='d-flex gap-2'>
+            <select class='form-select' onchange='filterOrdersByStatus(this.value)'>
+                <option value=''>Все статусы</option>
+                <option value='new'>Новые</option>
+                <option value='processing'>В обработке</option>
+                <option value='shipped'>Отправлен</option>
+                <option value='delivered'>Доставлен</option>
+                <option value='cancelled'>Отменен</option>
             </select>
-            <input type="date" class="form-input" onchange="filterOrdersByDate(this.value)">
+            <input type='date' class='form-input' onchange='filterOrdersByDate(this.value)'>
         </div>
     </div>
 
     <!-- Таблица заказов -->
-    <div class="content-card">
-        <div class="table-container">
-            <table class="table" id="ordersTable">
+    <div class='content-card'>
+        <div class='table-container'>
+            <table class='table' id='ordersTable'>
                 <thead>
                     <tr>
                         <th>№ Заказа</th>
@@ -2620,50 +2782,50 @@ function renderOrdersSection($data) {
                 </thead>
                 <tbody>
                     <?php foreach ($orders as $order): ?>
-                        <tr data-status="<?= $order['status'] ?>" data-date="<?= date('Y-m-d', strtotime($order['created_at'])) ?>">
+                        <tr data-status='<?= $order['status'] ?>' data-date='<?= date('Y-m-d', strtotime($order['created_at'])) ?>'>
                             <td>
-                                <div style="font-weight: 600; color: var(--primary-color);"><?= $order['order_number'] ?></div>
-                                <div style="font-size: 12px; color: var(--text-muted);">ID: <?= $order['id'] ?></div>
+                                <div style='font-weight: 600; color: var(--primary-color);'><?= $order['order_number'] ?></div>
+                                <div style='font-size: 12px; color: var(--text-muted);'>ID: <?= $order['id'] ?></div>
                             </td>
                             <td>
-                                <div style="font-weight: 600;"><?= htmlspecialchars($order['customer_name']) ?></div>
-                                <div style="font-size: 12px; color: var(--text-muted);"><?= htmlspecialchars($order['customer_email']) ?></div>
-                                <div style="font-size: 12px; color: var(--text-muted);"><?= htmlspecialchars($order['customer_phone']) ?></div>
+                                <div style='font-weight: 600;'><?= htmlspecialchars($order['customer_name']) ?></div>
+                                <div style='font-size: 12px; color: var(--text-muted);'><?= htmlspecialchars($order['customer_email']) ?></div>
+                                <div style='font-size: 12px; color: var(--text-muted);'><?= htmlspecialchars($order['customer_phone']) ?></div>
                             </td>
                             <td>
-                                <div><?= date('d.m.Y', strtotime($order['created_at'])) ?></div>
-                                <div style="font-size: 12px; color: var(--text-muted);"><?= date('H:i', strtotime($order['created_at'])) ?></div>
+                                <div><?= formatDateRussian($order['created_at'], 'short') ?></div>
+                                <div style='font-size: 12px; color: var(--text-muted);'><?= date('H:i', strtotime($order['created_at'])) ?></div>
                             </td>
                             <td>
-                                <div style="font-weight: 600; color: var(--success-color);"><?= number_format($order['total_amount'], 0, '', ' ') ?> ₽</div>
-                                <div style="font-size: 12px; color: var(--text-muted);"><?= $order['items_count'] ?? 1 ?> товаров</div>
+                                <div style='font-weight: 600; color: var(--success-color);'><?= number_format($order['total_amount'], 0, '', ' ') ?> ₽</div>
+                                <div style='font-size: 12px; color: var(--text-muted);'><?= $order['items_count'] ?? 1 ?> товаров</div>
                             </td>
                             <td>
-                                <select class="form-select" style="padding: 4px 8px; font-size: 12px; border-color: var(--border-color);" onchange="updateOrderStatus(<?= $order['id'] ?>, this.value)">
-                                    <option value="new" <?= $order['status'] === 'new' ? 'selected' : '' ?>>Новый</option>
-                                    <option value="processing" <?= $order['status'] === 'processing' ? 'selected' : '' ?>>Обработка</option>
-                                    <option value="shipped" <?= $order['status'] === 'shipped' ? 'selected' : '' ?>>Отправлен</option>
-                                    <option value="delivered" <?= $order['status'] === 'delivered' ? 'selected' : '' ?>>Доставлен</option>
-                                    <option value="cancelled" <?= $order['status'] === 'cancelled' ? 'selected' : '' ?>>Отменен</option>
+                                <select class='form-select' style='padding: 4px 8px; font-size: 12px; border-color: var(--border-color);' onchange='updateOrderStatus(<?= $order['id'] ?>, this.value)'>
+                                    <option value='new' <?= $order['status'] === 'new' ? 'selected' : '' ?>>Новый</option>
+                                    <option value='processing' <?= $order['status'] === 'processing' ? 'selected' : '' ?>>Обработка</option>
+                                    <option value='shipped' <?= $order['status'] === 'shipped' ? 'selected' : '' ?>>Отправлен</option>
+                                    <option value='delivered' <?= $order['status'] === 'delivered' ? 'selected' : '' ?>>Доставлен</option>
+                                    <option value='cancelled' <?= $order['status'] === 'cancelled' ? 'selected' : '' ?>>Отменен</option>
                                 </select>
                             </td>
                             <td>
-                                <span class="status-badge <?= $order['payment_method'] === 'card' ? 'status-completed' : 'status-processing' ?>">
+                                <span class='status-badge <?= $order['payment_method'] === 'card' ? 'status-completed' : 'status-processing' ?>'>
                                     <?= $order['payment_method'] === 'card' ? 'Карта' : 'Наличные' ?>
                                 </span>
                             </td>
                             <td>
-                                <span class="status-badge status-new">
+                                <span class='status-badge status-new'>
                                     <?= $order['delivery_method'] === 'delivery' ? 'Доставка' : 'Самовывоз' ?>
                                 </span>
                             </td>
                             <td>
-                                <div class="d-flex gap-1">
-                                    <button class="btn btn-primary btn-sm" onclick="viewOrder(<?= $order['id'] ?>)" title="Просмотр">
-                                        <i class="fas fa-eye"></i>
+                                <div class='d-flex gap-1'>
+                                    <button class='btn btn-primary btn-sm' onclick='viewOrder(<?= $order['id'] ?>)' title='Просмотр'>
+                                        <i class='fas fa-eye'></i>
                                     </button>
-                                    <button class="btn btn-outline btn-sm" onclick="printOrder(<?= $order['id'] ?>)" title="Печать">
-                                        <i class="fas fa-print"></i>
+                                    <button class='btn btn-outline btn-sm' onclick='printOrder(<?= $order['id'] ?>)' title='Печать'>
+                                        <i class='fas fa-print'></i>
                                     </button>
                                 </div>
                             </td>
@@ -2712,87 +2874,87 @@ function renderReviewsSection($data) {
     $stats = $data['stats'];
     ?>
     <!-- Статистика отзывов -->
-    <div class="stats-grid" style="grid-template-columns: repeat(4, 1fr); margin-bottom: 32px;">
-        <div class="stat-card stat-primary">
-            <div class="stat-value"><?= $stats['total'] ?></div>
-            <div class="stat-label">Всего отзывов</div>
+    <div class='stats-grid' style='grid-template-columns: repeat(4, 1fr); margin-bottom: 32px;'>
+        <div class='stat-card stat-primary'>
+            <div class='stat-value'><?= $stats['total'] ?></div>
+            <div class='stat-label'>Всего отзывов</div>
         </div>
-        <div class="stat-card stat-success">
-            <div class="stat-value"><?= $stats['approved'] ?></div>
-            <div class="stat-label">Одобрено</div>
+        <div class='stat-card stat-success'>
+            <div class='stat-value'><?= $stats['approved'] ?></div>
+            <div class='stat-label'>Одобрено</div>
         </div>
-        <div class="stat-card stat-warning">
-            <div class="stat-value"><?= $stats['pending'] ?></div>
-            <div class="stat-label">На модерации</div>
+        <div class='stat-card stat-warning'>
+            <div class='stat-value'><?= $stats['pending'] ?></div>
+            <div class='stat-label'>На модерации</div>
         </div>
-        <div class="stat-card stat-success">
-            <div class="stat-value"><?= number_format($stats['average_rating'], 1) ?></div>
-            <div class="stat-label">Средний рейтинг</div>
+        <div class='stat-card stat-success'>
+            <div class='stat-value'><?= number_format($stats['average_rating'], 1) ?></div>
+            <div class='stat-label'>Средний рейтинг</div>
         </div>
     </div>
 
     <!-- Фильтры -->
-    <div class="d-flex justify-content-between align-items-center mb-4">
+    <div class='d-flex justify-content-between align-items-center mb-4'>
         <div></div>
-        <div class="d-flex gap-2">
-            <select class="form-select" onchange="filterReviewsByStatus(this.value)">
-                <option value="">Все отзывы</option>
-                <option value="approved">Одобренные</option>
-                <option value="pending">На модерации</option>
+        <div class='d-flex gap-2'>
+            <select class='form-select' onchange='filterReviewsByStatus(this.value)'>
+                <option value=''>Все отзывы</option>
+                <option value='approved'>Одобренные</option>
+                <option value='pending'>На модерации</option>
             </select>
-            <select class="form-select" onchange="filterReviewsByRating(this.value)">
-                <option value="">Все рейтинги</option>
-                <option value="5">5 звезд</option>
-                <option value="4">4 звезды</option>
-                <option value="3">3 звезды</option>
-                <option value="2">2 звезды</option>
-                <option value="1">1 звезда</option>
+            <select class='form-select' onchange='filterReviewsByRating(this.value)'>
+                <option value=''>Все рейтинги</option>
+                <option value='5'>5 звезд</option>
+                <option value='4'>4 звезды</option>
+                <option value='3'>3 звезды</option>
+                <option value='2'>2 звезды</option>
+                <option value='1'>1 звезда</option>
             </select>
         </div>
     </div>
 
     <!-- Сетка отзывов -->
-    <div style="display: grid; gap: 24px;" id="reviewsGrid">
+    <div style='display: grid; gap: 24px;' id='reviewsGrid'>
         <?php foreach ($reviews as $review): ?>
-        <div class="content-card review-item" data-approved="<?= $review['is_approved'] ? 'approved' : 'pending' ?>" data-rating="<?= $review['rating'] ?>">
-            <div class="content-card-body">
-                <div class="d-flex justify-content-between align-items-start mb-3">
-                    <div style="flex: 1;">
-                        <div class="d-flex align-items-center gap-3 mb-2">
-                            <div style="font-weight: 600; font-size: 16px;"><?= htmlspecialchars($review['customer_name']) ?></div>
-                            <div style="color: gold; font-size: 18px;">
+        <div class='content-card review-item' data-approved='<?= $review['is_approved'] ? 'approved' : 'pending' ?>' data-rating='<?= $review['rating'] ?>'>
+            <div class='content-card-body'>
+                <div class='d-flex justify-content-between align-items-start mb-3'>
+                    <div style='flex: 1;'>
+                        <div class='d-flex align-items-center gap-3 mb-2'>
+                            <div style='font-weight: 600; font-size: 16px;'><?= htmlspecialchars($review['customer_name']) ?></div>
+                            <div style='color: gold; font-size: 18px;'>
                                 <?= str_repeat('★', $review['rating']) . str_repeat('☆', 5 - $review['rating']) ?>
                             </div>
                         </div>
-                        <div style="font-size: 13px; color: var(--text-muted); margin-bottom: 8px;">
+                        <div style='font-size: 13px; color: var(--text-muted); margin-bottom: 8px;'>
                             Товар: <?= htmlspecialchars($review['product_name']) ?>
                         </div>
-                        <div style="font-size: 12px; color: var(--text-muted);">
-                            <?= date('d.m.Y H:i', strtotime($review['created_at'])) ?>
+                        <div style='font-size: 12px; color: var(--text-muted);'>
+                            <?= formatDateRussian($review['created_at']) ?>
                         </div>
                     </div>
-                    <div class="d-flex align-items-center gap-2">
-                        <span class="status-badge <?= $review['is_approved'] ? 'status-completed' : 'status-processing' ?>">
+                    <div class='d-flex align-items-center gap-2'>
+                        <span class='status-badge <?= $review['is_approved'] ? 'status-completed' : 'status-processing' ?>'>
                             <?= $review['is_approved'] ? 'Одобрен' : 'На модерации' ?>
                         </span>
-                        <div class="d-flex gap-1">
+                        <div class='d-flex gap-1'>
                             <?php if (!$review['is_approved']): ?>
-                            <button class="btn btn-success btn-sm" onclick="approveReview(<?= $review['id'] ?>)" title="Одобрить">
-                                <i class="fas fa-check"></i>
+                            <button class='btn btn-success btn-sm' onclick='approveReview(<?= $review['id'] ?>)' title='Одобрить'>
+                                <i class='fas fa-check'></i>
                             </button>
                             <?php endif; ?>
-                            <button class="btn btn-danger btn-sm" onclick="deleteReview(<?= $review['id'] ?>)" title="Удалить">
-                                <i class="fas fa-trash"></i>
+                            <button class='btn btn-danger btn-sm' onclick='deleteReview(<?= $review['id'] ?>)' title='Удалить'>
+                                <i class='fas fa-trash'></i>
                             </button>
                         </div>
                     </div>
                 </div>
 
                 <?php if ($review['title']): ?>
-                <h4 style="margin: 0 0 12px 0; font-size: 16px; font-weight: 600;"><?= htmlspecialchars($review['title']) ?></h4>
+                <h4 style='margin: 0 0 12px 0; font-size: 16px; font-weight: 600;'><?= htmlspecialchars($review['title']) ?></h4>
                 <?php endif; ?>
 
-                <p style="margin: 0; line-height: 1.6; color: var(--text-secondary);">
+                <p style='margin: 0; line-height: 1.6; color: var(--text-secondary);'>
                     <?= nl2br(htmlspecialchars($review['text'])) ?>
                 </p>
             </div>
@@ -2826,75 +2988,75 @@ function renderNewsSection($data) {
     $stats = $data['stats'];
     ?>
     <!-- Статистика новостей -->
-    <div class="stats-grid" style="grid-template-columns: repeat(4, 1fr); margin-bottom: 32px;">
-        <div class="stat-card stat-primary">
-            <div class="stat-value"><?= $stats['total'] ?></div>
-            <div class="stat-label">Всего новостей</div>
+    <div class='stats-grid' style='grid-template-columns: repeat(4, 1fr); margin-bottom: 32px;'>
+        <div class='stat-card stat-primary'>
+            <div class='stat-value'><?= $stats['total'] ?></div>
+            <div class='stat-label'>Всего новостей</div>
         </div>
-        <div class="stat-card stat-success">
-            <div class="stat-value"><?= $stats['published'] ?></div>
-            <div class="stat-label">Опубликовано</div>
+        <div class='stat-card stat-success'>
+            <div class='stat-value'><?= $stats['published'] ?></div>
+            <div class='stat-label'>Опубликовано</div>
         </div>
-        <div class="stat-card stat-warning">
-            <div class="stat-value"><?= $stats['drafts'] ?></div>
-            <div class="stat-label">Черновики</div>
+        <div class='stat-card stat-warning'>
+            <div class='stat-value'><?= $stats['drafts'] ?></div>
+            <div class='stat-label'>Черновики</div>
         </div>
-        <div class="stat-card stat-primary">
-            <div class="stat-value"><?= number_format($stats['total_views']) ?></div>
-            <div class="stat-label">Всего просмотров</div>
+        <div class='stat-card stat-primary'>
+            <div class='stat-value'><?= number_format($stats['total_views']) ?></div>
+            <div class='stat-label'>Всего просмотров</div>
         </div>
     </div>
 
     <!-- Действия -->
-    <div class="d-flex justify-content-between align-items-center mb-4">
-        <button class="btn btn-success btn-lg" onclick="openModal('addNewsModal')">
-            <i class="fas fa-plus"></i>
+    <div class='d-flex justify-content-between align-items-center mb-4'>
+        <button class='btn btn-success btn-lg' onclick='openModal("addNewsModal")'>
+            <i class='fas fa-plus'></i>
             Добавить новость
         </button>
 
-        <select class="form-select" onchange="filterNewsByStatus(this.value)">
-            <option value="">Все новости</option>
-            <option value="published">Опубликованные</option>
-            <option value="draft">Черновики</option>
+        <select class='form-select' onchange='filterNewsByStatus(this.value)'>
+            <option value=''>Все новости</option>
+            <option value='published'>Опубликованные</option>
+            <option value='draft'>Черновики</option>
         </select>
     </div>
 
     <!-- Сетка новостей -->
-    <div style="display: grid; gap: 24px;" id="newsGrid">
+    <div style='display: grid; gap: 24px;' id='newsGrid'>
         <?php foreach ($news as $item): ?>
-        <div class="content-card news-item" data-status="<?= $item['is_published'] ? 'published' : 'draft' ?>">
-            <div class="content-card-body">
-                <div class="d-flex justify-content-between align-items-start mb-3">
-                    <div style="flex: 1;">
-                        <div class="d-flex align-items-center gap-3 mb-2">
-                            <h3 style="margin: 0; font-size: 20px; cursor: pointer;" onclick="editNews(<?= $item['id'] ?>)">
+        <div class='content-card news-item' data-status='<?= $item['is_published'] ? 'published' : 'draft' ?>'>
+            <div class='content-card-body'>
+                <div class='d-flex justify-content-between align-items-start mb-3'>
+                    <div style='flex: 1;'>
+                        <div class='d-flex align-items-center gap-3 mb-2'>
+                            <h3 style='margin: 0; font-size: 20px; cursor: pointer;' onclick='editNews(<?= $item['id'] ?>)'>
                                 <?= htmlspecialchars($item['title']) ?>
                             </h3>
-                            <span class="status-badge <?= $item['is_published'] ? 'status-completed' : 'status-processing' ?>">
+                            <span class='status-badge <?= $item['is_published'] ? 'status-completed' : 'status-processing' ?>'>
                                 <?= $item['is_published'] ? 'Опубликована' : 'Черновик' ?>
                             </span>
                             <?php if ($item['is_featured']): ?>
-                            <span class="status-badge" style="background: gold; color: white;">Важная</span>
+                            <span class='status-badge' style='background: gold; color: white;'>Важная</span>
                             <?php endif; ?>
                         </div>
-                        <div style="font-size: 12px; color: var(--text-muted);">
-                            <?= date('d.m.Y H:i', strtotime($item['created_at'])) ?> | Просмотров: <?= $item['views'] ?>
+                        <div style='font-size: 12px; color: var(--text-muted);'>
+                            <?= formatDateRussian($item['created_at']) ?> | Просмотров: <?= $item['views'] ?>
                         </div>
                     </div>
-                    <div class="d-flex gap-1">
-                        <button class="btn btn-primary btn-sm" onclick="editNews(<?= $item['id'] ?>)" title="Редактировать">
-                            <i class="fas fa-edit"></i>
+                    <div class='d-flex gap-1'>
+                        <button class='btn btn-primary btn-sm' onclick='editNews(<?= $item['id'] ?>)' title='Редактировать'>
+                            <i class='fas fa-edit'></i>
                         </button>
-                        <button class="btn btn-outline btn-sm" onclick="viewNews(<?= $item['id'] ?>)" title="Просмотр">
-                            <i class="fas fa-eye"></i>
+                        <button class='btn btn-outline btn-sm' onclick='viewNews(<?= $item['id'] ?>)' title='Просмотр'>
+                            <i class='fas fa-eye'></i>
                         </button>
-                        <button class="btn btn-danger btn-sm" onclick="deleteNews(<?= $item['id'] ?>)" title="Удалить">
-                            <i class="fas fa-trash"></i>
+                        <button class='btn btn-danger btn-sm' onclick='deleteNews(<?= $item['id'] ?>)' title='Удалить'>
+                            <i class='fas fa-trash'></i>
                         </button>
                     </div>
                 </div>
 
-                <p style="margin: 0; color: var(--text-secondary); line-height: 1.6;">
+                <p style='margin: 0; color: var(--text-secondary); line-height: 1.6;'>
                     <?= htmlspecialchars($item['excerpt']) ?>
                 </p>
             </div>
@@ -2903,50 +3065,50 @@ function renderNewsSection($data) {
     </div>
 
     <!-- Модальное окно добавления новости -->
-    <div class="modal" id="addNewsModal">
-        <div class="modal-dialog" style="max-width: 800px;">
-            <form method="post">
-                <input type="hidden" name="action" value="create_news">
-                <div class="modal-header">
-                    <h3 class="modal-title">Добавить новость</h3>
-                    <button type="button" class="modal-close" onclick="closeModal('addNewsModal')">&times;</button>
+    <div class='modal' id='addNewsModal'>
+        <div class='modal-dialog' style='max-width: 800px;'>
+            <form method='post'>
+                <input type='hidden' name='action' value='create_news'>
+                <div class='modal-header'>
+                    <h3 class='modal-title'>Добавить новость</h3>
+                    <button type='button' class='modal-close' onclick='closeModal("addNewsModal")'>&times;</button>
                 </div>
-                <div class="modal-body">
-                    <div class="form-group">
-                        <label class="form-label">Заголовок *</label>
-                        <input type="text" name="title" class="form-input" required>
+                <div class='modal-body'>
+                    <div class='form-group'>
+                        <label class='form-label'>Заголовок *</label>
+                        <input type='text' name='title' class='form-input' required>
                     </div>
 
-                    <div class="form-group">
-                        <label class="form-label">Краткое описание *</label>
-                        <textarea name="excerpt" class="form-textarea" rows="2" required></textarea>
+                    <div class='form-group'>
+                        <label class='form-label'>Краткое описание *</label>
+                        <textarea name='excerpt' class='form-textarea' rows='2' required></textarea>
                     </div>
 
-                    <div class="form-group">
-                        <label class="form-label">Полный текст *</label>
-                        <textarea name="content" class="form-textarea" rows="8" required></textarea>
+                    <div class='form-group'>
+                        <label class='form-label'>Полный текст *</label>
+                        <textarea name='content' class='form-textarea' rows='8' required></textarea>
                     </div>
 
-                    <div class="form-group">
-                        <label class="form-label">Изображение (URL)</label>
-                        <input type="url" name="image" class="form-input" placeholder="https://example.com/image.jpg">
+                    <div class='form-group'>
+                        <label class='form-label'>Изображение (URL)</label>
+                        <input type='url' name='image' class='form-input' placeholder='https://example.com/image.jpg'>
                     </div>
 
-                    <div style="display: flex; gap: 20px; align-items: center;">
-                        <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
-                            <input type="checkbox" name="is_published" checked>
+                    <div style='display: flex; gap: 20px; align-items: center;'>
+                        <label style='display: flex; align-items: center; gap: 8px; cursor: pointer;'>
+                            <input type='checkbox' name='is_published' checked>
                             <span>Опубликовать</span>
                         </label>
-                        <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
-                            <input type="checkbox" name="is_featured">
+                        <label style='display: flex; align-items: center; gap: 8px; cursor: pointer;'>
+                            <input type='checkbox' name='is_featured'>
                             <span>Важная новость</span>
                         </label>
                     </div>
                 </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-outline" onclick="closeModal('addNewsModal')">Отмена</button>
-                    <button type="submit" class="btn btn-success">
-                        <i class="fas fa-save"></i>
+                <div class='modal-footer'>
+                    <button type='button' class='btn btn-outline' onclick='closeModal("addNewsModal")'>Отмена</button>
+                    <button type='submit' class='btn btn-success'>
+                        <i class='fas fa-save'></i>
                         Сохранить
                     </button>
                 </div>
@@ -2981,74 +3143,181 @@ function renderNewsSection($data) {
 
 // === ГРАФИКИ И АНАЛИТИКА ===
 function renderAnalyticsSection($data) {
+    $analytics = getAdvancedAnalytics();
     ?>
-    <div class="content-card mb-4">
-        <div class="content-card-header">
-            <h3 class="content-card-title">
-                <i class="fas fa-chart-line"></i>
-                Графики продаж
+    <!-- KPI метрики -->
+    <div class='stats-grid mb-4'>
+        <div class='stat-card stat-primary'>
+            <div class='stat-value'><?= $analytics['summary']['total_orders'] ?></div>
+            <div class='stat-label'>Всего заказов</div>
+        </div>
+        <div class='stat-card stat-success'>
+            <div class='stat-value'><?= number_format($analytics['summary']['total_revenue'], 0, '', ' ') ?> ₽</div>
+            <div class='stat-label'>Общая выручка</div>
+        </div>
+        <div class='stat-card stat-warning'>
+            <div class='stat-value'><?= number_format($analytics['summary']['avg_order_value'], 0, '', ' ') ?> ₽</div>
+            <div class='stat-label'>Средний чек</div>
+        </div>
+        <div class='stat-card stat-info'>
+            <div class='stat-value'><?= number_format($analytics['summary']['avg_rating'], 1) ?></div>
+            <div class='stat-label'>Средняя оценка</div>
+        </div>
+    </div>
+
+    <!-- Графики -->
+    <div style='display: grid; grid-template-columns: 2fr 1fr; gap: 32px; margin-bottom: 40px;'>
+        <!-- График продаж -->
+        <div class='content-card'>
+            <div class='content-card-header'>
+                <h3 class='content-card-title'>
+                    <i class='fas fa-chart-line'></i>
+                    Продажи за 30 дней
+                </h3>
+            </div>
+            <div class='content-card-body'>
+                <canvas id='salesChart' style='max-height: 400px;'></canvas>
+            </div>
+        </div>
+
+        <!-- Топ категории -->
+        <div class='content-card'>
+            <div class='content-card-header'>
+                <h3 class='content-card-title'>
+                    <i class='fas fa-chart-pie'></i>
+                    Топ категории
+                </h3>
+            </div>
+            <div class='content-card-body'>
+                <div style='display: grid; gap: 12px;'>
+                    <?php foreach (array_slice($analytics['category_stats'], 0, 5) as $category): ?>
+                        <div style='display: flex; justify-content: space-between; align-items: center; padding: 12px; background: var(--bg-secondary); border-radius: var(--border-radius);'>
+                            <div style='display: flex; align-items: center; gap: 8px;'>
+                                <span style='font-size: 20px;'><?= $category['icon'] ?></span>
+                                <span><?= $category['name'] ?></span>
+                            </div>
+                            <div style='text-align: right;'>
+                                <div style='font-weight: 600; color: var(--primary-color);'><?= $category['products_count'] ?></div>
+                                <div style='font-size: 11px; color: var(--text-muted);'>товаров</div>
+                            </div>
+                        </div>
+                    <?php endforeach; ?>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Топ товары -->
+    <div class='content-card'>
+        <div class='content-card-header'>
+            <h3 class='content-card-title'>
+                <i class='fas fa-trophy'></i>
+                Топ-10 товаров по продажам
             </h3>
-            <div class="d-flex gap-2">
-                <select class="form-select">
-                    <option>Последние 7 дней</option>
-                    <option>Последние 30 дней</option>
-                    <option>Последние 90 дней</option>
-                </select>
-                <button class="btn btn-primary">Обновить</button>
-            </div>
         </div>
-        <div class="content-card-body">
-            <div style="height: 400px; background: linear-gradient(135deg, #f8f9ff, #e9ecef); border-radius: var(--border-radius-lg); display: flex; align-items: center; justify-content: center; color: var(--text-muted);">
-                <div style="text-align: center;">
-                    <i class="fas fa-chart-area" style="font-size: 64px; margin-bottom: 24px; opacity: 0.5;"></i>
-                    <h3>График продаж</h3>
-                    <p>Подключите библиотеку Chart.js или другую для отображения графиков</p>
-                    <button class="btn btn-primary mt-3" onclick="initializeCharts()">Инициализировать графики</button>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 32px;">
-        <div class="content-card">
-            <div class="content-card-header">
-                <h3 class="content-card-title">
-                    <i class="fas fa-chart-pie"></i>
-                    Продажи по категориям
-                </h3>
-            </div>
-            <div class="content-card-body">
-                <div style="height: 300px; background: linear-gradient(135deg, #f8f9ff, #e9ecef); border-radius: var(--border-radius-lg); display: flex; align-items: center; justify-content: center; color: var(--text-muted);">
-                    <div style="text-align: center;">
-                        <i class="fas fa-chart-pie" style="font-size: 48px; margin-bottom: 16px; opacity: 0.5;"></i>
-                        <h4>Диаграмма категорий</h4>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <div class="content-card">
-            <div class="content-card-header">
-                <h3 class="content-card-title">
-                    <i class="fas fa-chart-bar"></i>
-                    Топ товары
-                </h3>
-            </div>
-            <div class="content-card-body">
-                <div style="height: 300px; background: linear-gradient(135deg, #f8f9ff, #e9ecef); border-radius: var(--border-radius-lg); display: flex; align-items: center; justify-content: center; color: var(--text-muted);">
-                    <div style="text-align: center;">
-                        <i class="fas fa-chart-bar" style="font-size: 48px; margin-bottom: 16px; opacity: 0.5;"></i>
-                        <h4>Популярные товары</h4>
-                    </div>
-                </div>
+        <div class='content-card-body'>
+            <div class='table-container'>
+                <table class='table'>
+                    <thead>
+                        <tr>
+                            <th>Место</th>
+                            <th>Товар</th>
+                            <th>Категория</th>
+                            <th>Продано</th>
+                            <th>Выручка</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php foreach ($analytics['top_products'] as $index => $product): ?>
+                            <tr>
+                                <td>
+                                    <div style='width: 30px; height: 30px; background: var(--primary-color); color: white; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 600;'>
+                                        <?= $index + 1 ?>
+                                    </div>
+                                </td>
+                                <td>
+                                    <div style='font-weight: 600;'><?= htmlspecialchars($product['name']) ?></div>
+                                    <div style='font-size: 12px; color: var(--text-muted);'><?= $product['sku'] ?></div>
+                                </td>
+                                <td><?= $product['category'] ?></td>
+                                <td>
+                                    <span style='font-weight: 600; color: var(--success-color);'><?= $product['sales'] ?> шт</span>
+                                </td>
+                                <td>
+                                    <span style='font-weight: 600; color: var(--success-color);'>
+                                        <?= number_format($product['price'] * $product['sales'], 0, '', ' ') ?> ₽
+                                    </span>
+                                </td>
+                            </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
             </div>
         </div>
     </div>
 
+    <script src='https://cdn.jsdelivr.net/npm/chart.js'></script>
     <script>
-        function initializeCharts() {
-            showNotification('Для полноценных графиков подключите Chart.js', 'info');
-        }
+        // График продаж
+        const salesData = <?= json_encode($analytics['sales_by_day']) ?>;
+        const salesCtx = document.getElementById('salesChart').getContext('2d');
+
+        new Chart(salesCtx, {
+            type: 'line',
+            data: {
+                labels: salesData.map(item => item.date_formatted),
+                datasets: [{
+                    label: 'Выручка',
+                    data: salesData.map(item => item.revenue),
+                    borderColor: 'rgb(46, 204, 113)',
+                    backgroundColor: 'rgba(46, 204, 113, 0.1)',
+                    yAxisID: 'y',
+                }, {
+                    label: 'Заказы',
+                    data: salesData.map(item => item.orders),
+                    borderColor: 'rgb(52, 152, 219)',
+                    backgroundColor: 'rgba(52, 152, 219, 0.1)',
+                    yAxisID: 'y1',
+                }]
+            },
+            options: {
+                responsive: true,
+                interaction: {
+                    mode: 'index',
+                    intersect: false,
+                },
+                scales: {
+                    x: {
+                        display: true,
+                        title: {
+                            display: true,
+                            text: 'Дата'
+                        }
+                    },
+                    y: {
+                        type: 'linear',
+                        display: true,
+                        position: 'left',
+                        title: {
+                            display: true,
+                            text: 'Выручка (₽)'
+                        }
+                    },
+                    y1: {
+                        type: 'linear',
+                        display: true,
+                        position: 'right',
+                        title: {
+                            display: true,
+                            text: 'Количество заказов'
+                        },
+                        grid: {
+                            drawOnChartArea: false,
+                        },
+                    }
+                }
+            }
+        });
     </script>
     <?php
 }
@@ -3057,67 +3326,67 @@ function renderAnalyticsSection($data) {
 function renderSettingsSection($data) {
     $settings = $data['settings'];
     ?>
-    <div class="content-card" style="max-width: 800px;">
-        <div class="content-card-header">
-            <h3 class="content-card-title">
-                <i class="fas fa-cog"></i>
+    <div class='content-card' style='max-width: 800px;'>
+        <div class='content-card-header'>
+            <h3 class='content-card-title'>
+                <i class='fas fa-cog'></i>
                 Основные настройки сайта
             </h3>
         </div>
-        <div class="content-card-body">
-            <form method="post">
-                <input type="hidden" name="action" value="save_settings">
+        <div class='content-card-body'>
+            <form method='post'>
+                <input type='hidden' name='action' value='save_settings'>
 
-                <div class="form-row">
-                    <div class="form-group">
-                        <label class="form-label">Название сайта</label>
-                        <input type="text" name="site_name" value="<?= htmlspecialchars($settings['site_name']) ?>" class="form-input">
+                <div class='form-row'>
+                    <div class='form-group'>
+                        <label class='form-label'>Название сайта</label>
+                        <input type='text' name='site_name' value='<?= htmlspecialchars($settings['site_name']) ?>' class='form-input'>
                     </div>
-                    <div class="form-group">
-                        <label class="form-label">Валюта</label>
-                        <input type="text" name="currency" value="<?= htmlspecialchars($settings['currency']) ?>" class="form-input">
+                    <div class='form-group'>
+                        <label class='form-label'>Валюта</label>
+                        <input type='text' name='currency' value='<?= htmlspecialchars($settings['currency']) ?>' class='form-input'>
                     </div>
                 </div>
 
-                <div class="form-group">
-                    <label class="form-label">Описание сайта</label>
-                    <textarea name="site_description" class="form-textarea" rows="2"><?= htmlspecialchars($settings['site_description']) ?></textarea>
+                <div class='form-group'>
+                    <label class='form-label'>Описание сайта</label>
+                    <textarea name='site_description' class='form-textarea' rows='2'><?= htmlspecialchars($settings['site_description']) ?></textarea>
                 </div>
 
-                <div class="form-row">
-                    <div class="form-group">
-                        <label class="form-label">Email администратора</label>
-                        <input type="email" name="admin_email" value="<?= htmlspecialchars($settings['admin_email']) ?>" class="form-input">
+                <div class='form-row'>
+                    <div class='form-group'>
+                        <label class='form-label'>Email администратора</label>
+                        <input type='email' name='admin_email' value='<?= htmlspecialchars($settings['admin_email']) ?>' class='form-input'>
                     </div>
-                    <div class="form-group">
-                        <label class="form-label">Телефон</label>
-                        <input type="text" name="phone" value="<?= htmlspecialchars($settings['phone']) ?>" class="form-input">
-                    </div>
-                </div>
-
-                <div class="form-group">
-                    <label class="form-label">Адрес</label>
-                    <input type="text" name="address" value="<?= htmlspecialchars($settings['address']) ?>" class="form-input">
-                </div>
-
-                <div class="form-row-3">
-                    <div class="form-group">
-                        <label class="form-label">Товаров на страницу</label>
-                        <input type="number" name="products_per_page" value="<?= $settings['products_per_page'] ?>" class="form-input" min="1">
-                    </div>
-                    <div class="form-group">
-                        <label class="form-label">Минимальная сумма заказа (₽)</label>
-                        <input type="number" name="min_order_amount" value="<?= $settings['min_order_amount'] ?>" class="form-input" min="0">
-                    </div>
-                    <div class="form-group">
-                        <label class="form-label">Бесплатная доставка от (₽)</label>
-                        <input type="number" name="free_shipping_from" value="<?= $settings['free_shipping_from'] ?>" class="form-input" min="0">
+                    <div class='form-group'>
+                        <label class='form-label'>Телефон</label>
+                        <input type='text' name='phone' value='<?= htmlspecialchars($settings['phone']) ?>' class='form-input'>
                     </div>
                 </div>
 
-                <div class="d-flex justify-content-center mt-4">
-                    <button type="submit" class="btn btn-success btn-lg">
-                        <i class="fas fa-save"></i>
+                <div class='form-group'>
+                    <label class='form-label'>Адрес</label>
+                    <input type='text' name='address' value='<?= htmlspecialchars($settings['address']) ?>' class='form-input'>
+                </div>
+
+                <div class='form-row-3'>
+                    <div class='form-group'>
+                        <label class='form-label'>Товаров на страницу</label>
+                        <input type='number' name='products_per_page' value='<?= $settings['products_per_page'] ?>' class='form-input' min='1'>
+                    </div>
+                    <div class='form-group'>
+                        <label class='form-label'>Минимальная сумма заказа (₽)</label>
+                        <input type='number' name='min_order_amount' value='<?= $settings['min_order_amount'] ?>' class='form-input' min='0'>
+                    </div>
+                    <div class='form-group'>
+                        <label class='form-label'>Бесплатная доставка от (₽)</label>
+                        <input type='number' name='free_shipping_from' value='<?= $settings['free_shipping_from'] ?>' class='form-input' min='0'>
+                    </div>
+                </div>
+
+                <div class='d-flex justify-content-center mt-4'>
+                    <button type='submit' class='btn btn-success btn-lg'>
+                        <i class='fas fa-save'></i>
                         Сохранить настройки
                     </button>
                 </div>
@@ -3129,36 +3398,76 @@ function renderSettingsSection($data) {
 
 // === СИСТЕМНЫЕ ЛОГИ ===
 function renderLogsSection($data) {
-    $logs = getSystemLogs();
+    $logs = $data['logs'];
     ?>
-    <div class="content-card">
-        <div class="content-card-header">
-            <h3 class="content-card-title">
-                <i class="fas fa-list-alt"></i>
+    <div class='content-card'>
+        <div class='content-card-header'>
+            <h3 class='content-card-title'>
+                <i class='fas fa-list-alt'></i>
                 Системные логи
             </h3>
-            <button class="btn btn-outline" onclick="refreshLogs()">
-                <i class="fas fa-sync-alt"></i>
-                Обновить
-            </button>
+            <div class='d-flex gap-2'>
+                <select class='form-select' onchange='filterLogs(this.value)'>
+                    <option value=''>Все действия</option>
+                    <option value='AUTH'>Авторизация</option>
+                    <option value='PRODUCTS'>Товары</option>
+                    <option value='ORDERS'>Заказы</option>
+                    <option value='SETTINGS'>Настройки</option>
+                    <option value='SYSTEM'>Система</option>
+                </select>
+                <button class='btn btn-outline' onclick='refreshLogs()'>
+                    <i class='fas fa-sync-alt'></i>
+                    Обновить
+                </button>
+            </div>
         </div>
-        <div class="content-card-body">
-            <div style="display: grid; gap: 12px;">
-                <?php foreach ($logs as $log): ?>
-                    <div style="display: flex; align-items: center; gap: 16px; padding: 12px; background: var(--bg-secondary); border-radius: var(--border-radius); border-left: 4px solid var(--<?= strtolower($log['level']) === 'success' ? 'success' : (strtolower($log['level']) === 'warning' ? 'warning' : 'info') ?>-color);">
-                        <div style="font-size: 11px; color: var(--text-muted); min-width: 140px;"><?= $log['timestamp'] ?></div>
-                        <div style="padding: 2px 8px; background: var(--<?= strtolower($log['level']) === 'success' ? 'success' : (strtolower($log['level']) === 'warning' ? 'warning' : 'info') ?>-color); color: white; border-radius: 4px; font-size: 10px; font-weight: 600; min-width: 60px; text-align: center;">
-                            <?= $log['level'] ?>
-                        </div>
-                        <div style="flex: 1;"><?= $log['message'] ?></div>
-                        <div style="font-size: 11px; color: var(--text-muted); min-width: 80px;"><?= $log['context'] ?></div>
-                    </div>
-                <?php endforeach; ?>
+        <div class='content-card-body'>
+            <div class='table-container'>
+                <table class='table' id='logsTable'>
+                    <thead>
+                        <tr>
+                            <th>Время</th>
+                            <th>Уровень</th>
+                            <th>Контекст</th>
+                            <th>Сообщение</th>
+                            <th>IP</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php foreach ($logs as $log): ?>
+                            <tr data-context='<?= $log['context'] ?>'>
+                                <td style='font-size: 12px; white-space: nowrap;'>
+                                    <?= formatDateRussian($log['timestamp']) ?>
+                                </td>
+                                <td>
+                                    <span class='status-badge status-<?= strtolower($log['level']) === 'info' ? 'new' : (strtolower($log['level']) === 'error' ? 'cancelled' : 'processing') ?>'>
+                                        <?= $log['level'] ?>
+                                    </span>
+                                </td>
+                                <td>
+                                    <span class='status-badge status-new'><?= $log['context'] ?></span>
+                                </td>
+                                <td><?= htmlspecialchars($log['message']) ?></td>
+                                <td style='font-family: monospace; font-size: 12px;'>
+                                    <?= htmlspecialchars($log['ip']) ?>
+                                </td>
+                            </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
             </div>
         </div>
     </div>
 
     <script>
+        function filterLogs(context) {
+            const rows = document.querySelectorAll('#logsTable tbody tr');
+            rows.forEach(row => {
+                const visible = !context || row.dataset.context === context;
+                row.style.display = visible ? '' : 'none';
+            });
+        }
+
         function refreshLogs() {
             showNotification('Логи обновлены', 'info');
             setTimeout(() => location.reload(), 500);
@@ -3167,24 +3476,150 @@ function renderLogsSection($data) {
     <?php
 }
 
+// === УПРАВЛЕНИЕ СТРАНИЦАМИ ===
+function renderPagesSection($data) {
+    $pages = getStaticPages();
+    ?>
+    <div class='d-flex justify-content-between align-items-center mb-4'>
+        <button class='btn btn-success btn-lg' onclick='openModal("addPageModal")'>
+            <i class='fas fa-plus'></i>
+            Добавить страницу
+        </button>
+    </div>
+
+    <div class='content-card'>
+        <div class='table-container'>
+            <table class='table'>
+                <thead>
+                    <tr>
+                        <th>Название</th>
+                        <th>URL</th>
+                        <th>Статус</th>
+                        <th>Обновлена</th>
+                        <th>Действия</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <?php foreach ($pages as $page): ?>
+                        <tr>
+                            <td>
+                                <div style='font-weight: 600;'><?= htmlspecialchars($page['title']) ?></div>
+                                <div style='font-size: 12px; color: var(--text-muted);'>ID: <?= $page['id'] ?></div>
+                            </td>
+                            <td>
+                                <code>?page=<?= $page['slug'] ?></code>
+                            </td>
+                            <td>
+                                <span class='status-badge <?= $page['is_published'] ? 'status-active' : 'status-inactive' ?>'>
+                                    <?= $page['is_published'] ? 'Опубликована' : 'Скрыта' ?>
+                                </span>
+                            </td>
+                            <td>
+                                <?= formatDateRussian($page['updated_at']) ?>
+                            </td>
+                            <td>
+                                <div class='d-flex gap-1'>
+                                    <button class='btn btn-primary btn-sm' onclick='editPage(<?= $page['id'] ?>)'>
+                                        <i class='fas fa-edit'></i>
+                                    </button>
+                                    <a href='index.php?page=<?= $page['slug'] ?>' class='btn btn-outline btn-sm' target='_blank'>
+                                        <i class='fas fa-eye'></i>
+                                    </a>
+                                </div>
+                            </td>
+                        </tr>
+                    <?php endforeach; ?>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Модальное окно добавления страницы -->
+    <div class='modal' id='addPageModal'>
+        <div class='modal-dialog' style='max-width: 800px;'>
+            <form method='post'>
+                <input type='hidden' name='action' value='create_page'>
+                <div class='modal-header'>
+                    <h3 class='modal-title'>Добавить страницу</h3>
+                    <button type='button' class='modal-close' onclick='closeModal("addPageModal")'>&times;</button>
+                </div>
+                <div class='modal-body'>
+                    <div class='form-row'>
+                        <div class='form-group'>
+                            <label class='form-label'>Название страницы *</label>
+                            <input type='text' name='title' class='form-input' required>
+                        </div>
+                        <div class='form-group'>
+                            <label class='form-label'>URL (slug)</label>
+                            <input type='text' name='slug' class='form-input' placeholder='Оставьте пустым для автогенерации'>
+                        </div>
+                    </div>
+
+                    <div class='form-group'>
+                        <label class='form-label'>Содержимое *</label>
+                        <textarea name='content' class='form-textarea' rows='10' required></textarea>
+                    </div>
+
+                    <div class='form-row'>
+                        <div class='form-group'>
+                            <label class='form-label'>SEO заголовок</label>
+                            <input type='text' name='meta_title' class='form-input'>
+                        </div>
+                        <div class='form-group'>
+                            <label class='form-label'>SEO описание</label>
+                            <input type='text' name='meta_description' class='form-input'>
+                        </div>
+                    </div>
+
+                    <div class='form-group'>
+                        <label>
+                            <input type='checkbox' name='is_published' checked>
+                            Опубликовать страницу
+                        </label>
+                    </div>
+                </div>
+                <div class='modal-footer'>
+                    <button type='button' class='btn btn-outline' onclick='closeModal("addPageModal")'>Отмена</button>
+                    <button type='submit' class='btn btn-success'>
+                        <i class='fas fa-save'></i>
+                        Сохранить
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        function editPage(id) {
+            showNotification('Редактирование страницы #' + id, 'info');
+        }
+    </script>
+    <?php
+}
+
 // === СТРАНИЦА ПО УМОЛЧАНИЮ ===
 function renderDefaultSection($section, $data) {
     ?>
-    <div class="content-card" style="text-align: center; max-width: 600px; margin: 0 auto;">
-        <div class="content-card-body">
-            <div style="font-size: 64px; margin-bottom: 24px; opacity: 0.6;">⚙️</div>
-            <h3>Раздел "<?= ucfirst($section) ?>" в разработке</h3>
-            <p style="margin: 20px 0; color: var(--text-secondary); line-height: 1.6;">
+    <div class='content-card' style='text-align: center; max-width: 600px; margin: 0 auto;'>
+        <div class='content-card-body'>
+            <div style='font-size: 64px; margin-bottom: 24px; opacity: 0.6;'>⚙️</div>
+            <h3>Раздел '<?= ucfirst($section) ?>' в разработке</h3>
+            <p style='margin: 20px 0; color: var(--text-secondary); line-height: 1.6;'>
                 Этот раздел будет доступен в следующих версиях админ-панели.<br>
                 Функционал постепенно расширяется.
             </p>
-            <a href="admin.php" class="btn btn-primary">
-                <i class="fas fa-arrow-left"></i>
+            <a href='admin.php' class='btn btn-primary'>
+                <i class='fas fa-arrow-left'></i>
                 На главную
             </a>
         </div>
     </div>
     <?php
+}
+
+// Логируем загрузку админки
+if (isset($_SESSION['admin_logged_in'])) {
+    logAdminAction('SYSTEM', 'Администратор загрузил раздел: ' . $section);
 }
 
 ?>
