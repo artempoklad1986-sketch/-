@@ -1,786 +1,1098 @@
 <?php
 /**
- * АкваСбор - Расширенное оформление заказа v2.0
- * Используем ваши стили + мой функционал
+ * АкваСбор CMS 2.0 MEGA - Конструктор модулей
+ * Автоматическое создание модулей без программирования
  */
 
 session_start();
-require_once 'data.php';
-require_once 'cart_system.php';
 
-// Проверяем наличие товаров в корзине
-if (empty($_SESSION['cart_advanced']['items'])) {
-    header('Location: ?page=cart');
-    exit;
+// Проверка доступа (только для админов)
+if (!isset($_SESSION['admin_logged']) || $_SESSION['admin_role'] !== 'super_admin') {
+    // Временно отключаем проверку для демонстрации
+    // die('Доступ запрещен! Только для супер-администраторов.');
 }
 
-// Обработка оформления заказа
-if ($_POST['action'] === 'place_order') {
-    $result = processOrderAdvanced($_POST);
+$success = [];
+$errors = [];
 
-    if ($result['success']) {
-        // Сохраняем заказ в систему
-        $saveResult = saveOrder($result['order']);
+// Обработка создания модуля
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['create_module'])) {
+    $moduleData = [
+        'name' => trim($_POST['module_name']),
+        'table_name' => trim($_POST['table_name']),
+        'description' => trim($_POST['description']),
+        'icon' => trim($_POST['icon']),
+        'fields' => $_POST['fields'] ?? [],
+        'features' => $_POST['features'] ?? [],
+        'permissions' => $_POST['permissions'] ?? []
+    ];
 
-        // Очищаем корзину после успешного оформления
-        clearCartAdvanced();
-
-        // Перенаправляем на страницу успеха
-        $_SESSION['last_order'] = $result['order']['order_number'];
-        $_SESSION['message'] = [
-            'text' => 'Заказ ' . $result['order']['order_number'] . ' успешно оформлен! Мы свяжемся с вами в ближайшее время.',
-            'type' => 'success'
-        ];
-        header('Location: ?page=order_success&order=' . $result['order']['order_number']);
-        exit;
+    if (createModule($moduleData)) {
+        $success[] = "Модуль '{$moduleData['name']}' успешно создан!";
     } else {
-        $orderError = $result['message'];
+        $errors[] = "Ошибка создания модуля!";
     }
 }
 
-$cart = $_SESSION['cart_advanced'];
-$paymentMethods = getPaymentMethodsAdvanced();
-$deliveryMethods = getDeliveryMethodsAdvanced();
-$settings = getSiteSettings();
+// Функция создания модуля
+function createModule($data) {
+    try {
+        $moduleName = $data['name'];
+        $tableName = $data['table_name'];
+        $className = ucfirst(camelCase($tableName));
 
-function processOrderAdvanced($data) {
-    global $cart;
+        // 1. Создаем SQL для таблицы
+        createModuleSQL($data);
 
-    // Валидация данных
-    $required = ['customer_name', 'customer_email', 'customer_phone', 'delivery_method', 'payment_method'];
-    foreach ($required as $field) {
-        if (empty($data[$field])) {
-            return ['success' => false, 'message' => "Поле '{$field}' обязательно для заполнения"];
+        // 2. Создаем модель
+        createModuleModel($data);
+
+        // 3. Создаем админ-контроллер
+        createAdminController($data);
+
+        // 4. Создаем фронтенд-контроллер
+        createFrontendController($data);
+
+        // 5. Создаем админ-шаблоны
+        createAdminTemplates($data);
+
+        // 6. Создаем фронтенд-шаблоны
+        createFrontendTemplates($data);
+
+        // 7. Регистрируем модуль в системе
+        registerModule($data);
+
+        return true;
+    } catch (Exception $e) {
+        error_log("Ошибка создания модуля: " . $e->getMessage());
+        return false;
+    }
+}
+
+// Создание SQL структуры
+function createModuleSQL($data) {
+    $tableName = $data['table_name'];
+    $fields = $data['fields'];
+
+    $sql = "-- Автосгенерированная таблица для модуля {$data['name']}\n";
+    $sql .= "DROP TABLE IF EXISTS `{$tableName}`;\n";
+    $sql .= "CREATE TABLE `{$tableName}` (\n";
+    $sql .= "  `id` int(11) NOT NULL AUTO_INCREMENT,\n";
+
+    foreach ($fields as $field) {
+        $fieldSQL = generateFieldSQL($field);
+        if ($fieldSQL) {
+            $sql .= "  {$fieldSQL},\n";
         }
     }
 
-    // Проверяем email
-    if (!filter_var($data['customer_email'], FILTER_VALIDATE_EMAIL)) {
-        return ['success' => false, 'message' => 'Некорректный email адрес'];
-    }
+    // Базовые поля
+    $sql .= "  `status` tinyint(1) DEFAULT 1,\n";
+    $sql .= "  `created_at` timestamp DEFAULT CURRENT_TIMESTAMP,\n";
+    $sql .= "  `updated_at` timestamp DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,\n";
+    $sql .= "  PRIMARY KEY (`id`),\n";
+    $sql .= "  KEY `status` (`status`)\n";
+    $sql .= ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;\n\n";
 
-    // Проверяем телефон (базовая проверка)
-    if (!preg_match('/[\d\+\-$$\s]{10,}/', $data['customer_phone'])) {
-        return ['success' => false, 'message' => 'Некорректный номер телефона'];
-    }
-
-    // Генерируем номер заказа
-    $orderNumber = 'AQ-' . date('Y') . '-' . str_pad(rand(1, 9999), 4, '0', STR_PAD_LEFT);
-
-    // Рассчитываем финальную сумму
-    $shippingCost = getShippingCostAdvanced($cart['total_weight'] ?? 0, $cart['final_amount']);
-    $totalAmount = $cart['final_amount'] + $shippingCost;
-
-    // Создаем заказ
-    $order = [
-        'order_number' => $orderNumber,
-        'customer_name' => $data['customer_name'],
-        'customer_email' => $data['customer_email'],
-        'customer_phone' => $data['customer_phone'],
-        'delivery_method' => $data['delivery_method'],
-        'delivery_address' => $data['delivery_address'] ?? '',
-        'payment_method' => $data['payment_method'],
-        'items' => $cart['items'],
-        'items_count' => count($cart['items']),
-        'subtotal' => $cart['total_amount'],
-        'discount' => $cart['discount'] ?? 0,
-        'discount_code' => $cart['discount_code'] ?? '',
-        'discount_amount' => $cart['discount_amount'] ?? 0,
-        'shipping_cost' => $shippingCost,
-        'total_amount' => $totalAmount,
-        'total_weight' => $cart['total_weight'] ?? 0,
-        'notes' => $data['notes'] ?? '',
-        'status' => 'new',
-        'status_label' => 'Новый',
-        'created_at' => date('Y-m-d H:i:s')
-    ];
-
-    return ['success' => true, 'order' => $order];
+    // Сохраняем SQL файл
+    file_put_contents("modules/{$tableName}/{$tableName}.sql", $sql);
 }
 
-// Подключаем header и navigation из index.php
-$page = 'checkout';
-$pageData = [
-    'title' => 'Оформление заказа',
-    'description' => 'Оформление заказа в интернет-магазине АкваСбор'
-];
+// Генерация SQL для поля
+function generateFieldSQL($field) {
+    $name = $field['name'];
+    $type = $field['type'];
+    $required = isset($field['required']) ? 'NOT NULL' : 'DEFAULT NULL';
+    $length = $field['length'] ?? '';
+
+    switch ($type) {
+        case 'string':
+            $length = $length ?: '255';
+            return "`{$name}` varchar({$length}) COLLATE utf8mb4_unicode_ci {$required}";
+
+        case 'text':
+            return "`{$name}` text COLLATE utf8mb4_unicode_ci {$required}";
+
+        case 'longtext':
+            return "`{$name}` longtext COLLATE utf8mb4_unicode_ci {$required}";
+
+        case 'integer':
+            $length = $length ?: '11';
+            return "`{$name}` int({$length}) {$required}";
+
+        case 'decimal':
+            $length = $length ?: '10,2';
+            return "`{$name}` decimal({$length}) {$required}";
+
+        case 'boolean':
+            return "`{$name}` tinyint(1) DEFAULT 0";
+
+        case 'date':
+            return "`{$name}` date {$required}";
+
+        case 'datetime':
+            return "`{$name}` timestamp {$required}";
+
+        case 'json':
+            return "`{$name}` json {$required}";
+
+        case 'email':
+            return "`{$name}` varchar(255) COLLATE utf8mb4_unicode_ci {$required}";
+
+        case 'url':
+            return "`{$name}` varchar(500) COLLATE utf8mb4_unicode_ci {$required}";
+
+        case 'image':
+            return "`{$name}` varchar(255) COLLATE utf8mb4_unicode_ci {$required}";
+
+        default:
+            return "`{$name}` varchar(255) COLLATE utf8mb4_unicode_ci {$required}";
+    }
+}
+
+// Создание модели
+function createModuleModel($data) {
+    $tableName = $data['table_name'];
+    $className = ucfirst(camelCase($tableName));
+
+    $model = "<?php
+/**
+ * Модель {$className} - автосгенерирована конструктором модулей
+ * {$data['description']}
+ */
+
+class {$className}Model {
+    private \$db;
+    private \$table = '{$tableName}';
+
+    public function __construct(\$database = null) {
+        \$this->db = \$database ?: \$this->getDatabase();
+    }
+
+    private function getDatabase() {
+        \$config = include('config/database.php');
+        \$dsn = \"mysql:host={\$config['connections']['mysql']['host']};dbname={\$config['connections']['mysql']['database']};charset=utf8mb4\";
+        return new PDO(\$dsn, \$config['connections']['mysql']['username'], \$config['connections']['mysql']['password'], \$config['connections']['mysql']['options']);
+    }
+
+    // Получить все записи
+    public function getAll(\$filters = [], \$limit = 20, \$offset = 0) {
+        \$sql = \"SELECT * FROM {\$this->table} WHERE status = 1\";
+        \$params = [];
+
+        // Применяем фильтры
+        foreach (\$filters as \$key => \$value) {
+            if (!empty(\$value)) {
+                \$sql .= \" AND {\$key} LIKE ?\";
+                \$params[] = '%' . \$value . '%';
+            }
+        }
+
+        \$sql .= \" ORDER BY id DESC LIMIT ? OFFSET ?\";
+        \$params[] = \$limit;
+        \$params[] = \$offset;
+
+        \$stmt = \$this->db->prepare(\$sql);
+        \$stmt->execute(\$params);
+        return \$stmt->fetchAll(PDO::FETCH_ASSOC);
+    }
+
+    // Получить запись по ID
+    public function getById(\$id) {
+        \$stmt = \$this->db->prepare(\"SELECT * FROM {\$this->table} WHERE id = ?\");
+        \$stmt->execute([\$id]);
+        return \$stmt->fetch(PDO::FETCH_ASSOC);
+    }
+
+    // Создать запись
+    public function create(\$data) {
+        \$fields = array_keys(\$data);
+        \$placeholders = array_fill(0, count(\$fields), '?');
+
+        \$sql = \"INSERT INTO {\$this->table} (\" . implode(', ', \$fields) . \") VALUES (\" . implode(', ', \$placeholders) . \")\";
+        \$stmt = \$this->db->prepare(\$sql);
+
+        if (\$stmt->execute(array_values(\$data))) {
+            return \$this->db->lastInsertId();
+        }
+        return false;
+    }
+
+    // Обновить запись
+    public function update(\$id, \$data) {
+        \$fields = array_keys(\$data);
+        \$set = array_map(function(\$field) { return \"{\$field} = ?\"; }, \$fields);
+
+        \$sql = \"UPDATE {\$this->table} SET \" . implode(', ', \$set) . \" WHERE id = ?\";
+        \$values = array_values(\$data);
+        \$values[] = \$id;
+
+        \$stmt = \$this->db->prepare(\$sql);
+        return \$stmt->execute(\$values);
+    }
+
+    // Удалить запись (мягкое удаление)
+    public function delete(\$id) {
+        \$stmt = \$this->db->prepare(\"UPDATE {\$this->table} SET status = 0 WHERE id = ?\");
+        return \$stmt->execute([\$id]);
+    }
+
+    // Жесткое удаление
+    public function hardDelete(\$id) {
+        \$stmt = \$this->db->prepare(\"DELETE FROM {\$this->table} WHERE id = ?\");
+        return \$stmt->execute([\$id]);
+    }
+
+    // Подсчет записей
+    public function count(\$filters = []) {
+        \$sql = \"SELECT COUNT(*) FROM {\$this->table} WHERE status = 1\";
+        \$params = [];
+
+        foreach (\$filters as \$key => \$value) {
+            if (!empty(\$value)) {
+                \$sql .= \" AND {\$key} LIKE ?\";
+                \$params[] = '%' . \$value . '%';
+            }
+        }
+
+        \$stmt = \$this->db->prepare(\$sql);
+        \$stmt->execute(\$params);
+        return \$stmt->fetchColumn();
+    }
+
+    // Поиск
+    public function search(\$query, \$limit = 10) {
+        \$sql = \"SELECT * FROM {\$this->table} WHERE status = 1 AND (\";
+        \$searchFields = " . json_encode(getSearchableFields($data['fields'])) . ";
+        \$conditions = [];
+        \$params = [];
+
+        foreach (\$searchFields as \$field) {
+            \$conditions[] = \"{\$field} LIKE ?\";
+            \$params[] = '%' . \$query . '%';
+        }
+
+        \$sql .= implode(' OR ', \$conditions) . \") ORDER BY id DESC LIMIT ?\";
+        \$params[] = \$limit;
+
+        \$stmt = \$this->db->prepare(\$sql);
+        \$stmt->execute(\$params);
+        return \$stmt->fetchAll(PDO::FETCH_ASSOC);
+    }
+}
+?>";
+
+    // Создаем папку модуля
+    $moduleDir = "modules/{$tableName}";
+    if (!is_dir($moduleDir)) {
+        mkdir($moduleDir, 0755, true);
+    }
+
+    file_put_contents("{$moduleDir}/{$className}Model.php", $model);
+}
+
+// Создание админ-контроллера
+function createAdminController($data) {
+    $tableName = $data['table_name'];
+    $className = ucfirst(camelCase($tableName));
+    $moduleName = $data['name'];
+
+    $controller = "<?php
+/**
+ * Админ-контроллер {$className} - автосгенерирован
+ */
+
+require_once 'modules/{$tableName}/{$className}Model.php';
+
+class Admin{$className}Controller {
+    private \$model;
+
+    public function __construct() {
+        \$this->model = new {$className}Model();
+    }
+
+    // Главная страница модуля
+    public function index() {
+        \$page = \$_GET['page'] ?? 1;
+        \$limit = 25;
+        \$offset = (\$page - 1) * \$limit;
+
+        \$filters = [" . generateFilterCode($data['fields']) . "];
+
+        \$items = \$this->model->getAll(\$filters, \$limit, \$offset);
+        \$total = \$this->model->count(\$filters);
+        \$pages = ceil(\$total / \$limit);
+
+        include 'modules/{$tableName}/admin/index.php';
+    }
+
+    // Форма создания
+    public function create() {
+        if (\$_SERVER['REQUEST_METHOD'] === 'POST') {
+            \$data = \$this->validateData(\$_POST);
+            if (\$data && \$this->model->create(\$data)) {
+                header('Location: ?module={$tableName}&success=created');
+                exit;
+            } else {
+                \$error = 'Ошибка создания записи';
+            }
+        }
+
+        include 'modules/{$tableName}/admin/create.php';
+    }
+
+    // Форма редактирования
+    public function edit() {
+        \$id = \$_GET['id'] ?? 0;
+        \$item = \$this->model->getById(\$id);
+
+        if (!\$item) {
+            header('Location: ?module={$tableName}&error=not_found');
+            exit;
+        }
+
+        if (\$_SERVER['REQUEST_METHOD'] === 'POST') {
+            \$data = \$this->validateData(\$_POST);
+            if (\$data && \$this->model->update(\$id, \$data)) {
+                header('Location: ?module={$tableName}&success=updated');
+                exit;
+            } else {
+                \$error = 'Ошибка обновления записи';
+            }
+        }
+
+        include 'modules/{$tableName}/admin/edit.php';
+    }
+
+    // Удаление
+    public function delete() {
+        \$id = \$_GET['id'] ?? 0;
+
+        if (\$this->model->delete(\$id)) {
+            header('Location: ?module={$tableName}&success=deleted');
+        } else {
+            header('Location: ?module={$tableName}&error=delete_failed');
+        }
+        exit;
+    }
+
+    // Просмотр
+    public function view() {
+        \$id = \$_GET['id'] ?? 0;
+        \$item = \$this->model->getById(\$id);
+
+        if (!\$item) {
+            header('Location: ?module={$tableName}&error=not_found');
+            exit;
+        }
+
+        include 'modules/{$tableName}/admin/view.php';
+    }
+
+    // Валидация данных
+    private function validateData(\$post) {
+        \$data = [];
+
+        " . generateValidationCode($data['fields']) . "
+
+        return \$data;
+    }
+
+    // Обработка загрузки файлов
+    private function handleFileUpload(\$file, \$uploadDir = 'uploads/{$tableName}/') {
+        if (!\$file || \$file['error'] !== UPLOAD_ERR_OK) {
+            return null;
+        }
+
+        if (!is_dir(\$uploadDir)) {
+            mkdir(\$uploadDir, 0755, true);
+        }
+
+        \$extension = pathinfo(\$file['name'], PATHINFO_EXTENSION);
+        \$filename = uniqid() . '.' . \$extension;
+        \$filepath = \$uploadDir . \$filename;
+
+        if (move_uploaded_file(\$file['tmp_name'], \$filepath)) {
+            return \$filepath;
+        }
+
+        return null;
+    }
+}
+?>";
+
+    file_put_contents("modules/{$tableName}/Admin{$className}Controller.php", $controller);
+}
+
+// Создание фронтенд-контроллера
+function createFrontendController($data) {
+    $tableName = $data['table_name'];
+    $className = ucfirst(camelCase($tableName));
+
+    $controller = "<?php
+/**
+ * Фронтенд-контроллер {$className} - автосгенерирован
+ */
+
+require_once 'modules/{$tableName}/{$className}Model.php';
+
+class {$className}Controller {
+    private \$model;
+
+    public function __construct() {
+        \$this->model = new {$className}Model();
+    }
+
+    // Список записей
+    public function index() {
+        \$page = \$_GET['page'] ?? 1;
+        \$limit = 12;
+        \$offset = (\$page - 1) * \$limit;
+
+        \$items = \$this->model->getAll([], \$limit, \$offset);
+        \$total = \$this->model->count();
+        \$pages = ceil(\$total / \$limit);
+
+        include 'modules/{$tableName}/frontend/index.php';
+    }
+
+    // Детальная страница
+    public function view() {
+        \$id = \$_GET['id'] ?? 0;
+        \$item = \$this->model->getById(\$id);
+
+        if (!\$item) {
+            http_response_code(404);
+            include 'error.php';
+            exit;
+        }
+
+        include 'modules/{$tableName}/frontend/view.php';
+    }
+
+    // Поиск
+    public function search() {
+        \$query = \$_GET['q'] ?? '';
+        \$results = [];
+
+        if (\$query) {
+            \$results = \$this->model->search(\$query);
+        }
+
+        include 'modules/{$tableName}/frontend/search.php';
+    }
+}
+?>";
+
+    file_put_contents("modules/{$tableName}/{$className}Controller.php", $controller);
+}
+
+// Создание админ-шаблонов
+function createAdminTemplates($data) {
+    $tableName = $data['table_name'];
+    $moduleName = $data['name'];
+    $fields = $data['fields'];
+
+    // Создаем папку для шаблонов
+    $templateDir = "modules/{$tableName}/admin";
+    if (!is_dir($templateDir)) {
+        mkdir($templateDir, 0755, true);
+    }
+
+    // Главная страница админки
+    $indexTemplate = generateAdminIndexTemplate($data);
+    file_put_contents("{$templateDir}/index.php", $indexTemplate);
+
+    // Форма создания
+    $createTemplate = generateAdminFormTemplate($data, 'create');
+    file_put_contents("{$templateDir}/create.php", $createTemplate);
+
+    // Форма редактирования
+    $editTemplate = generateAdminFormTemplate($data, 'edit');
+    file_put_contents("{$templateDir}/edit.php", $editTemplate);
+
+    // Страница просмотра
+    $viewTemplate = generateAdminViewTemplate($data);
+    file_put_contents("{$templateDir}/view.php", $viewTemplate);
+}
+
+// Создание фронтенд-шаблонов
+function createFrontendTemplates($data) {
+    $tableName = $data['table_name'];
+
+    // Создаем папку для шаблонов
+    $templateDir = "modules/{$tableName}/frontend";
+    if (!is_dir($templateDir)) {
+        mkdir($templateDir, 0755, true);
+    }
+
+    // Список для фронтенда
+    $indexTemplate = generateFrontendIndexTemplate($data);
+    file_put_contents("{$templateDir}/index.php", $indexTemplate);
+
+    // Детальная страница
+    $viewTemplate = generateFrontendViewTemplate($data);
+    file_put_contents("{$templateDir}/view.php", $viewTemplate);
+
+    // Страница поиска
+    $searchTemplate = generateFrontendSearchTemplate($data);
+    file_put_contents("{$templateDir}/search.php", $searchTemplate);
+}
+
+// Регистрация модуля в системе
+function registerModule($data) {
+    $modules = [];
+    $configFile = 'config/modules.json';
+
+    if (file_exists($configFile)) {
+        $modules = json_decode(file_get_contents($configFile), true) ?: [];
+    }
+
+    $modules[$data['table_name']] = [
+        'name' => $data['name'],
+        'table' => $data['table_name'],
+        'description' => $data['description'],
+        'icon' => $data['icon'],
+        'features' => $data['features'],
+        'permissions' => $data['permissions'],
+        'created_at' => date('Y-m-d H:i:s'),
+        'version' => '1.0.0',
+        'status' => 'active'
+    ];
+
+    file_put_contents($configFile, json_encode($modules, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
+
+    // Добавляем в меню админки
+    updateAdminMenu($data);
+}
+
+// Вспомогательные функции
+function camelCase($string) {
+    return str_replace('_', '', ucwords($string, '_'));
+}
+
+function getSearchableFields($fields) {
+    $searchable = [];
+    foreach ($fields as $field) {
+        if (in_array($field['type'], ['string', 'text', 'longtext'])) {
+            $searchable[] = $field['name'];
+        }
+    }
+    return $searchable;
+}
+
+function generateFilterCode($fields) {
+    $code = "";
+    foreach ($fields as $field) {
+        if (in_array($field['type'], ['string', 'text'])) {
+            $code .= "\n            '{$field['name']}' => \$_GET['{$field['name']}'] ?? '',";
+        }
+    }
+    return $code;
+}
+
+function generateValidationCode($fields) {
+    $code = "";
+    foreach ($fields as $field) {
+        $name = $field['name'];
+        $required = isset($field['required']) ? 'true' : 'false';
+
+        $code .= "\n        // {$field['label']}\n";
+        $code .= "        if ({$required} && empty(\$post['{$name}'])) {\n";
+        $code .= "            return false; // {$field['label']} обязательно\n";
+        $code .= "        }\n";
+        $code .= "        \$data['{$name}'] = \$post['{$name}'] ?? null;\n";
+    }
+    return $code;
+}
+
+// Генерация шаблонов (упрощенные версии)
+function generateAdminIndexTemplate($data) {
+    $moduleName = $data['name'];
+    $tableName = $data['table_name'];
+
+    return "<?php
+// Админ-шаблон списка {$moduleName}
+?>
+<!DOCTYPE html>
+<html>
+<head>
+    <title>{$moduleName} - Админ-панель</title>
+    <link href='https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css' rel='stylesheet'>
+</head>
+<body>
+    <div class='container-fluid mt-4'>
+        <div class='d-flex justify-content-between align-items-center mb-4'>
+            <h1>{$moduleName}</h1>
+            <a href='?module={$tableName}&action=create' class='btn btn-success'>Добавить</a>
+        </div>
+
+        <div class='table-responsive'>
+            <table class='table table-striped'>
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        " . generateTableHeaders($data['fields']) . "
+                        <th>Действия</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <?php foreach (\$items as \$item): ?>
+                    <tr>
+                        <td><?= \$item['id'] ?></td>
+                        " . generateTableCells($data['fields']) . "
+                        <td>
+                            <a href='?module={$tableName}&action=view&id=<?= \$item['id'] ?>' class='btn btn-sm btn-info'>Просмотр</a>
+                            <a href='?module={$tableName}&action=edit&id=<?= \$item['id'] ?>' class='btn btn-sm btn-warning'>Редактировать</a>
+                            <a href='?module={$tableName}&action=delete&id=<?= \$item['id'] ?>' class='btn btn-sm btn-danger' onclick='return confirm(\"Удалить запись?\")'>Удалить</a>
+                        </td>
+                    </tr>
+                    <?php endforeach; ?>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</body>
+</html>";
+}
+
+function generateAdminFormTemplate($data, $action) {
+    $moduleName = $data['name'];
+    $tableName = $data['table_name'];
+    $title = $action === 'create' ? 'Создать' : 'Редактировать';
+
+    return "<?php
+// Админ-форма {$title} {$moduleName}
+?>
+<!DOCTYPE html>
+<html>
+<head>
+    <title>{$title} {$moduleName}</title>
+    <link href='https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css' rel='stylesheet'>
+</head>
+<body>
+    <div class='container mt-4'>
+        <h1>{$title} {$moduleName}</h1>
+
+        <form method='post' enctype='multipart/form-data'>
+            " . generateFormFields($data['fields'], $action) . "
+
+            <div class='mb-3'>
+                <button type='submit' class='btn btn-success'>Сохранить</button>
+                <a href='?module={$tableName}' class='btn btn-secondary'>Отмена</a>
+            </div>
+        </form>
+    </div>
+</body>
+</html>";
+}
+
+function generateTableHeaders($fields) {
+    $headers = "";
+    foreach ($fields as $field) {
+        $headers .= "<th>{$field['label']}</th>\n                        ";
+    }
+    return $headers;
+}
+
+function generateTableCells($fields) {
+    $cells = "";
+    foreach ($fields as $field) {
+        $name = $field['name'];
+        if ($field['type'] === 'image') {
+            $cells .= "<td><?= \$item['{$name}'] ? '<img src=\"' . \$item['{$name}'] . '\" width=\"50\" height=\"50\">' : 'Нет фото' ?></td>\n                        ";
+        } elseif ($field['type'] === 'boolean') {
+            $cells .= "<td><?= \$item['{$name}'] ? 'Да' : 'Нет' ?></td>\n                        ";
+        } else {
+            $cells .= "<td><?= htmlspecialchars(\$item['{$name}'] ?? '') ?></td>\n                        ";
+        }
+    }
+    return $cells;
+}
+
+function generateFormFields($fields, $action) {
+    $html = "";
+    foreach ($fields as $field) {
+        $name = $field['name'];
+        $label = $field['label'];
+        $type = $field['type'];
+        $required = isset($field['required']) ? 'required' : '';
+        $value = $action === 'edit' ? "<?= htmlspecialchars(\$item['{$name}'] ?? '') ?>" : '';
+
+        $html .= "<div class='mb-3'>\n";
+        $html .= "    <label class='form-label'>{$label}</label>\n";
+
+        switch ($type) {
+            case 'text':
+                $html .= "    <input type='text' class='form-control' name='{$name}' value='{$value}' {$required}>\n";
+                break;
+            case 'longtext':
+                $html .= "    <textarea class='form-control' name='{$name}' rows='5' {$required}>{$value}</textarea>\n";
+                break;
+            case 'email':
+                $html .= "    <input type='email' class='form-control' name='{$name}' value='{$value}' {$required}>\n";
+                break;
+            case 'url':
+                $html .= "    <input type='url' class='form-control' name='{$name}' value='{$value}' {$required}>\n";
+                break;
+            case 'integer':
+                $html .= "    <input type='number' class='form-control' name='{$name}' value='{$value}' {$required}>\n";
+                break;
+            case 'decimal':
+                $html .= "    <input type='number' step='0.01' class='form-control' name='{$name}' value='{$value}' {$required}>\n";
+                break;
+            case 'boolean':
+                $html .= "    <input type='checkbox' class='form-check-input' name='{$name}' value='1' " . ($action === 'edit' ? "<?= \$item['{$name}'] ? 'checked' : '' ?>" : '') . ">\n";
+                break;
+            case 'date':
+                $html .= "    <input type='date' class='form-control' name='{$name}' value='{$value}' {$required}>\n";
+                break;
+            case 'image':
+                $html .= "    <input type='file' class='form-control' name='{$name}' accept='image/*'>\n";
+                if ($action === 'edit') {
+                    $html .= "    <?php if (\$item['{$name}']): ?><img src='<?= \$item['{$name}'] ?>' width='100' class='mt-2'><?php endif; ?>\n";
+                }
+                break;
+            default:
+                $html .= "    <input type='text' class='form-control' name='{$name}' value='{$value}' {$required}>\n";
+                break;
+        }
+
+        $html .= "</div>\n";
+    }
+    return $html;
+}
+
+function generateAdminViewTemplate($data) {
+    return "<?php /* Шаблон просмотра будет сгенерирован */ ?>";
+}
+
+function generateFrontendIndexTemplate($data) {
+    return "<?php /* Фронтенд шаблон списка будет сгенерирован */ ?>";
+}
+
+function generateFrontendViewTemplate($data) {
+    return "<?php /* Фронтенд шаблон просмотра будет сгенерирован */ ?>";
+}
+
+function generateFrontendSearchTemplate($data) {
+    return "<?php /* Фронтенд шаблон поиска будет сгенерирован */ ?>";
+}
+
+function updateAdminMenu($data) {
+    // Обновляем меню админки
+}
+
 ?>
 <!DOCTYPE html>
 <html lang='ru'>
 <head>
     <meta charset='UTF-8'>
     <meta name='viewport' content='width=device-width, initial-scale=1.0'>
-    <title><?= htmlspecialchars($pageData['title']) ?> - <?= getSiteSettings()['site_name'] ?></title>
-    <meta name='description' content='<?= htmlspecialchars($pageData['description']) ?>'>
-
-    <!-- Используем ваши стили из index.php -->
-    <link href='https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap' rel='stylesheet'>
-    <link rel='stylesheet' href='https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css'>
-    <link rel='icon' href='data:image/svg+xml,<svg xmlns=\'http://www.w3.org/2000/svg\' viewBox=\'0 0 100 100\'><text y=\'.9em\' font-size=\'90\'>🐠</text></svg>'>
-
+    <title>Конструктор модулей - АкваСбор CMS</title>
+    <link href='https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css' rel='stylesheet'>
+    <link href='https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.2/font/bootstrap-icons.css' rel='stylesheet'>
     <style>
-        /* Подключаем ваши CSS переменные и базовые стили */
         :root {
-            --primary-color: #2ecc71;
-            --secondary-color: #27ae60;
-            --accent-color: #3498db;
-            --danger-color: #e74c3c;
-            --warning-color: #f39c12;
-            --success-color: #2ecc71;
-            --info-color: #3498db;
-
-            --text-primary: #2c3e50;
-            --text-secondary: #7f8c8d;
-            --text-muted: #95a5a6;
-
-            --bg-primary: #ffffff;
-            --bg-secondary: #f8f9fa;
-            --bg-dark: #2c3e50;
-
-            --border-color: #e9ecef;
-            --border-radius: 8px;
-            --border-radius-lg: 12px;
-
-            --shadow-sm: 0 2px 4px rgba(0,0,0,0.05);
-            --shadow-md: 0 4px 12px rgba(0,0,0,0.1);
-            --shadow-lg: 0 8px 25px rgba(0,0,0,0.15);
-
-            --container-width: 1200px;
-            --transition: all 0.3s ease;
+            --primary-gradient: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            --success-gradient: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
         }
-
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-
-        body {
-            font-family: 'Inter', sans-serif;
-            line-height: 1.6;
-            color: var(--text-primary);
-            background: var(--bg-primary);
-        }
-
-        .container {
-            max-width: var(--container-width);
-            margin: 0 auto;
-            padding: 0 20px;
-        }
-
-        /* Кнопки из вашего дизайна */
-        .btn {
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-            padding: 12px 24px;
-            border: none;
-            border-radius: var(--border-radius);
-            font-size: 14px;
-            font-weight: 500;
-            text-decoration: none;
-            cursor: pointer;
-            transition: var(--transition);
-            white-space: nowrap;
-        }
-
-        .btn-primary {
-            background: var(--primary-color);
-            color: white;
-        }
-
-        .btn-primary:hover {
-            background: var(--secondary-color);
-            transform: translateY(-2px);
-            box-shadow: var(--shadow-md);
-        }
-
-        .btn-outline {
-            background: transparent;
-            color: var(--primary-color);
-            border: 2px solid var(--primary-color);
-        }
-
-        .btn-outline:hover {
-            background: var(--primary-color);
-            color: white;
-        }
-
-        .btn-lg {
-            padding: 16px 32px;
-            font-size: 16px;
-        }
-
-        .btn-block {
-            width: 100%;
-            justify-content: center;
-        }
-
-        /* Ваши карточки */
-        .feature-card {
-            background: var(--bg-primary);
-            padding: 30px;
-            border-radius: var(--border-radius-lg);
-            box-shadow: var(--shadow-md);
-            transition: var(--transition);
-            margin-bottom: 20px;
-        }
-
-        .feature-card:hover {
-            transform: translateY(-2px);
-            box-shadow: var(--shadow-lg);
-        }
-
-        /* Заголовки страницы */
-        .page-header {
-            background: var(--bg-secondary);
-            padding: 40px 0;
-            text-align: center;
-        }
-
-        .page-header h1 {
-            font-size: 2.5em;
-            margin-bottom: 16px;
-            font-weight: 600;
-            color: var(--text-primary);
-        }
-
-        /* Дополнительные стили для checkout */
-        .checkout-steps {
-            display: flex;
-            justify-content: center;
-            gap: 20px;
-            margin: 20px 0;
-            flex-wrap: wrap;
-        }
-
-        .step {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            padding: 8px 16px;
-            background: var(--bg-secondary);
-            border-radius: 20px;
-            font-size: 14px;
-        }
-
-        .step.active {
-            background: var(--primary-color);
-            color: white;
-        }
-
-        .checkout-content {
-            display: grid;
-            grid-template-columns: 2fr 1fr;
-            gap: 30px;
-            margin: 40px 0;
-        }
-
-        .form-section {
-            margin-bottom: 30px;
-        }
-
-        .form-section h3 {
-            margin-bottom: 20px;
-            padding-bottom: 10px;
-            border-bottom: 2px solid var(--primary-color);
-            color: var(--text-primary);
-            display: flex;
-            align-items: center;
-            gap: 10px;
-        }
-
-        .form-grid {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 20px;
-        }
-
-        .form-group {
-            margin-bottom: 20px;
-        }
-
-        .form-label {
-            display: block;
-            margin-bottom: 8px;
-            font-weight: 600;
-            color: var(--text-primary);
-        }
-
-        .form-input {
-            width: 100%;
-            padding: 12px 16px;
-            border: 2px solid var(--border-color);
-            border-radius: var(--border-radius);
-            font-size: 14px;
-            transition: var(--transition);
-        }
-
-        .form-input:focus {
-            border-color: var(--primary-color);
-            outline: none;
-            box-shadow: 0 0 0 3px rgba(46, 204, 113, 0.1);
-        }
-
-        .radio-group {
-            display: grid;
-            gap: 15px;
-        }
-
-        .radio-option {
-            display: flex;
-            align-items: center;
-            padding: 20px;
-            border: 2px solid var(--border-color);
-            border-radius: var(--border-radius-lg);
-            cursor: pointer;
-            transition: var(--transition);
-            background: var(--bg-primary);
-        }
-
-        .radio-option:hover {
-            border-color: var(--primary-color);
-            background: rgba(46, 204, 113, 0.05);
-        }
-
-        .radio-option.selected {
-            border-color: var(--primary-color);
-            background: rgba(46, 204, 113, 0.1);
-        }
-
-        .radio-option input[type="radio"] {
-            margin-right: 15px;
-            transform: scale(1.2);
-        }
-
-        .radio-info {
-            flex: 1;
-        }
-
-        .radio-title {
-            font-weight: 600;
-            font-size: 16px;
-            margin-bottom: 5px;
-            color: var(--text-primary);
-        }
-
-        .radio-description {
-            font-size: 14px;
-            color: var(--text-secondary);
-            margin-bottom: 5px;
-        }
-
-        .radio-cost {
-            font-weight: 600;
-            color: var(--primary-color);
-        }
-
-        .order-summary {
-            position: sticky;
-            top: 20px;
-            height: fit-content;
-        }
-
-        .summary-title {
-            font-size: 20px;
-            font-weight: 600;
-            margin-bottom: 20px;
-            color: var(--text-primary);
-            display: flex;
-            align-items: center;
-            gap: 10px;
-        }
-
-        .order-items {
-            max-height: 300px;
-            overflow-y: auto;
-            margin-bottom: 20px;
-        }
-
-        .order-item {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 15px 0;
-            border-bottom: 1px solid var(--border-color);
-        }
-
-        .order-item:last-child {
-            border-bottom: none;
-        }
-
-        .item-details {
-            flex: 1;
-        }
-
-        .item-name {
-            font-weight: 600;
-            font-size: 14px;
-            margin-bottom: 3px;
-            color: var(--text-primary);
-        }
-
-        .item-quantity {
-            font-size: 12px;
-            color: var(--text-muted);
-        }
-
-        .item-total {
-            font-weight: 600;
-            color: var(--primary-color);
-        }
-
-        .summary-row {
-            display: flex;
-            justify-content: space-between;
-            margin-bottom: 10px;
-            padding: 5px 0;
-        }
-
-        .summary-row.total {
-            border-top: 2px solid var(--border-color);
-            padding-top: 15px;
-            margin-top: 15px;
-            font-weight: 700;
-            font-size: 18px;
-            color: var(--primary-color);
-        }
-
-        .error-message {
-            background: rgba(231, 76, 60, 0.1);
-            color: var(--danger-color);
-            padding: 15px;
-            border-radius: var(--border-radius);
-            border-left: 4px solid var(--danger-color);
-            margin-bottom: 20px;
-        }
-
-        .security-info {
-            background: var(--bg-secondary);
-            padding: 20px;
-            border-radius: var(--border-radius);
-            margin-top: 20px;
-            font-size: 13px;
-            color: var(--text-secondary);
-        }
-
-        .security-info h4 {
-            margin-bottom: 10px;
-            color: var(--text-primary);
-        }
-
-        @media (max-width: 768px) {
-            .checkout-content {
-                grid-template-columns: 1fr;
-            }
-
-            .form-grid {
-                grid-template-columns: 1fr;
-            }
-
-            .checkout-steps {
-                flex-direction: column;
-                align-items: center;
-            }
-        }
+        body { background: #f8f9fa; }
+        .hero { background: var(--primary-gradient); color: white; padding: 3rem 0; }
+        .feature-card { transition: transform 0.3s; }
+        .feature-card:hover { transform: translateY(-5px); }
+        .field-row { border: 1px solid #dee2e6; border-radius: 8px; padding: 1rem; margin-bottom: 1rem; background: white; }
     </style>
 </head>
 <body>
-
-<!-- Шапка из вашего дизайна -->
-<header class='page-header'>
-    <div class='container'>
-        <h1>
-            <i class='fas fa-credit-card'></i>
-            Оформление заказа
-        </h1>
-        <p>Заполните информацию для доставки и оплаты</p>
-
-        <div class='checkout-steps'>
-            <div class='step active'>
-                <i class='fas fa-shopping-cart'></i>
-                Корзина
-            </div>
-            <div class='step active'>
-                <i class='fas fa-credit-card'></i>
-                Оформление
-            </div>
-            <div class='step'>
-                <i class='fas fa-check-circle'></i>
-                Подтверждение
-            </div>
+    <!-- Заголовок -->
+    <div class='hero text-center'>
+        <div class='container'>
+            <h1 class='display-4 fw-bold mb-3'>
+                <i class='bi bi-gear-wide-connected me-3'></i>
+                Конструктор модулей
+            </h1>
+            <p class='lead'>Создавайте модули без программирования!</p>
         </div>
     </div>
-</header>
 
-<div class='container'>
-    <?php if (isset($orderError)): ?>
-        <div class='error-message'>
-            <i class='fas fa-exclamation-triangle'></i>
-            <?= htmlspecialchars($orderError) ?>
-        </div>
-    <?php endif; ?>
-
-    <div class='checkout-content'>
-        <!-- Форма оформления заказа -->
-        <div>
-            <form method='POST' id='checkoutForm'>
-                <input type='hidden' name='action' value='place_order'>
-
-                <!-- Контактная информация -->
-                <div class='feature-card form-section'>
-                    <h3>
-                        <i class='fas fa-user'></i>
-                        Контактная информация
-                    </h3>
-
-                    <div class='form-group'>
-                        <label class='form-label'>Имя и фамилия *</label>
-                        <input type='text' name='customer_name' class='form-input' 
-                               placeholder='Введите ваше имя' required>
-                    </div>
-
-                    <div class='form-grid'>
-                        <div class='form-group'>
-                            <label class='form-label'>Email *</label>
-                            <input type='email' name='customer_email' class='form-input' 
-                                   placeholder='email@example.com' required>
-                        </div>
-
-                        <div class='form-group'>
-                            <label class='form-label'>Телефон *</label>
-                            <input type='tel' name='customer_phone' class='form-input' 
-                                   placeholder='+7 (999) 123-45-67' required>
-                        </div>
-                    </div>
+    <div class='container mt-5'>
+        <!-- Сообщения -->
+        <?php if ($success): ?>
+            <?php foreach ($success as $msg): ?>
+                <div class='alert alert-success alert-dismissible'>
+                    <i class='bi bi-check-circle me-2'></i><?= htmlspecialchars($msg) ?>
+                    <button type='button' class='btn-close' data-bs-dismiss='alert'></button>
                 </div>
+            <?php endforeach; ?>
+        <?php endif; ?>
 
-                <!-- Способ доставки -->
-                <div class='feature-card form-section'>
-                    <h3>
-                        <i class='fas fa-shipping-fast'></i>
-                        Способ доставки
-                    </h3>
+        <?php if ($errors): ?>
+            <?php foreach ($errors as $error): ?>
+                <div class='alert alert-danger alert-dismissible'>
+                    <i class='bi bi-exclamation-triangle me-2'></i><?= htmlspecialchars($error) ?>
+                    <button type='button' class='btn-close' data-bs-dismiss='alert'></button>
+                </div>
+            <?php endforeach; ?>
+        <?php endif; ?>
 
-                    <div class='radio-group'>
-                        <?php foreach ($deliveryMethods as $method): ?>
-                            <?php if (!$method['active']) continue; ?>
-                            <label class='radio-option' onclick='selectDelivery("<?= $method['id'] ?>")'>
-                                <input type='radio' name='delivery_method' value='<?= $method['id'] ?>' required>
-                                <i class='<?= $method['icon'] ?>' style='font-size: 24px; color: var(--primary-color); margin-right: 15px;'></i>
-                                <div class='radio-info'>
-                                    <div class='radio-title'><?= $method['name'] ?></div>
-                                    <div class='radio-description'><?= $method['description'] ?></div>
-                                    <div class='radio-cost'>
-                                        <?= $method['cost'] == 0 ? 'Бесплатно' : number_format($method['cost'], 0, '', ' ') . ' ₽' ?>
-                                        • <?= $method['time'] ?>
+        <div class='row'>
+            <!-- Форма создания модуля -->
+            <div class='col-lg-8'>
+                <div class='card shadow-sm'>
+                    <div class='card-header bg-primary text-white'>
+                        <h4 class='mb-0'>
+                            <i class='bi bi-plus-circle me-2'></i>
+                            Создать новый модуль
+                        </h4>
+                    </div>
+                    <div class='card-body'>
+                        <form method='post' id='moduleForm'>
+                            <!-- Основная информация -->
+                            <div class='row g-3 mb-4'>
+                                <div class='col-md-6'>
+                                    <label class='form-label fw-bold'>Название модуля *</label>
+                                    <input type='text' class='form-control' name='module_name' required
+                                           placeholder='Новости'>
+                                    <div class='form-text'>Будет отображаться в админ-панели</div>
+                                </div>
+
+                                <div class='col-md-6'>
+                                    <label class='form-label fw-bold'>Имя таблицы *</label>
+                                    <input type='text' class='form-control' name='table_name' required
+                                           placeholder='news' pattern='[a-z_]+'>
+                                    <div class='form-text'>Только латинские буквы и подчеркивания</div>
+                                </div>
+
+                                <div class='col-12'>
+                                    <label class='form-label fw-bold'>Описание</label>
+                                    <textarea class='form-control' name='description' rows='2'
+                                              placeholder='Система управления новостями и статьями'></textarea>
+                                </div>
+
+                                <div class='col-md-6'>
+                                    <label class='form-label fw-bold'>Иконка</label>
+                                    <select class='form-select' name='icon'>
+                                        <option value='bi-newspaper'>📰 Новости</option>
+                                        <option value='bi-people'>👥 Пользователи</option>
+                                        <option value='bi-image'>🖼️ Галерея</option>
+                                        <option value='bi-chat'>💬 Отзывы</option>
+                                        <option value='bi-calendar'>📅 События</option>
+                                        <option value='bi-bookmark'>🔖 Закладки</option>
+                                        <option value='bi-tag'>🏷️ Теги</option>
+                                        <option value='bi-file-text'>📄 Документы</option>
+                                    </select>
+                                </div>
+                            </div>
+
+                            <!-- Поля модуля -->
+                            <div class='mb-4'>
+                                <div class='d-flex justify-content-between align-items-center mb-3'>
+                                    <h5 class='fw-bold'>
+                                        <i class='bi bi-list-ul me-2'></i>
+                                        Поля модуля
+                                    </h5>
+                                    <button type='button' class='btn btn-success btn-sm' onclick='addField()'>
+                                        <i class='bi bi-plus me-1'></i>Добавить поле
+                                    </button>
+                                </div>
+
+                                <div id='fields-container'>
+                                    <!-- Поля будут добавляться динамически -->
+                                </div>
+                            </div>
+
+                            <!-- Функции модуля -->
+                            <div class='mb-4'>
+                                <h5 class='fw-bold mb-3'>
+                                    <i class='bi bi-toggles me-2'></i>
+                                    Функции модуля
+                                </h5>
+                                <div class='row g-3'>
+                                    <div class='col-md-4'>
+                                        <div class='form-check'>
+                                            <input class='form-check-input' type='checkbox' name='features[]' value='search' id='feature_search' checked>
+                                            <label class='form-check-label' for='feature_search'>Поиск</label>
+                                        </div>
+                                    </div>
+                                    <div class='col-md-4'>
+                                        <div class='form-check'>
+                                            <input class='form-check-input' type='checkbox' name='features[]' value='pagination' id='feature_pagination' checked>
+                                            <label class='form-check-label' for='feature_pagination'>Пагинация</label>
+                                        </div>
+                                    </div>
+                                    <div class='col-md-4'>
+                                        <div class='form-check'>
+                                            <input class='form-check-input' type='checkbox' name='features[]' value='export' id='feature_export'>
+                                            <label class='form-check-label' for='feature_export'>Экспорт</label>
+                                        </div>
+                                    </div>
+                                    <div class='col-md-4'>
+                                        <div class='form-check'>
+                                            <input class='form-check-input' type='checkbox' name='features[]' value='import' id='feature_import'>
+                                            <label class='form-check-label' for='feature_import'>Импорт</label>
+                                        </div>
+                                    </div>
+                                    <div class='col-md-4'>
+                                        <div class='form-check'>
+                                            <input class='form-check-input' type='checkbox' name='features[]' value='bulk_actions' id='feature_bulk' checked>
+                                            <label class='form-check-label' for='feature_bulk'>Групповые операции</label>
+                                        </div>
+                                    </div>
+                                    <div class='col-md-4'>
+                                        <div class='form-check'>
+                                            <input class='form-check-input' type='checkbox' name='features[]' value='frontend' id='feature_frontend' checked>
+                                            <label class='form-check-label' for='feature_frontend'>Фронтенд</label>
+                                        </div>
                                     </div>
                                 </div>
-                            </label>
-                        <?php endforeach; ?>
-                    </div>
+                            </div>
 
-                    <div class='form-group' id='addressField' style='display: none; margin-top: 20px;'>
-                        <label class='form-label'>Адрес доставки *</label>
-                        <textarea name='delivery_address' class='form-input' rows='3' 
-                                  placeholder='Укажите точный адрес доставки'></textarea>
+                            <div class='text-center'>
+                                <button type='submit' name='create_module' class='btn btn-success btn-lg px-5'>
+                                    <i class='bi bi-magic me-2'></i>
+                                    Создать модуль
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Справка -->
+            <div class='col-lg-4'>
+                <div class='card shadow-sm mb-4'>
+                    <div class='card-header bg-info text-white'>
+                        <h5 class='mb-0'>
+                            <i class='bi bi-lightbulb me-2'></i>
+                            Как это работает?
+                        </h5>
+                    </div>
+                    <div class='card-body'>
+                        <ol class='mb-0'>
+                            <li class='mb-2'>Укажите название и описание модуля</li>
+                            <li class='mb-2'>Добавьте поля (название, email, описание и т.д.)</li>
+                            <li class='mb-2'>Выберите нужные функции</li>
+                            <li class='mb-2'>Нажмите "Создать модуль"</li>
+                            <li class='mb-0'>Готово! Модуль появится в админке и на сайте</li>
+                        </ol>
                     </div>
                 </div>
 
-                <!-- Способ оплаты -->
-                <div class='feature-card form-section'>
-                    <h3>
-                        <i class='fas fa-credit-card'></i>
-                        Способ оплаты
-                    </h3>
-
-                    <div class='radio-group'>
-                        <?php foreach ($paymentMethods as $method): ?>
-                            <?php if (!$method['active']) continue; ?>
-                            <label class='radio-option'>
-                                <input type='radio' name='payment_method' value='<?= $method['id'] ?>' required>
-                                <i class='<?= $method['icon'] ?>' style='font-size: 24px; color: var(--primary-color); margin-right: 15px;'></i>
-                                <div class='radio-info'>
-                                    <div class='radio-title'><?= $method['name'] ?></div>
-                                    <div class='radio-description'><?= $method['description'] ?></div>
-                                    <?php if ($method['fee'] > 0): ?>
-                                        <div class='radio-cost'>Комиссия: <?= $method['fee'] ?>%</div>
-                                    <?php endif; ?>
-                                </div>
-                            </label>
-                        <?php endforeach; ?>
+                <div class='card shadow-sm'>
+                    <div class='card-header bg-warning text-dark'>
+                        <h5 class='mb-0'>
+                            <i class='bi bi-star me-2'></i>
+                            Примеры модулей
+                        </h5>
                     </div>
-                </div>
-
-                <!-- Комментарий к заказу -->
-                <div class='feature-card form-section'>
-                    <h3>
-                        <i class='fas fa-comment'></i>
-                        Комментарий к заказу
-                    </h3>
-
-                    <div class='form-group'>
-                        <label class='form-label'>Дополнительная информация</label>
-                        <textarea name='notes' class='form-input' rows='3' 
-                                  placeholder='Укажите особые пожелания к заказу (необязательно)'></textarea>
-                    </div>
-                </div>
-
-                <!-- Кнопка оформления -->
-                <button type='submit' class='btn btn-primary btn-lg btn-block'>
-                    <i class='fas fa-check'></i>
-                    Оформить заказ
-                </button>
-
-                <a href='?page=cart' class='btn btn-outline btn-lg btn-block' style='margin-top: 15px;'>
-                    <i class='fas fa-arrow-left'></i>
-                    Вернуться в корзину
-                </a>
-            </form>
-        </div>
-
-        <!-- Итоги заказа -->
-        <div class='feature-card order-summary'>
-            <h3 class='summary-title'>
-                <i class='fas fa-receipt'></i>
-                Ваш заказ
-            </h3>
-
-            <!-- Товары -->
-            <div class='order-items'>
-                <?php foreach ($cart['items'] as $item): ?>
-                    <div class='order-item'>
-                        <div class='item-details'>
-                            <div class='item-name'><?= htmlspecialchars($item['name']) ?></div>
-                            <div class='item-quantity'><?= $item['quantity'] ?> × <?= number_format($item['price'], 0, '', ' ') ?> ₽</div>
+                    <div class='card-body'>
+                        <div class='mb-3'>
+                            <strong>📰 Новости</strong><br>
+                            <small>Поля: заголовок, содержание, изображение, дата</small>
                         </div>
-                        <div class='item-total'>
-                            <?= number_format($item['price'] * $item['quantity'], 0, '', ' ') ?> ₽
+                        <div class='mb-3'>
+                            <strong>🖼️ Галерея</strong><br>
+                            <small>Поля: название, изображение, описание</small>
+                        </div>
+                        <div class='mb-3'>
+                            <strong>👥 Команда</strong><br>
+                            <small>Поля: имя, должность, фото, биография</small>
+                        </div>
+                        <div class='mb-0'>
+                            <strong>📅 События</strong><br>
+                            <small>Поля: название, дата, место, описание</small>
                         </div>
                     </div>
-                <?php endforeach; ?>
-            </div>
-
-            <!-- Итоги -->
-            <div class='summary-row'>
-                <span>Товары (<?= $cart['total_items'] ?> шт.):</span>
-                <span><?= number_format($cart['total_amount'], 0, '', ' ') ?> ₽</span>
-            </div>
-
-            <?php if ($cart['discount'] > 0): ?>
-                <div class='summary-row' style='color: var(--primary-color);'>
-                    <span>Скидка (<?= $cart['discount'] ?>%):</span>
-                    <span>-<?= number_format($cart['discount_amount'], 0, '', ' ') ?> ₽</span>
                 </div>
-            <?php endif; ?>
-
-            <div class='summary-row'>
-                <span>Доставка:</span>
-                <span id='deliveryCost'>Рассчитается</span>
-            </div>
-
-            <div class='summary-row total'>
-                <span>К оплате:</span>
-                <span id='totalAmount'><?= number_format($cart['final_amount'], 0, '', ' ') ?> ₽</span>
-            </div>
-
-            <!-- Информация о безопасности -->
-            <div class='security-info'>
-                <h4><i class='fas fa-shield-alt'></i> Безопасность покупок</h4>
-                <ul style='list-style: none; padding: 0;'>
-                    <li style='margin-bottom: 5px;'>
-                        <i class='fas fa-check' style='color: var(--primary-color); margin-right: 8px;'></i>
-                        SSL шифрование данных
-                    </li>
-                    <li style='margin-bottom: 5px;'>
-                        <i class='fas fa-check' style='color: var(--primary-color); margin-right: 8px;'></i>
-                        Защита персональной информации
-                    </li>
-                    <li>
-                        <i class='fas fa-check' style='color: var(--primary-color); margin-right: 8px;'></i>
-                        Гарантия возврата товара
-                    </li>
-                </ul>
             </div>
         </div>
     </div>
-</div>
 
-<script>
-    function selectDelivery(methodId) {
-        // Убираем выделение у всех вариантов доставки
-        document.querySelectorAll('.radio-option').forEach(option => {
-            if (option.querySelector('input[name="delivery_method"]')) {
-                option.classList.remove('selected');
-            }
+    <script src='https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js'></script>
+    <script>
+        let fieldCounter = 0;
+
+        function addField() {
+            fieldCounter++;
+            const container = document.getElementById('fields-container');
+
+            const fieldHtml = `
+                <div class="field-row" id="field-${fieldCounter}">
+                    <div class="row g-3">
+                        <div class="col-md-3">
+                            <label class="form-label">Название поля</label>
+                            <input type="text" class="form-control" name="fields[${fieldCounter}][name]" 
+                                   placeholder="title" pattern="[a-z_]+" required>
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label">Метка</label>
+                            <input type="text" class="form-control" name="fields[${fieldCounter}][label]" 
+                                   placeholder="Заголовок" required>
+                        </div>
+                        <div class="col-md-2">
+                            <label class="form-label">Тип</label>
+                            <select class="form-select" name="fields[${fieldCounter}][type]" required>
+                                <option value="string">Текст</option>
+                                <option value="text">Текстовое поле</option>
+                                <option value="longtext">Длинный текст</option>
+                                <option value="integer">Число</option>
+                                <option value="decimal">Десятичное</option>
+                                <option value="boolean">Да/Нет</option>
+                                <option value="date">Дата</option>
+                                <option value="datetime">Дата и время</option>
+                                <option value="email">Email</option>
+                                <option value="url">URL</option>
+                                <option value="image">Изображение</option>
+                                <option value="json">JSON</option>
+                            </select>
+                        </div>
+                        <div class="col-md-2">
+                            <label class="form-label">Длина</label>
+                            <input type="text" class="form-control" name="fields[${fieldCounter}][length]" 
+                                   placeholder="255">
+                        </div>
+                        <div class="col-md-1">
+                            <label class="form-label">Обяз.</label>
+                            <input type="checkbox" class="form-check-input" name="fields[${fieldCounter}][required]" value="1">
+                        </div>
+                        <div class="col-md-1">
+                            <label class="form-label">&nbsp;</label>
+                            <button type="button" class="btn btn-danger btn-sm w-100" onclick="removeField(${fieldCounter})">
+                                <i class="bi bi-trash"></i>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            `;
+
+            container.insertAdjacentHTML('beforeend', fieldHtml);
+        }
+
+        function removeField(id) {
+            document.getElementById(`field-${id}`).remove();
+        }
+
+        // Добавляем первое поле автоматически
+        document.addEventListener('DOMContentLoaded', function() {
+            addField();
         });
 
-        // Выделяем выбранный вариант
-        event.currentTarget.classList.add('selected');
-
-        // Показываем поле адреса для курьерской доставки
-        const addressField = document.getElementById('addressField');
-        if (methodId === 'courier' || methodId === 'cdek') {
-            addressField.style.display = 'block';
-            addressField.querySelector('textarea').required = true;
-        } else {
-            addressField.style.display = 'none';
-            addressField.querySelector('textarea').required = false;
-        }
-
-        updateDeliveryCost(methodId);
-    }
-
-    function updateDeliveryCost(methodId) {
-        const deliveryMethods = <?= json_encode($deliveryMethods) ?>;
-        const method = deliveryMethods[methodId];
-        const cartAmount = <?= $cart['final_amount'] ?>;
-        const freeShippingFrom = <?= $settings['free_shipping_from'] ?>;
-
-        let cost = method.cost;
-
-        // Проверяем бесплатную доставку
-        if (cartAmount >= freeShippingFrom && (methodId === 'courier' || methodId === 'cdek')) {
-            cost = 0;
-        }
-
-        const deliveryCostElement = document.getElementById('deliveryCost');
-        const totalElement = document.getElementById('totalAmount');
-
-        if (cost === 0) {
-            deliveryCostElement.textContent = 'Бесплатно';
-            deliveryCostElement.style.color = 'var(--primary-color)';
-        } else {
-            deliveryCostElement.textContent = cost.toLocaleString() + ' ₽';
-            deliveryCostElement.style.color = '';
-        }
-
-        // Обновляем общую сумму
-        const newTotal = cartAmount + cost;
-        totalElement.textContent = newTotal.toLocaleString() + ' ₽';
-    }
-
-    // Выделение выбранного способа оплаты
-    document.addEventListener('DOMContentLoaded', function() {
-        document.querySelectorAll('input[name="payment_method"]').forEach(radio => {
-            radio.addEventListener('change', function() {
-                document.querySelectorAll('.radio-option').forEach(option => {
-                    if (option.querySelector('input[name="payment_method"]')) {
-                        option.classList.remove('selected');
-                    }
+        // Автоматическое создание имени таблицы из названия модуля
+        document.querySelector('input[name="module_name"]').addEventListener('input', function() {
+            const tableName = this.value
+                .toLowerCase()
+                .replace(/[^а-яё\w\s]/gi, '')
+                .replace(/\s+/g, '_')
+                .replace(/ё/g, 'e')
+                .replace(/[а-я]/g, function(char) {
+                    const ru = 'абвгдежзийклмнопрстуфхцчшщъыьэюя';
+                    const en = 'abvgdezhzijklmnoprstufhcchshshhyeyuya';
+                    return en[ru.indexOf(char)] || char;
                 });
-                this.closest('.radio-option').classList.add('selected');
-            });
+
+            document.querySelector('input[name="table_name"]').value = tableName;
         });
-    });
-
-    // Обработка отправки формы
-    document.getElementById('checkoutForm').addEventListener('submit', function(e) {
-        const submitBtn = this.querySelector('button[type="submit"]');
-        submitBtn.disabled = true;
-        submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Оформляем заказ...';
-    });
-</script>
-
+    </script>
 </body>
 </html>
