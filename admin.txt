@@ -1,228 +1,340 @@
 <?php
-// АкваСбор CMS 2.0 MEGA - Админ-панель
-
-// Проверяем установку
-if (!file_exists('config/.installed')) {
-    header('Location: install.php');
-    exit;
-}
+// Получаем расширенную статистику
+$recentModules = array_slice($allModules, -5);
+$totalModules = count($allModules);
 ?>
-<!DOCTYPE html>
-<html lang="ru">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Админ-панель - АкваСбор CMS</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.2/font/bootstrap-icons.css" rel="stylesheet">
-    <style>
-        :root {
-            --primary-gradient: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        }
-        body { background: #f8f9fa; }
-        .sidebar { min-height: 100vh; background: var(--primary-gradient); }
-        .main-content { margin-left: 250px; padding: 2rem; }
-        @media (max-width: 768px) {
-            .sidebar { position: fixed; z-index: 1000; transform: translateX(-100%); }
-            .main-content { margin-left: 0; }
-        }
-    </style>
-</head>
-<body>
-    <div class="d-flex">
-        <!-- Сайдбар -->
-        <div class="sidebar text-white p-3" style="width: 250px;">
-            <div class="text-center mb-4">
-                <h4 class="fw-bold">
-                    <i class="bi bi-water me-2"></i>АкваСбор
-                </h4>
-                <small>Админ-панель</small>
-            </div>
 
-            <ul class="nav nav-pills flex-column">
-                <li class="nav-item mb-2">
-                    <a class="nav-link text-white active" href="#">
-                        <i class="bi bi-house me-2"></i>Dashboard
-                    </a>
-                </li>
-                <li class="nav-item mb-2">
-                    <a class="nav-link text-white-50" href="#">
-                        <i class="bi bi-box me-2"></i>Товары
-                    </a>
-                </li>
-                <li class="nav-item mb-2">
-                    <a class="nav-link text-white-50" href="#">
-                        <i class="bi bi-tags me-2"></i>Категории
-                    </a>
-                </li>
-                <li class="nav-item mb-2">
-                    <a class="nav-link text-white-50" href="#">
-                        <i class="bi bi-cart me-2"></i>Заказы
-                    </a>
-                </li>
-                <li class="nav-item mb-2">
-                    <a class="nav-link text-white-50" href="#">
-                        <i class="bi bi-chat-dots me-2"></i>Отзывы
-                    </a>
-                </li>
-                <li class="nav-item mb-2">
-                    <a class="nav-link text-white-50" href="#">
-                        <i class="bi bi-newspaper me-2"></i>Новости
-                    </a>
-                </li>
-                <li class="nav-item mb-2">
-                    <a class="nav-link text-white-50" href="#">
-                        <i class="bi bi-gear me-2"></i>Настройки
-                    </a>
-                </li>
-            </ul>
+<!-- Главные метрики -->
+<div class="row g-4 mb-5 fade-in-up">
+    <div class="col-xl-3 col-md-6">
+        <div class="stats-card card">
+            <div class="card-body position-relative">
+                <div class="d-flex align-items-center justify-content-between">
+                    <div>
+                        <p class="stats-label mb-2">Модули</p>
+                        <h3 class="stats-value" data-stat="modules"><?= $totalModules ?></h3>
+                        <div class="d-flex align-items-center text-success">
+                            <i class="bi bi-arrow-up me-1"></i>
+                            <small>Создано модулей</small>
+                        </div>
+                    </div>
+                    <i class="bi bi-puzzle stats-icon position-absolute end-0 me-3"></i>
+                </div>
+            </div>
         </div>
+    </div>
 
-        <!-- Основной контент -->
-        <div class="main-content flex-grow-1">
-            <div class="d-flex justify-content-between align-items-center mb-4">
-                <h1 class="h3 fw-bold">Dashboard</h1>
-                <div class="d-flex align-items-center gap-3">
-                    <a href="/" class="btn btn-outline-primary btn-sm">
-                        <i class="bi bi-eye me-1"></i>Посмотреть сайт
-                    </a>
-                    <div class="dropdown">
-                        <button class="btn btn-primary dropdown-toggle" data-bs-toggle="dropdown">
-                            <i class="bi bi-person-circle me-1"></i>Админ
+    <div class="col-xl-3 col-md-6">
+        <div class="stats-card card">
+            <div class="card-body position-relative">
+                <div class="d-flex align-items-center justify-content-between">
+                    <div>
+                        <p class="stats-label mb-2">Записи</p>
+                        <h3 class="stats-value" data-stat="total_records">
+                            <?= $systemStats['products'] + $systemStats['orders'] + $systemStats['reviews'] ?>
+                        </h3>
+                        <div class="d-flex align-items-center text-info">
+                            <i class="bi bi-database me-1"></i>
+                            <small>Всего записей</small>
+                        </div>
+                    </div>
+                    <i class="bi bi-database stats-icon position-absolute end-0 me-3"></i>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-xl-3 col-md-6">
+        <div class="stats-card card">
+            <div class="card-body position-relative">
+                <div class="d-flex align-items-center justify-content-between">
+                    <div>
+                        <p class="stats-label mb-2">Размер БД</p>
+                        <h3 class="stats-value" data-stat="db_size"><?= $systemStats['db_size'] ?></h3>
+                        <div class="d-flex align-items-center text-warning">
+                            <i class="bi bi-hdd me-1"></i>
+                            <small>База данных</small>
+                        </div>
+                    </div>
+                    <i class="bi bi-hdd stats-icon position-absolute end-0 me-3"></i>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-xl-3 col-md-6">
+        <div class="stats-card card">
+            <div class="card-body position-relative">
+                <div class="d-flex align-items-center justify-content-between">
+                    <div>
+                        <p class="stats-label mb-2">Диск</p>
+                        <h3 class="stats-value" data-stat="disk_usage"><?= $systemStats['disk_usage'] ?></h3>
+                        <div class="d-flex align-items-center text-primary">
+                            <i class="bi bi-folder me-1"></i>
+                            <small>Занято места</small>
+                        </div>
+                    </div>
+                    <i class="bi bi-folder stats-icon position-absolute end-0 me-3"></i>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Виджеты -->
+<div class="row g-4 mb-5">
+    <!-- Активность системы -->
+    <div class="col-xl-8">
+        <div class="widget-card card fade-in-up">
+            <div class="widget-header">
+                <div class="d-flex justify-content-between align-items-center">
+                    <h5 class="fw-bold mb-0">
+                        <i class="bi bi-activity me-2"></i>
+                        Активность системы
+                    </h5>
+                    <div class="btn-group btn-group-sm">
+                        <button class="btn btn-outline-primary active">7 дней</button>
+                        <button class="btn btn-outline-primary">30 дней</button>
+                        <button class="btn btn-outline-primary">90 дней</button>
+                    </div>
+                </div>
+            </div>
+            <div class="card-body">
+                <canvas id="activityChart" height="300"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <!-- Последние модули -->
+    <div class="col-xl-4">
+        <div class="widget-card card fade-in-up">
+            <div class="widget-header">
+                <h5 class="fw-bold mb-0">
+                    <i class="bi bi-clock-history me-2"></i>
+                    Последние модули
+                </h5>
+            </div>
+            <div class="card-body p-0">
+                <?php if (empty($recentModules)): ?>
+                    <div class="text-center py-5">
+                        <i class="bi bi-inbox text-muted" style="font-size: 3rem;"></i>
+                        <p class="text-muted mt-3">Модули еще не созданы</p>
+                        <a href="module_builder.php" class="btn btn-gradient btn-sm">
+                            <i class="bi bi-plus me-1"></i>Создать первый модуль
+                        </a>
+                    </div>
+                <?php else: ?>
+                    <?php foreach ($recentModules as $key => $module): ?>
+                        <div class="d-flex align-items-center p-3 border-bottom">
+                            <div class="bg-primary bg-gradient rounded-circle p-2 me-3">
+                                <i class="<?= $module['menu']['icon'] ?? 'bi-circle' ?> text-white"></i>
+                            </div>
+                            <div class="flex-grow-1">
+                                <h6 class="mb-1"><?= htmlspecialchars($module['name']) ?></h6>
+                                <small class="text-muted"><?= htmlspecialchars($module['description'] ?? '') ?></small>
+                            </div>
+                            <div class="text-end">
+                                <span class="module-status <?= $module['status'] ?? 'active' ?>"></span>
+                                <br>
+                                <small class="text-muted">
+                                    <?= date('d.m.Y', strtotime($module['created_at'] ?? 'now')) ?>
+                                </small>
+                            </div>
+                        </div>
+                    <?php endforeach; ?>
+
+                    <div class="p-3 text-center">
+                        <a href="?page=modules" class="btn btn-outline-primary btn-sm">
+                            Все модули
+                        </a>
+                    </div>
+                <?php endif; ?>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Быстрые действия и системная информация -->
+<div class="row g-4">
+    <!-- Быстрые действия -->
+    <div class="col-xl-8">
+        <div class="widget-card card fade-in-up">
+            <div class="widget-header">
+                <h5 class="fw-bold mb-0">
+                    <i class="bi bi-lightning-fill me-2"></i>
+                    Быстрые действия
+                </h5>
+            </div>
+            <div class="card-body">
+                <div class="row g-3">
+                    <div class="col-md-4">
+                        <a href="module_builder.php" class="btn btn-gradient w-100 p-4 h-100 d-flex flex-column align-items-center justify-content-center">
+                            <i class="bi bi-magic fs-1 mb-3"></i>
+                            <strong>Создать модуль</strong>
+                            <small class="opacity-75">Конструктор модулей</small>
+                        </a>
+                    </div>
+                    <div class="col-md-4">
+                        <a href="?page=products&action=create" class="btn btn-outline-gradient w-100 p-4 h-100 d-flex flex-column align-items-center justify-content-center">
+                            <i class="bi bi-plus-circle fs-1 mb-3"></i>
+                            <strong>Добавить товар</strong>
+                            <small class="opacity-75">Новый продукт</small>
+                        </a>
+                    </div>
+                    <div class="col-md-4">
+                        <a href="?page=settings" class="btn btn-outline-gradient w-100 p-4 h-100 d-flex flex-column align-items-center justify-content-center">
+                            <i class="bi bi-gear fs-1 mb-3"></i>
+                            <strong>Настройки</strong>
+                            <small class="opacity-75">Конфигурация</small>
+                        </a>
+                    </div>
+                </div>
+
+                <hr class="my-4">
+
+                <div class="row g-2">
+                    <div class="col-md-3">
+                        <button class="btn btn-outline-primary w-100" onclick="ajaxRequest('clear_cache').then(r => showNotification('Кеш очищен!'))">
+                            <i class="bi bi-arrow-clockwise me-1"></i>
+                            Очистить кеш
                         </button>
-                        <ul class="dropdown-menu">
-                            <li><a class="dropdown-item" href="#">Профиль</a></li>
-                            <li><a class="dropdown-item" href="#">Настройки</a></li>
-                            <li><hr class="dropdown-divider"></li>
-                            <li><a class="dropdown-item" href="#">Выйти</a></li>
-                        </ul>
                     </div>
-                </div>
-            </div>
-
-            <!-- Статистические карточки -->
-            <div class="row g-4 mb-5">
-                <div class="col-md-3">
-                    <div class="card border-0 shadow-sm">
-                        <div class="card-body">
-                            <div class="d-flex justify-content-between">
-                                <div>
-                                    <h6 class="card-title text-muted">Всего товаров</h6>
-                                    <h2 class="fw-bold text-primary">0</h2>
-                                </div>
-                                <div class="text-primary fs-1">
-                                    <i class="bi bi-box"></i>
-                                </div>
-                            </div>
-                        </div>
+                    <div class="col-md-3">
+                        <a href="?page=backup" class="btn btn-outline-success w-100">
+                            <i class="bi bi-download me-1"></i>
+                            Бэкап
+                        </a>
                     </div>
-                </div>
-                <div class="col-md-3">
-                    <div class="card border-0 shadow-sm">
-                        <div class="card-body">
-                            <div class="d-flex justify-content-between">
-                                <div>
-                                    <h6 class="card-title text-muted">Заказы</h6>
-                                    <h2 class="fw-bold text-success">0</h2>
-                                </div>
-                                <div class="text-success fs-1">
-                                    <i class="bi bi-cart-check"></i>
-                                </div>
-                            </div>
-                        </div>
+                    <div class="col-md-3">
+                        <a href="?page=files" class="btn btn-outline-warning w-100">
+                            <i class="bi bi-folder me-1"></i>
+                            Файлы
+                        </a>
                     </div>
-                </div>
-                <div class="col-md-3">
-                    <div class="card border-0 shadow-sm">
-                        <div class="card-body">
-                            <div class="d-flex justify-content-between">
-                                <div>
-                                    <h6 class="card-title text-muted">Отзывы</h6>
-                                    <h2 class="fw-bold text-warning">0</h2>
-                                </div>
-                                <div class="text-warning fs-1">
-                                    <i class="bi bi-chat-dots"></i>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-                <div class="col-md-3">
-                    <div class="card border-0 shadow-sm">
-                        <div class="card-body">
-                            <div class="d-flex justify-content-between">
-                                <div>
-                                    <h6 class="card-title text-muted">Посетители</h6>
-                                    <h2 class="fw-bold text-info">0</h2>
-                                </div>
-                                <div class="text-info fs-1">
-                                    <i class="bi bi-people"></i>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Быстрые действия -->
-            <div class="row g-4">
-                <div class="col-md-8">
-                    <div class="card border-0 shadow-sm">
-                        <div class="card-header bg-white">
-                            <h5 class="mb-0 fw-bold">
-                                <i class="bi bi-lightning me-2"></i>Быстрые действия
-                            </h5>
-                        </div>
-                        <div class="card-body">
-                            <div class="row g-3">
-                                <div class="col-md-6">
-                                    <a href="#" class="btn btn-outline-primary w-100 p-3">
-                                        <i class="bi bi-plus-circle me-2"></i>Добавить товар
-                                    </a>
-                                </div>
-                                <div class="col-md-6">
-                                    <a href="#" class="btn btn-outline-success w-100 p-3">
-                                        <i class="bi bi-tags me-2"></i>Создать категорию
-                                    </a>
-                                </div>
-                                <div class="col-md-6">
-                                    <a href="#" class="btn btn-outline-warning w-100 p-3">
-                                        <i class="bi bi-newspaper me-2"></i>Добавить новость
-                                    </a>
-                                </div>
-                                <div class="col-md-6">
-                                    <a href="#" class="btn btn-outline-info w-100 p-3">
-                                        <i class="bi bi-gear me-2"></i>Настройки сайта
-                                    </a>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-                <div class="col-md-4">
-                    <div class="card border-0 shadow-sm">
-                        <div class="card-header bg-white">
-                            <h5 class="mb-0 fw-bold">
-                                <i class="bi bi-info-circle me-2"></i>Информация
-                            </h5>
-                        </div>
-                        <div class="card-body">
-                            <p><strong>Версия CMS:</strong> 2.0.0 MEGA</p>
-                            <p><strong>PHP:</strong> <?= PHP_VERSION ?></p>
-                            <p><strong>Установлено:</strong> 16.09.2025</p>
-                            <hr>
-                            <div class="alert alert-success">
-                                <i class="bi bi-check-circle me-2"></i>
-                                <strong>Система готова к работе!</strong><br>
-                                Не забудьте настроить подключение к базе данных в config/database.php
-                            </div>
-                        </div>
+                    <div class="col-md-3">
+                        <a href="?page=logs" class="btn btn-outline-info w-100">
+                            <i class="bi bi-list-ul me-1"></i>
+                            Логи
+                        </a>
                     </div>
                 </div>
             </div>
         </div>
     </div>
 
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
-</body>
-</html>
+    <!-- Системная информация -->
+    <div class="col-xl-4">
+        <div class="widget-card card fade-in-up">
+            <div class="widget-header">
+                <h5 class="fw-bold mb-0">
+                    <i class="bi bi-info-circle-fill me-2"></i>
+                    Система
+                </h5>
+            </div>
+            <div class="card-body">
+                <div class="mb-3">
+                    <div class="d-flex justify-content-between align-items-center mb-2">
+                        <span><strong>PHP версия:</strong></span>
+                        <span class="badge bg-success"><?= $systemStats['php_version'] ?></span>
+                    </div>
+
+                    <div class="d-flex justify-content-between align-items-center mb-2">
+                        <span><strong>Загрузка CPU:</strong></span>
+                        <span class="badge bg-<?= $systemStats['server_load'] > 80 ? 'danger' : ($systemStats['server_load'] > 50 ? 'warning' : 'success') ?>">
+                            <?= round($systemStats['server_load'], 1) ?>%
+                        </span>
+                    </div>
+
+                    <div class="progress progress-modern mb-3">
+                        <div class="progress-bar" style="width: <?= min($systemStats['server_load'], 100) ?>%"></div>
+                    </div>
+
+                    <div class="d-flex justify-content-between align-items-center mb-2">
+                        <span><strong>Модули:</strong></span>
+                        <span class="badge bg-primary"><?= $totalModules ?></span>
+                    </div>
+
+                    <div class="d-flex justify-content-between align-items-center mb-2">
+                        <span><strong>Установлено:</strong></span>
+                        <span><?= date('d.m.Y') ?></span>
+                    </div>
+                </div>
+
+                <div class="alert alert-success">
+                    <i class="bi bi-check-circle me-2"></i>
+                    <strong>Система работает!</strong><br>
+                    Все модули загружены и готовы к работе.
+                </div>
+
+                <div class="d-grid gap-2">
+                    <button class="btn btn-outline-primary" onclick="window.open('../', '_blank')">
+                        <i class="bi bi-eye me-1"></i>
+                        Посмотреть сайт
+                    </button>
+                    <button class="btn btn-outline-success" onclick="updateStats(); showNotification('Статистика обновлена!')">
+                        <i class="bi bi-arrow-repeat me-1"></i>
+                        Обновить данные
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+// График активности
+document.addEventListener('DOMContentLoaded', function() {
+    const ctx = document.getElementById('activityChart');
+    if (ctx) {
+        new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'],
+                datasets: [{
+                    label: 'Создание записей',
+                    data: [12, 19, 3, 5, 2, 3, 7],
+                    borderColor: 'rgb(102, 126, 234)',
+                    backgroundColor: 'rgba(102, 126, 234, 0.1)',
+                    tension: 0.4,
+                    fill: true
+                }, {
+                    label: 'Просмотры',
+                    data: [2, 3, 20, 5, 1, 4, 8],
+                    borderColor: 'rgb(245, 87, 108)',
+                    backgroundColor: 'rgba(245, 87, 108, 0.1)',
+                    tension: 0.4,
+                    fill: true
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: {
+                        position: 'bottom'
+                    }
+                },
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        grid: {
+                            color: 'rgba(0,0,0,0.05)'
+                        }
+                    },
+                    x: {
+                        grid: {
+                            display: false
+                        }
+                    }
+                },
+                elements: {
+                    point: {
+                        radius: 4,
+                        hoverRadius: 8
+                    }
+                }
+            }
+        });
+    }
+});
+</script>
