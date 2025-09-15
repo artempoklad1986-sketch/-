@@ -1,0 +1,369 @@
+<?php
+/**
+ * АкваСбор - Интеграционный модуль v1.0
+ * Связывает админ-панель с основным сайтом и базой данных
+ */
+
+// Подключаем все необходимые файлы
+require_once __DIR__ . '/data.php';
+require_once __DIR__ . '/cart_system.php';
+require_once __DIR__ . '/date_functions.php';
+
+// === ДОПОЛНИТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ АДМИНКИ ===
+
+/**
+ * Обновляет настройки сайта
+ */
+function updateSiteSettings($data) {
+    try {
+        $dynamicData = initializeDynamicData();
+        $settings = &$dynamicData['settings'];
+
+        // Обновляемые поля настроек
+        $allowedFields = [
+            'site_name', 'site_description', 'site_keywords',
+            'admin_email', 'phone', 'address', 'working_hours',
+            'currency', 'products_per_page', 'min_order_amount', 
+            'free_shipping_from', 'social_vk', 'social_telegram',
+            'social_instagram', 'social_youtube', 'google_analytics',
+            'yandex_metrika', 'maintenance_mode'
+        ];
+
+        foreach ($allowedFields as $field) {
+            if (isset($data[$field])) {
+                if ($field === 'maintenance_mode') {
+                    $settings[$field] = !empty($data[$field]);
+                } elseif (in_array($field, ['products_per_page', 'min_order_amount', 'free_shipping_from'])) {
+                    $settings[$field] = (int)$data[$field];
+                } else {
+                    $settings[$field] = trim($data[$field]);
+                }
+            }
+        }
+
+        $dynamicData['last_updated'] = date('Y-m-d H:i:s');
+
+        if (saveDynamicData($dynamicData)) {
+            logAction('SETTINGS', 'Настройки сайта обновлены', $data);
+            return ['success' => true, 'message' => 'Настройки сохранены успешно!'];
+        } else {
+            return ['success' => false, 'message' => 'Ошибка сохранения настроек'];
+        }
+    } catch (Exception $e) {
+        return ['success' => false, 'message' => 'Ошибка: ' . $e->getMessage()];
+    }
+}
+
+/**
+ * Управление статическими страницами
+ */
+function getStaticPages() {
+    $dynamicData = loadDynamicData();
+    if ($dynamicData && isset($dynamicData['pages'])) {
+        return $dynamicData['pages'];
+    }
+
+    // Создаем базовые страницы
+    return [
+        [
+            'id' => 1,
+            'slug' => 'about',
+            'title' => 'О нас',
+            'content' => '<h2>О магазине АкваСбор</h2><p>Мы специализируемся на продаже аквариумов и всего необходимого для их содержания.</p>',
+            'meta_title' => 'О нас - АкваСбор',
+            'meta_description' => 'Информация о магазине АкваСбор',
+            'is_published' => true,
+            'created_at' => date('Y-m-d H:i:s'),
+            'updated_at' => date('Y-m-d H:i:s')
+        ],
+        [
+            'id' => 2,
+            'slug' => 'contact',
+            'title' => 'Контакты',
+            'content' => '<h2>Как с нами связаться</h2><p>Телефон, email, адрес</p>',
+            'meta_title' => 'Контакты - АкваСбор',
+            'meta_description' => 'Контактная информация АкваСбор',
+            'is_published' => true,
+            'created_at' => date('Y-m-d H:i:s'),
+            'updated_at' => date('Y-m-d H:i:s')
+        ]
+    ];
+}
+
+function createStaticPage($data) {
+    try {
+        $dynamicData = initializeDynamicData();
+        if (!isset($dynamicData['pages'])) {
+            $dynamicData['pages'] = getStaticPages();
+        }
+
+        $pages = $dynamicData['pages'];
+        $newId = empty($pages) ? 1 : (max(array_column($pages, 'id')) + 1);
+
+        $newPage = [
+            'id' => $newId,
+            'slug' => generateSlug($data['slug'] ?? $data['title']),
+            'title' => trim($data['title']),
+            'content' => trim($data['content']),
+            'meta_title' => trim($data['meta_title']) ?: $data['title'],
+            'meta_description' => trim($data['meta_description']),
+            'is_published' => !empty($data['is_published']),
+            'created_at' => date('Y-m-d H:i:s'),
+            'updated_at' => date('Y-m-d H:i:s')
+        ];
+
+        $dynamicData['pages'][] = $newPage;
+        $dynamicData['last_updated'] = date('Y-m-d H:i:s');
+
+        if (saveDynamicData($dynamicData)) {
+            logAction('PAGES', 'Создана страница', $newPage);
+            return ['success' => true, 'message' => 'Страница создана!', 'page' => $newPage];
+        } else {
+            return ['success' => false, 'message' => 'Ошибка сохранения'];
+        }
+    } catch (Exception $e) {
+        return ['success' => false, 'message' => 'Ошибка: ' . $e->getMessage()];
+    }
+}
+
+/**
+ * Система логирования
+ */
+function logAction($context, $message, $data = null) {
+    $logFile = __DIR__ . '/logs/admin_' . date('Y-m-d') . '.log';
+
+    // Создаем папку логов если её нет
+    $logDir = dirname($logFile);
+    if (!file_exists($logDir)) {
+        mkdir($logDir, 0755, true);
+    }
+
+    $logEntry = [
+        'timestamp' => date('Y-m-d H:i:s'),
+        'level' => 'INFO',
+        'context' => $context,
+        'message' => $message,
+        'ip' => $_SERVER['REMOTE_ADDR'] ?? 'unknown',
+        'user_agent' => $_SERVER['HTTP_USER_AGENT'] ?? 'unknown',
+        'data' => $data
+    ];
+
+    $logLine = date('Y-m-d H:i:s') . " [INFO] [{$context}] {$message} IP:" . ($_SERVER['REMOTE_ADDR'] ?? 'unknown') . "\n";
+
+    file_put_contents($logFile, $logLine, FILE_APPEND | LOCK_EX);
+
+    // Также сохраняем в JSON для админки
+    $jsonLogFile = __DIR__ . '/logs/admin_logs.json';
+    $logs = [];
+    if (file_exists($jsonLogFile)) {
+        $logs = json_decode(file_get_contents($jsonLogFile), true) ?: [];
+    }
+
+    array_unshift($logs, $logEntry);
+    $logs = array_slice($logs, 0, 1000); // Оставляем только последние 1000 записей
+
+    file_put_contents($jsonLogFile, json_encode($logs, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
+}
+
+function getAdminLogs($limit = 50) {
+    $jsonLogFile = __DIR__ . '/logs/admin_logs.json';
+    if (!file_exists($jsonLogFile)) {
+        return [];
+    }
+
+    $logs = json_decode(file_get_contents($jsonLogFile), true) ?: [];
+    return array_slice($logs, 0, $limit);
+}
+
+/**
+ * Аналитические функции
+ */
+function getAdvancedAnalytics() {
+    $products = getProducts();
+    $orders = getOrders();
+    $reviews = getReviews();
+
+    // Продажи по дням (последние 30 дней)
+    $salesByDay = [];
+    for ($i = 29; $i >= 0; $i--) {
+        $date = date('Y-m-d', strtotime("-{$i} days"));
+        $dayOrders = array_filter($orders, fn($o) => date('Y-m-d', strtotime($o['created_at'])) === $date);
+        $salesByDay[] = [
+            'date' => $date,
+            'date_formatted' => formatDateRussian($date),
+            'orders' => count($dayOrders),
+            'revenue' => array_sum(array_column($dayOrders, 'total_amount'))
+        ];
+    }
+
+    // Топ категории
+    $categories = getCategories();
+    $categoryStats = [];
+    foreach ($categories as $category) {
+        $categoryProducts = array_filter($products, fn($p) => $p['category_id'] == $category['id']);
+        $categoryStats[] = [
+            'name' => $category['name'],
+            'icon' => $category['icon'],
+            'products_count' => count($categoryProducts),
+            'total_sales' => array_sum(array_column($categoryProducts, 'sales'))
+        ];
+    }
+
+    // Топ товары
+    $topProducts = $products;
+    usort($topProducts, fn($a, $b) => $b['sales'] - $a['sales']);
+    $topProducts = array_slice($topProducts, 0, 10);
+
+    return [
+        'sales_by_day' => $salesByDay,
+        'category_stats' => $categoryStats,
+        'top_products' => $topProducts,
+        'summary' => [
+            'total_products' => count($products),
+            'active_products' => count(array_filter($products, fn($p) => $p['is_active'])),
+            'total_orders' => count($orders),
+            'total_revenue' => array_sum(array_column($orders, 'total_amount')),
+            'avg_order_value' => count($orders) > 0 ? array_sum(array_column($orders, 'total_amount')) / count($orders) : 0,
+            'total_reviews' => count($reviews),
+            'avg_rating' => count($reviews) > 0 ? array_sum(array_column($reviews, 'rating')) / count($reviews) : 0
+        ]
+    ];
+}
+
+/**
+ * Управление изображениями
+ */
+function uploadImage($file, $folder = 'general') {
+    $uploadDir = UPLOAD_DIR . $folder . '/';
+    if (!file_exists($uploadDir)) {
+        mkdir($uploadDir, 0755, true);
+    }
+
+    $allowedTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
+    $maxSize = 10 * 1024 * 1024; // 10MB
+
+    if (!in_array($file['type'], $allowedTypes)) {
+        return ['success' => false, 'message' => 'Недопустимый тип файла'];
+    }
+
+    if ($file['size'] > $maxSize) {
+        return ['success' => false, 'message' => 'Файл слишком большой (макс. 10MB)'];
+    }
+
+    $extension = pathinfo($file['name'], PATHINFO_EXTENSION);
+    $fileName = $folder . '_' . time() . '_' . uniqid() . '.' . $extension;
+    $filePath = $uploadDir . $fileName;
+
+    if (move_uploaded_file($file['tmp_name'], $filePath)) {
+        return ['success' => true, 'path' => $uploadDir . $fileName];
+    } else {
+        return ['success' => false, 'message' => 'Ошибка загрузки файла'];
+    }
+}
+
+/**
+ * Экспорт данных
+ */
+function exportToCSV($data, $filename, $headers = []) {
+    header('Content-Type: text/csv; charset=UTF-8');
+    header('Content-Disposition: attachment; filename="' . $filename . '.csv"');
+    header('Cache-Control: no-cache, no-store, must-revalidate');
+
+    $output = fopen('php://output', 'w');
+
+    // BOM для правильного отображения в Excel
+    fprintf($output, chr(0xEF).chr(0xBB).chr(0xBF));
+
+    if (!empty($headers)) {
+        fputcsv($output, $headers, ';');
+    } elseif (!empty($data)) {
+        fputcsv($output, array_keys($data[0]), ';');
+    }
+
+    foreach ($data as $row) {
+        fputcsv($output, $row, ';');
+    }
+
+    fclose($output);
+    exit;
+}
+
+/**
+ * Бэкап данных
+ */
+function createDataBackup() {
+    $backupDir = __DIR__ . '/backups/';
+    if (!file_exists($backupDir)) {
+        mkdir($backupDir, 0755, true);
+    }
+
+    $dynamicData = loadDynamicData();
+    if (!$dynamicData) {
+        return ['success' => false, 'message' => 'Нет данных для бэкапа'];
+    }
+
+    $backupFile = $backupDir . 'backup_' . date('Y-m-d_H-i-s') . '.json';
+
+    if (file_put_contents($backupFile, json_encode($dynamicData, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE))) {
+        logAction('BACKUP', 'Создан бэкап данных', ['file' => $backupFile]);
+        return ['success' => true, 'message' => 'Бэкап создан успешно', 'file' => basename($backupFile)];
+    } else {
+        return ['success' => false, 'message' => 'Ошибка создания бэкапа'];
+    }
+}
+
+/**
+ * Восстановление из бэкапа
+ */
+function restoreFromBackup($backupFile) {
+    $backupPath = __DIR__ . '/backups/' . basename($backupFile);
+
+    if (!file_exists($backupPath)) {
+        return ['success' => false, 'message' => 'Файл бэкапа не найден'];
+    }
+
+    $backupData = json_decode(file_get_contents($backupPath), true);
+    if (!$backupData) {
+        return ['success' => false, 'message' => 'Невозможно прочитать файл бэкапа'];
+    }
+
+    if (saveDynamicData($backupData)) {
+        logAction('RESTORE', 'Восстановлены данные из бэкапа', ['file' => $backupFile]);
+        return ['success' => true, 'message' => 'Данные восстановлены из бэкапа'];
+    } else {
+        return ['success' => false, 'message' => 'Ошибка восстановления данных'];
+    }
+}
+
+/**
+ * Получение списка бэкапов
+ */
+function getBackupsList() {
+    $backupDir = __DIR__ . '/backups/';
+    if (!file_exists($backupDir)) {
+        return [];
+    }
+
+    $files = glob($backupDir . '*.json');
+    $backups = [];
+
+    foreach ($files as $file) {
+        $backups[] = [
+            'filename' => basename($file),
+            'size' => filesize($file),
+            'created_at' => date('Y-m-d H:i:s', filemtime($file))
+        ];
+    }
+
+    // Сортируем по дате создания (новые сверху)
+    usort($backups, fn($a, $b) => strtotime($b['created_at']) - strtotime($a['created_at']));
+
+    return $backups;
+}
+
+// Логируем загрузку интеграционного модуля
+if (session_status() === PHP_SESSION_ACTIVE && isset($_SESSION['admin_logged_in'])) {
+    logAction('SYSTEM', 'Загружен интеграционный модуль');
+}
+
+?>
