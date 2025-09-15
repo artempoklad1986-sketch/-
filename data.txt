@@ -20,11 +20,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $db_pass = trim($_POST['db_pass']);
 
             try {
-                $pdo = new PDO("mysql:host={$db_host};dbname={$db_name};charset=utf8mb4", 
+                // Подключаемся к уже созданной БД (без попыток создания)
+                $pdo = new PDO("mysql:host={$db_host};dbname={$db_name};charset=utf8mb4",
                               $db_user, $db_pass, [
                     PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
                     PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC
                 ]);
+
+                // Проверяем права на создание таблиц
+                $pdo->query("CREATE TEMPORARY TABLE test_permissions (id INT)");
+                $pdo->query("DROP TEMPORARY TABLE test_permissions");
 
                 // Сохраняем данные в сессии
                 $_SESSION['db_config'] = compact('db_host', 'db_name', 'db_user', 'db_pass');
@@ -85,14 +90,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 // Функции установки
 function checkRequirements() {
     $requirements = [
-        'PHP версия >= 7.4' => version_compare(PHP_VERSION, '7.4.0', '>='),
+        'PHP версия >= 8.0' => version_compare(PHP_VERSION, '8.0.0', '>='),
         'PDO расширение' => extension_loaded('pdo'),
         'PDO MySQL' => extension_loaded('pdo_mysql'),
         'GD расширение' => extension_loaded('gd'),
         'cURL расширение' => extension_loaded('curl'),
         'JSON расширение' => extension_loaded('json'),
-        'Запись в config/' => is_writable('config/'),
-        'Запись в uploads/' => is_writable('uploads/') || mkdir('uploads/', 0755, true)
+        'Zip расширение' => extension_loaded('zip'),
+        'OpenSSL расширение' => extension_loaded('openssl'),
+        'Запись в config/' => is_writable('config/') || mkdir('config/', 0755, true),
+        'Запись в uploads/' => is_writable('uploads/') || mkdir('uploads/', 0755, true),
+        'Запись в cache/' => is_writable('cache/') || mkdir('cache/', 0755, true)
     ];
 
     return $requirements;
@@ -101,20 +109,26 @@ function checkRequirements() {
 function createTables() {
     try {
         $db_config = $_SESSION['db_config'];
-        $pdo = new PDO("mysql:host={$db_config['db_host']};dbname={$db_config['db_name']};charset=utf8mb4", 
+        $pdo = new PDO("mysql:host={$db_config['db_host']};dbname={$db_config['db_name']};charset=utf8mb4",
                       $db_config['db_user'], $db_config['db_pass']);
 
-        $sql = "
+        // ВАЖНО: НЕ СОЗДАЕМ БД, только таблицы в уже существующей БД
+        $sql = '
         -- Админы
         CREATE TABLE IF NOT EXISTS `admins` (
             `id` int(11) NOT NULL AUTO_INCREMENT,
             `login` varchar(50) NOT NULL UNIQUE,
             `email` varchar(100) NOT NULL UNIQUE,
             `password` varchar(255) NOT NULL,
-            `role` varchar(20) DEFAULT 'admin',
+            `role` varchar(20) DEFAULT "admin",
             `status` tinyint(1) DEFAULT 1,
+            `avatar` varchar(255) DEFAULT NULL,
+            `last_login` timestamp NULL DEFAULT NULL,
             `created_at` timestamp DEFAULT CURRENT_TIMESTAMP,
-            PRIMARY KEY (`id`)
+            `updated_at` timestamp DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            PRIMARY KEY (`id`),
+            KEY `status` (`status`),
+            KEY `role` (`role`)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
         -- Категории товаров
@@ -129,10 +143,13 @@ function createTables() {
             `status` tinyint(1) DEFAULT 1,
             `seo_title` varchar(255) DEFAULT NULL,
             `seo_description` varchar(500) DEFAULT NULL,
+            `products_count` int(11) DEFAULT 0,
             `created_at` timestamp DEFAULT CURRENT_TIMESTAMP,
+            `updated_at` timestamp DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
             PRIMARY KEY (`id`),
             KEY `parent_id` (`parent_id`),
-            KEY `status` (`status`)
+            KEY `status` (`status`),
+            KEY `slug` (`slug`)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
         -- Товары
@@ -147,18 +164,34 @@ function createTables() {
             `old_price` decimal(10,2) DEFAULT NULL,
             `sku` varchar(100) DEFAULT NULL,
             `stock_quantity` int(11) DEFAULT 0,
+            `min_stock` int(11) DEFAULT 5,
             `images` text,
+            `gallery` text,
             `status` tinyint(1) DEFAULT 1,
             `featured` tinyint(1) DEFAULT 0,
             `views` int(11) DEFAULT 0,
+            `sales_count` int(11) DEFAULT 0,
+            `rating` decimal(3,2) DEFAULT 0.00,
+            `reviews_count` int(11) DEFAULT 0,
             `seo_title` varchar(255) DEFAULT NULL,
             `seo_description` varchar(500) DEFAULT NULL,
+            `care_level` enum("easy","medium","hard") DEFAULT "medium",
+            `lighting` enum("low","medium","high") DEFAULT "medium",
+            `ph_min` decimal(3,1) DEFAULT 6.0,
+            `ph_max` decimal(3,1) DEFAULT 8.0,
+            `temp_min` int(3) DEFAULT 20,
+            `temp_max` int(3) DEFAULT 28,
+            `growth_rate` enum("slow","medium","fast") DEFAULT "medium",
+            `placement` enum("foreground","midground","background") DEFAULT "midground",
             `created_at` timestamp DEFAULT CURRENT_TIMESTAMP,
             `updated_at` timestamp DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
             PRIMARY KEY (`id`),
             KEY `category_id` (`category_id`),
             KEY `status` (`status`),
-            KEY `featured` (`featured`)
+            KEY `featured` (`featured`),
+            KEY `slug` (`slug`),
+            KEY `price` (`price`),
+            FULLTEXT KEY `search` (`name`, `description`, `short_description`)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
         -- Заказы
@@ -169,15 +202,24 @@ function createTables() {
             `customer_email` varchar(255) NOT NULL,
             `customer_phone` varchar(50) NOT NULL,
             `customer_address` text NOT NULL,
+            `customer_city` varchar(100) DEFAULT NULL,
+            `customer_postal` varchar(20) DEFAULT NULL,
             `total_amount` decimal(10,2) NOT NULL,
-            `status` enum('new','processing','shipped','delivered','cancelled') DEFAULT 'new',
+            `delivery_cost` decimal(10,2) DEFAULT 0.00,
+            `discount_amount` decimal(10,2) DEFAULT 0.00,
+            `status` enum("new","confirmed","processing","shipped","delivered","cancelled","refunded") DEFAULT "new",
             `payment_method` varchar(50) DEFAULT NULL,
-            `payment_status` enum('pending','paid','failed') DEFAULT 'pending',
+            `payment_status` enum("pending","paid","failed","refunded") DEFAULT "pending",
+            `delivery_method` varchar(50) DEFAULT "courier",
             `notes` text,
+            `admin_notes` text,
+            `tracking_number` varchar(100) DEFAULT NULL,
             `created_at` timestamp DEFAULT CURRENT_TIMESTAMP,
             `updated_at` timestamp DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
             PRIMARY KEY (`id`),
-            KEY `status` (`status`)
+            KEY `status` (`status`),
+            KEY `payment_status` (`payment_status`),
+            KEY `created_at` (`created_at`)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
         -- Позиции заказа
@@ -188,6 +230,7 @@ function createTables() {
             `product_name` varchar(255) NOT NULL,
             `product_price` decimal(10,2) NOT NULL,
             `quantity` int(11) NOT NULL DEFAULT 1,
+            `total_price` decimal(10,2) NOT NULL,
             PRIMARY KEY (`id`),
             KEY `order_id` (`order_id`),
             KEY `product_id` (`product_id`)
@@ -201,20 +244,27 @@ function createTables() {
             `customer_email` varchar(255) NOT NULL,
             `rating` tinyint(1) NOT NULL DEFAULT 5,
             `comment` text,
-            `status` enum('pending','approved','rejected') DEFAULT 'pending',
+            `pros` text,
+            `cons` text,
+            `status` enum("pending","approved","rejected") DEFAULT "pending",
+            `helpful_count` int(11) DEFAULT 0,
             `created_at` timestamp DEFAULT CURRENT_TIMESTAMP,
             PRIMARY KEY (`id`),
             KEY `product_id` (`product_id`),
-            KEY `status` (`status`)
+            KEY `status` (`status`),
+            KEY `rating` (`rating`)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
         -- Настройки сайта
         CREATE TABLE IF NOT EXISTS `settings` (
             `key` varchar(100) NOT NULL,
             `value` text,
-            `type` varchar(20) DEFAULT 'string',
+            `type` varchar(20) DEFAULT "string",
+            `group` varchar(50) DEFAULT "general",
             `description` varchar(500) DEFAULT NULL,
-            PRIMARY KEY (`key`)
+            `sort_order` int(11) DEFAULT 0,
+            PRIMARY KEY (`key`),
+            KEY `group` (`group`)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
         -- Новости/статьи
@@ -225,38 +275,116 @@ function createTables() {
             `excerpt` varchar(500) DEFAULT NULL,
             `content` text,
             `image` varchar(255) DEFAULT NULL,
+            `gallery` text,
             `status` tinyint(1) DEFAULT 1,
+            `featured` tinyint(1) DEFAULT 0,
             `views` int(11) DEFAULT 0,
             `seo_title` varchar(255) DEFAULT NULL,
             `seo_description` varchar(500) DEFAULT NULL,
+            `tags` varchar(500) DEFAULT NULL,
+            `author_id` int(11) DEFAULT NULL,
+            `published_at` timestamp DEFAULT CURRENT_TIMESTAMP,
             `created_at` timestamp DEFAULT CURRENT_TIMESTAMP,
             `updated_at` timestamp DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
             PRIMARY KEY (`id`),
-            KEY `status` (`status`)
+            KEY `status` (`status`),
+            KEY `featured` (`featured`),
+            KEY `slug` (`slug`),
+            KEY `author_id` (`author_id`),
+            FULLTEXT KEY `search` (`title`, `excerpt`, `content`)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-        ";
+
+        -- Корзина для незарегистрированных
+        CREATE TABLE IF NOT EXISTS `cart` (
+            `id` int(11) NOT NULL AUTO_INCREMENT,
+            `session_id` varchar(128) NOT NULL,
+            `product_id` int(11) NOT NULL,
+            `quantity` int(11) NOT NULL DEFAULT 1,
+            `created_at` timestamp DEFAULT CURRENT_TIMESTAMP,
+            `updated_at` timestamp DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            PRIMARY KEY (`id`),
+            KEY `session_id` (`session_id`),
+            KEY `product_id` (`product_id`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+        -- Избранное
+        CREATE TABLE IF NOT EXISTS `wishlist` (
+            `id` int(11) NOT NULL AUTO_INCREMENT,
+            `session_id` varchar(128) NOT NULL,
+            `product_id` int(11) NOT NULL,
+            `created_at` timestamp DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (`id`),
+            UNIQUE KEY `session_product` (`session_id`, `product_id`),
+            KEY `product_id` (`product_id`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+        -- Статистика
+        CREATE TABLE IF NOT EXISTS `analytics` (
+            `id` int(11) NOT NULL AUTO_INCREMENT,
+            `event_type` varchar(50) NOT NULL,
+            `event_data` json,
+            `ip_address` varchar(45) DEFAULT NULL,
+            `user_agent` varchar(500) DEFAULT NULL,
+            `created_at` timestamp DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (`id`),
+            KEY `event_type` (`event_type`),
+            KEY `created_at` (`created_at`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        ';
 
         $pdo->exec($sql);
 
-        // Добавляем базовые настройки
+        // Добавляем расширенные базовые настройки
         $settings = [
-            ['site_name', 'АкваСбор - аквариумы и их обитатели', 'string', 'Название сайта'],
-            ['site_description', 'Магазин аквариумных растений и рыбок', 'string', 'Описание сайта'],
-            ['site_email', 'info@akvasbor.ru', 'string', 'Email сайта'],
-            ['site_phone', '+7 (999) 123-45-67', 'string', 'Телефон сайта'],
-            ['currency_symbol', '₽', 'string', 'Символ валюты'],
-            ['products_per_page', '12', 'number', 'Товаров на странице'],
-            ['delivery_cost', '300', 'number', 'Стоимость доставки'],
-            ['free_delivery_from', '3000', 'number', 'Бесплатная доставка от суммы']
+            // Основные
+            ['site_name', 'АкваСбор - аквариумы и их обитатели', 'string', 'general', 'Название сайта', 1],
+            ['site_description', 'Магазин аквариумных растений и рыбок', 'string', 'general', 'Описание сайта', 2],
+            ['site_keywords', 'аквариумные растения, рыбки, аквариум', 'string', 'general', 'Ключевые слова', 3],
+            ['site_email', 'info@akvasbor.ru', 'string', 'contacts', 'Email сайта', 1],
+            ['site_phone', '+7 (999) 123-45-67', 'string', 'contacts', 'Телефон сайта', 2],
+            ['site_address', 'г. Москва, ул. Примерная, д. 1', 'string', 'contacts', 'Адрес магазина', 3],
+
+            // Магазин
+            ['currency_symbol', '₽', 'string', 'shop', 'Символ валюты', 1],
+            ['products_per_page', '12', 'number', 'shop', 'Товаров на странице', 2],
+            ['delivery_cost', '300', 'number', 'shop', 'Стоимость доставки', 3],
+            ['free_delivery_from', '3000', 'number', 'shop', 'Бесплатная доставка от суммы', 4],
+            ['min_order_amount', '500', 'number', 'shop', 'Минимальная сумма заказа', 5],
+
+            // Дизайн
+            ['theme_color', '#28a745', 'color', 'design', 'Основной цвет темы', 1],
+            ['show_prices', '1', 'boolean', 'design', 'Показывать цены', 2],
+            ['show_stock', '1', 'boolean', 'design', 'Показывать остатки', 3],
+            ['enable_reviews', '1', 'boolean', 'design', 'Включить отзывы', 4],
+            ['enable_wishlist', '1', 'boolean', 'design', 'Включить избранное', 5],
+
+            // SEO
+            ['seo_title_suffix', ' - АкваСбор', 'string', 'seo', 'Суффикс для заголовков', 1],
+            ['google_analytics', '', 'text', 'seo', 'Google Analytics ID', 2],
+            ['yandex_metrica', '', 'text', 'seo', 'Яндекс.Метрика ID', 3],
+
+            // Социальные сети
+            ['social_vk', 'https://vk.com/akvasbor', 'string', 'social', 'VK', 1],
+            ['social_instagram', 'https://instagram.com/akvasbor', 'string', 'social', 'Instagram', 2],
+            ['social_telegram', 'https://t.me/akvasbor', 'string', 'social', 'Telegram', 3],
+            ['social_youtube', '', 'string', 'social', 'YouTube', 4],
+
+            // Техническое
+            ['cache_enabled', '1', 'boolean', 'technical', 'Включить кэширование', 1],
+            ['maintenance_mode', '0', 'boolean', 'technical', 'Режим обслуживания', 2],
+            ['debug_mode', '0', 'boolean', 'technical', 'Режим отладки', 3],
+            ['image_quality', '85', 'number', 'technical', 'Качество изображений', 4],
+            ['max_upload_size', '5', 'number', 'technical', 'Максимальный размер файла (МБ)', 5]
         ];
 
-        $stmt = $pdo->prepare("INSERT INTO settings (`key`, value, type, description) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE value = VALUES(value)");
+        $stmt = $pdo->prepare('INSERT INTO settings (`key`, value, type, `group`, description, sort_order) VALUES (?, ?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE value = VALUES(value)');
         foreach ($settings as $setting) {
             $stmt->execute($setting);
         }
 
         return true;
     } catch (Exception $e) {
+        error_log("Ошибка создания таблиц: " . $e->getMessage());
         return false;
     }
 }
@@ -264,12 +392,13 @@ function createTables() {
 function createAdmin($login, $email, $password) {
     try {
         $db_config = $_SESSION['db_config'];
-        $pdo = new PDO("mysql:host={$db_config['db_host']};dbname={$db_config['db_name']};charset=utf8mb4", 
+        $pdo = new PDO("mysql:host={$db_config['db_host']};dbname={$db_config['db_name']};charset=utf8mb4",
                       $db_config['db_user'], $db_config['db_pass']);
 
-        $stmt = $pdo->prepare("INSERT INTO admins (login, email, password, role) VALUES (?, ?, ?, 'super_admin')");
+        $stmt = $pdo->prepare('INSERT INTO admins (login, email, password, role) VALUES (?, ?, ?, "super_admin")');
         return $stmt->execute([$login, $email, password_hash($password, PASSWORD_DEFAULT)]);
     } catch (Exception $e) {
+        error_log("Ошибка создания админа: " . $e->getMessage());
         return false;
     }
 }
@@ -279,74 +408,125 @@ function finalizeInstallation() {
         $db_config = $_SESSION['db_config'];
 
         // Создаем конфиг БД
-        $config_content = "<?php
+        $config_content = '<?php
 return [
-    'host' => '{$db_config['db_host']}',
-    'database' => '{$db_config['db_name']}',
-    'username' => '{$db_config['db_user']}',
-    'password' => '{$db_config['db_pass']}',
-    'charset' => 'utf8mb4',
-    'options' => [
+    "host" => "' . $db_config['db_host'] . '",
+    "database" => "' . $db_config['db_name'] . '",
+    "username" => "' . $db_config['db_user'] . '",
+    "password" => "' . $db_config['db_pass'] . '",
+    "charset" => "utf8mb4",
+    "options" => [
         PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
-        PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC
+        PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+        PDO::ATTR_EMULATE_PREPARES => false
     ]
-];
-";
+];';
         file_put_contents('config/database.php', $config_content);
 
-        // Создаем основные настройки
-        $settings_content = "<?php
+        // Создаем расширенные настройки
+        $settings_content = '<?php
 return [
-    'debug' => false,
-    'timezone' => 'Europe/Moscow',
-    'upload_max_size' => 5 * 1024 * 1024, // 5MB
-    'allowed_extensions' => ['jpg', 'jpeg', 'png', 'webp'],
-    'session_lifetime' => 7200, // 2 часа
-    'csrf_token_lifetime' => 3600, // 1 час
-    'pagination' => [
-        'per_page' => 12,
-        'max_links' => 5
+    "debug" => false,
+    "timezone" => "Europe/Moscow",
+    "upload_max_size" => 10 * 1024 * 1024, // 10MB
+    "allowed_extensions" => ["jpg", "jpeg", "png", "webp", "gif"],
+    "session_lifetime" => 7200, // 2 часа
+    "csrf_token_lifetime" => 3600, // 1 час
+    "pagination" => [
+        "per_page" => 12,
+        "max_links" => 7
+    ],
+    "cache" => [
+        "enabled" => true,
+        "lifetime" => 3600, // 1 час
+        "path" => "cache/"
+    ],
+    "image" => [
+        "quality" => 85,
+        "max_width" => 1920,
+        "max_height" => 1080,
+        "thumbnail_size" => 300
+    ],
+    "security" => [
+        "password_min_length" => 6,
+        "max_login_attempts" => 5,
+        "lockout_time" => 900, // 15 минут
+        "remember_me_time" => 2592000 // 30 дней
     ]
-];
-";
+];';
         file_put_contents('config/settings.php', $settings_content);
 
         // Создаем конфиг модулей
-        $modules_content = "<?php
+        $modules_content = '<?php
 return [
-    'frontend' => [
-        'catalog' => ['enabled' => true, 'cache' => true],
-        'cart' => ['enabled' => true, 'session_lifetime' => 3600],
-        'checkout' => ['enabled' => true, 'payment_methods' => ['cash', 'card']],
-        'search' => ['enabled' => true, 'min_length' => 3],
-        'news' => ['enabled' => true, 'per_page' => 10]
+    "frontend" => [
+        "catalog" => ["enabled" => true, "cache" => true, "per_page" => 12],
+        "cart" => ["enabled" => true, "session_lifetime" => 3600, "min_quantity" => 1, "max_quantity" => 999],
+        "checkout" => ["enabled" => true, "payment_methods" => ["cash", "card", "online"], "require_phone" => true],
+        "search" => ["enabled" => true, "min_length" => 3, "max_results" => 50],
+        "news" => ["enabled" => true, "per_page" => 10, "allow_comments" => false],
+        "reviews" => ["enabled" => true, "require_moderation" => true, "allow_anonymous" => true],
+        "wishlist" => ["enabled" => true, "max_items" => 100],
+        "compare" => ["enabled" => true, "max_items" => 4]
     ],
-    'admin' => [
-        'dashboard' => ['enabled' => true],
-        'products' => ['enabled' => true],
-        'categories' => ['enabled' => true],
-        'orders' => ['enabled' => true],
-        'reviews' => ['enabled' => true],
-        'analytics' => ['enabled' => true],
-        'settings' => ['enabled' => true]
+    "admin" => [
+        "dashboard" => ["enabled" => true, "refresh_interval" => 300],
+        "products" => ["enabled" => true, "bulk_actions" => true, "export" => true],
+        "categories" => ["enabled" => true, "nested" => true, "max_depth" => 3],
+        "orders" => ["enabled" => true, "auto_status" => false, "notifications" => true],
+        "customers" => ["enabled" => false], // Пока отключено
+        "reviews" => ["enabled" => true, "auto_approve" => false],
+        "analytics" => ["enabled" => true, "retention_days" => 365],
+        "settings" => ["enabled" => true, "backup" => true],
+        "seo" => ["enabled" => true, "sitemap" => true, "robots" => true]
     ],
-    'api' => [
-        'enabled' => false,
-        'rate_limit' => 1000, // запросов в час
-        'auth_required' => true
+    "api" => [
+        "enabled" => false,
+        "version" => "1.0",
+        "rate_limit" => 1000, // запросов в час
+        "auth_required" => true,
+        "endpoints" => ["products", "categories", "orders"]
     ]
-];
-";
+];';
         file_put_contents('config/modules.php', $modules_content);
 
-        // Создаем .htaccess
-        $htaccess_content = "RewriteEngine On
+        // Создаем улучшенный .htaccess
+        $htaccess_content = 'RewriteEngine On
 
 # Блокировка доступа к служебным файлам
-<Files ~ \"^\.htaccess|\.git|config/|install\.php\">
-    Order allow,deny
-    Deny from all
-</Files>
+<FilesMatch "^\.htaccess|\.git|config/|install\.php$">
+    Require all denied
+</FilesMatch>
+
+# Защита от hotlinking изображений
+RewriteCond %{HTTP_REFERER} !^$
+RewriteCond %{HTTP_REFERER} !^https?://([^.]+\.)?akvasbor\. [NC]
+RewriteRule \.(jpg|jpeg|png|gif|webp)$ - [F,NC]
+
+# Кэширование статических файлов
+<IfModule mod_expires.c>
+    ExpiresActive On
+    ExpiresByType image/jpg "access plus 1 month"
+    ExpiresByType image/jpeg "access plus 1 month"
+    ExpiresByType image/gif "access plus 1 month"
+    ExpiresByType image/png "access plus 1 month"
+    ExpiresByType image/webp "access plus 1 month"
+    ExpiresByType text/css "access plus 1 week"
+    ExpiresByType application/javascript "access plus 1 week"
+</IfModule>
+
+# Сжатие
+<IfModule mod_deflate.c>
+    AddOutputFilterByType DEFLATE text/plain
+    AddOutputFilterByType DEFLATE text/html
+    AddOutputFilterByType DEFLATE text/xml
+    AddOutputFilterByType DEFLATE text/css
+    AddOutputFilterByType DEFLATE application/xml
+    AddOutputFilterByType DEFLATE application/xhtml+xml
+    AddOutputFilterByType DEFLATE application/rss+xml
+    AddOutputFilterByType DEFLATE application/javascript
+    AddOutputFilterByType DEFLATE application/x-javascript
+</IfModule>
 
 # Перенаправление на HTTPS (раскомментируйте если нужно)
 # RewriteCond %{HTTPS} off
@@ -359,30 +539,74 @@ RewriteRule ^index\.php$ / [R=301,L]
 # Основные правила роутинга
 RewriteCond %{REQUEST_FILENAME} !-f
 RewriteCond %{REQUEST_FILENAME} !-d
-RewriteRule ^admin/?(.*)$ admin.php?route=\$1 [QSA,L]
+RewriteRule ^admin/?(.*)$ admin.php?route=$1 [QSA,L]
 
 RewriteCond %{REQUEST_FILENAME} !-f
 RewriteCond %{REQUEST_FILENAME} !-d
-RewriteRule ^(.*)$ index.php?route=\$1 [QSA,L]
-";
+RewriteRule ^api/?(.*)$ api.php?route=$1 [QSA,L]
+
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteRule ^(.*)$ index.php?route=$1 [QSA,L]';
         file_put_contents('.htaccess', $htaccess_content);
 
-        // Создаем файл установки
-        file_put_contents('config/.installed', date('Y-m-d H:i:s'));
+        // Создаем robots.txt
+        $robots_content = 'User-agent: *
+Allow: /
+Disallow: /admin/
+Disallow: /config/
+Disallow: /cache/
+Disallow: /install.php
 
-        // Создаем директории
-        $dirs = ['uploads', 'uploads/products', 'uploads/categories', 'uploads/news', 'cache'];
+Sitemap: https://' . $_SERVER['HTTP_HOST'] . '/sitemap.xml';
+        file_put_contents('robots.txt', $robots_content);
+
+        // Создаем файл установки
+        file_put_contents('config/.installed', json_encode([
+            'version' => '2.0.0',
+            'installed_at' => date('Y-m-d H:i:s'),
+            'installer_ip' => $_SERVER['REMOTE_ADDR'] ?? 'unknown',
+            'php_version' => PHP_VERSION,
+            'mysql_version' => 'unknown'
+        ]));
+
+        // Создаем структуру директорий
+        $dirs = [
+            'uploads', 'uploads/products', 'uploads/categories', 
+            'uploads/news', 'uploads/avatars', 'uploads/temp',
+            'cache', 'cache/products', 'cache/categories', 'cache/pages',
+            'logs', 'backups'
+        ];
         foreach ($dirs as $dir) {
             if (!is_dir($dir)) {
                 mkdir($dir, 0755, true);
+                file_put_contents($dir . '/index.html', '<!DOCTYPE html><html><head><title>403 Forbidden</title></head><body><h1>Directory access is forbidden.</h1></body></html>');
             }
         }
+
+        // Создаем базовый composer.json для будущих расширений
+        $composer_content = '{
+    "name": "akvasbor/cms",
+    "description": "АкваСбор CMS - система управления интернет-магазином аквариумных товаров",
+    "type": "project",
+    "license": "MIT",
+    "require": {
+        "php": ">=8.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "AkvasCMS\\\\": "src/"
+        }
+    }
+}';
+        file_put_contents('composer.json', $composer_content);
 
         // Очищаем сессию
         unset($_SESSION['db_config']);
 
         return true;
     } catch (Exception $e) {
+        error_log("Ошибка финализации: " . $e->getMessage());
         return false;
     }
 }
@@ -393,269 +617,711 @@ RewriteRule ^(.*)$ index.php?route=\$1 [QSA,L]
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Установка АкваСбор CMS</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css" rel="stylesheet">
+    <title>Установка АкваСбор CMS 2.0</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <style>
-        body { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); min-height: 100vh; }
-        .install-card { background: rgba(255,255,255,0.95); backdrop-filter: blur(10px); }
-        .step-indicator { background: #f8f9fa; border-radius: 10px; padding: 1rem; margin-bottom: 2rem; }
-        .step { display: inline-block; width: 40px; height: 40px; line-height: 40px; border-radius: 50%; 
-                text-align: center; margin-right: 1rem; font-weight: bold; }
-        .step.active { background: #28a745; color: white; }
-        .step.completed { background: #20c997; color: white; }
-        .step.pending { background: #e9ecef; color: #6c757d; }
-        .logo { font-size: 2rem; font-weight: bold; color: #28a745; text-align: center; margin-bottom: 2rem; }
+        :root {
+            --primary-gradient: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            --success-gradient: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
+            --card-shadow: 0 20px 40px rgba(0,0,0,0.1);
+            --border-radius: 20px;
+        }
+
+        * { font-family: 'Inter', sans-serif; }
+
+        body { 
+            background: var(--primary-gradient);
+            min-height: 100vh;
+            position: relative;
+            overflow-x: hidden;
+        }
+
+        body::before {
+            content: '';
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><defs><pattern id="grain" width="100" height="100" patternUnits="userSpaceOnUse"><circle cx="25" cy="25" r="1" fill="rgba(255,255,255,0.1)"/><circle cx="75" cy="75" r="1.5" fill="rgba(255,255,255,0.05)"/><circle cx="50" cy="10" r="0.5" fill="rgba(255,255,255,0.1)"/><circle cx="10" cy="50" r="1" fill="rgba(255,255,255,0.05)"/><circle cx="90" cy="30" r="0.8" fill="rgba(255,255,255,0.08)"/></pattern></defs><rect width="100" height="100" fill="url(%23grain)"/></svg>');
+            pointer-events: none;
+            z-index: -1;
+        }
+
+        .install-container {
+            padding: 2rem 0;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+        }
+
+        .install-card { 
+            background: rgba(255,255,255,0.95); 
+            backdrop-filter: blur(20px);
+            border: 1px solid rgba(255,255,255,0.2);
+            box-shadow: var(--card-shadow);
+            border-radius: var(--border-radius);
+            overflow: hidden;
+        }
+
+        .card-header {
+            background: var(--success-gradient);
+            border: none;
+            padding: 2rem;
+        }
+
+        .step-indicator { 
+            background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+            border-radius: 15px;
+            padding: 1.5rem;
+            margin-bottom: 2rem;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .step-indicator::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 2px;
+            background: var(--success-gradient);
+            transform: translateX(-100%);
+            animation: progress 0.5s ease-out forwards;
+        }
+
+        @keyframes progress {
+            to { transform: translateX(calc(<?= ($step-1) * 16.66 ?>% - 100%)); }
+        }
+
+        .steps-container {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+        }
+
+        .step { 
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 50px;
+            height: 50px;
+            border-radius: 50%;
+            text-align: center;
+            font-weight: 600;
+            font-size: 1.1rem;
+            position: relative;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+        }
+
+        .step.active { 
+            background: var(--success-gradient);
+            color: white;
+            transform: scale(1.1);
+            box-shadow: 0 8px 25px rgba(40, 167, 69, 0.3);
+        }
+
+        .step.completed { 
+            background: var(--success-gradient);
+            color: white;
+            transform: scale(1.05);
+        }
+
+        .step.completed::after {
+            content: '✓';
+            position: absolute;
+            font-size: 0.8rem;
+        }
+
+        .step.pending { 
+            background: linear-gradient(135deg, #e9ecef 0%, #f8f9fa 100%);
+            color: #6c757d;
+            border: 2px solid #e9ecef;
+        }
+
+        .step-label {
+            font-size: 0.75rem;
+            color: #6c757d;
+            margin-top: 0.5rem;
+            text-align: center;
+        }
+
+        .logo { 
+            font-size: 2.5rem;
+            font-weight: 700;
+            color: white;
+            text-align: center;
+            margin-bottom: 1rem;
+            text-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+
+        .logo i {
+            background: rgba(255,255,255,0.2);
+            padding: 0.5rem;
+            border-radius: 15px;
+            margin-right: 0.5rem;
+        }
+
+        .form-control, .form-select {
+            border-radius: 12px;
+            border: 2px solid #e9ecef;
+            padding: 0.75rem 1rem;
+            transition: all 0.3s ease;
+        }
+
+        .form-control:focus, .form-select:focus {
+            border-color: #28a745;
+            box-shadow: 0 0 0 0.2rem rgba(40, 167, 69, 0.15);
+            transform: translateY(-1px);
+        }
+
+        .btn {
+            border-radius: 12px;
+            padding: 0.75rem 2rem;
+            font-weight: 500;
+            transition: all 0.3s ease;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .btn-success {
+            background: var(--success-gradient);
+            border: none;
+            box-shadow: 0 8px 25px rgba(40, 167, 69, 0.3);
+        }
+
+        .btn-success:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 12px 35px rgba(40, 167, 69, 0.4);
+        }
+
+        .alert {
+            border-radius: 12px;
+            border: none;
+            padding: 1rem 1.5rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .alert-success {
+            background: linear-gradient(135deg, rgba(40, 167, 69, 0.1) 0%, rgba(32, 201, 151, 0.1) 100%);
+            border-left: 4px solid #28a745;
+        }
+
+        .alert-danger {
+            background: linear-gradient(135deg, rgba(220, 53, 69, 0.1) 0%, rgba(231, 74, 59, 0.1) 100%);
+            border-left: 4px solid #dc3545;
+        }
+
+        .alert-warning {
+            background: linear-gradient(135deg, rgba(255, 193, 7, 0.1) 0%, rgba(255, 171, 0, 0.1) 100%);
+            border-left: 4px solid #ffc107;
+        }
+
+        .alert-info {
+            background: linear-gradient(135deg, rgba(13, 202, 240, 0.1) 0%, rgba(108, 117, 125, 0.1) 100%);
+            border-left: 4px solid #0dcaf0;
+        }
+
+        .table {
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+        }
+
+        .table th {
+            background: var(--success-gradient);
+            color: white;
+            border: none;
+            font-weight: 600;
+        }
+
+        .table td {
+            border-color: #e9ecef;
+            vertical-align: middle;
+        }
+
+        .badge {
+            padding: 0.5rem 1rem;
+            font-size: 0.8rem;
+            border-radius: 8px;
+        }
+
+        .feature-card {
+            background: white;
+            border-radius: 15px;
+            padding: 1.5rem;
+            margin-bottom: 1rem;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+            transition: transform 0.3s ease;
+        }
+
+        .feature-card:hover {
+            transform: translateY(-3px);
+        }
+
+        .feature-icon {
+            width: 60px;
+            height: 60px;
+            background: var(--success-gradient);
+            border-radius: 15px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-size: 1.5rem;
+            margin-bottom: 1rem;
+        }
+
+        .completion-animation {
+            animation: celebration 2s ease-in-out;
+        }
+
+        @keyframes celebration {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.05); }
+        }
+
+        .floating-elements {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            z-index: -1;
+        }
+
+        .floating-element {
+            position: absolute;
+            opacity: 0.1;
+            animation: float 6s ease-in-out infinite;
+        }
+
+        @keyframes float {
+            0%, 100% { transform: translateY(0px); }
+            50% { transform: translateY(-20px); }
+        }
+
+        .requirements-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 1rem;
+            margin: 1.5rem 0;
+        }
+
+        .requirement-item {
+            background: white;
+            border-radius: 12px;
+            padding: 1rem;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+        }
+
+        .version-info {
+            background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+            border-radius: 12px;
+            padding: 1rem;
+            margin-bottom: 1.5rem;
+            text-align: center;
+        }
     </style>
 </head>
 <body>
-    <div class="container py-5">
-        <div class="row justify-content-center">
-            <div class="col-md-8">
-                <div class="card install-card shadow-lg">
-                    <div class="card-header bg-success text-white">
-                        <div class="logo">
-                            <i class="bi bi-water"></i> АкваСбор CMS
+    <div class="floating-elements">
+        <div class="floating-element" style="top: 10%; left: 10%; font-size: 2rem;">🐠</div>
+        <div class="floating-element" style="top: 20%; right: 10%; font-size: 1.5rem; animation-delay: -2s;">🌱</div>
+        <div class="floating-element" style="bottom: 30%; left: 15%; font-size: 1.8rem; animation-delay: -4s;">🐟</div>
+        <div class="floating-element" style="bottom: 20%; right: 20%; font-size: 1.3rem; animation-delay: -1s;">🦐</div>
+    </div>
+
+    <div class="install-container">
+        <div class="container">
+            <div class="row justify-content-center">
+                <div class="col-lg-10 col-xl-8">
+                    <div class="card install-card">
+                        <div class="card-header text-center">
+                            <div class="logo">
+                                <i class="bi bi-water"></i> АкваСбор CMS 2.0
+                            </div>
+                            <h4 class="mb-0 text-white">Мастер установки интернет-магазина</h4>
+                            <p class="mb-0 text-white-50">Система управления аквариумным магазином</p>
                         </div>
-                        <h4 class="text-center mb-0">Мастер установки</h4>
-                    </div>
-                    <div class="card-body">
-                        <!-- Индикатор шагов -->
-                        <div class="step-indicator">
-                            <div class="step <?= $step == 1 ? 'active' : ($step > 1 ? 'completed' : 'pending') ?>">1</div>
-                            <div class="step <?= $step == 2 ? 'active' : ($step > 2 ? 'completed' : 'pending') ?>">2</div>
-                            <div class="step <?= $step == 3 ? 'active' : ($step > 3 ? 'completed' : 'pending') ?>">3</div>
-                            <div class="step <?= $step == 4 ? 'active' : ($step > 4 ? 'completed' : 'pending') ?>">4</div>
-                            <div class="step <?= $step == 5 ? 'active' : ($step > 5 ? 'completed' : 'pending') ?>">5</div>
-                            <div class="step <?= $step == 6 ? 'active' : 'pending' ?>">6</div>
-                        </div>
-
-                        <!-- Сообщения -->
-                        <?php if ($errors): ?>
-                            <?php foreach ($errors as $error): ?>
-                                <div class="alert alert-danger"><i class="bi bi-exclamation-triangle"></i> <?= htmlspecialchars($error) ?></div>
-                            <?php endforeach; ?>
-                        <?php endif; ?>
-
-                        <?php if ($success): ?>
-                            <?php foreach ($success as $msg): ?>
-                                <div class="alert alert-success"><i class="bi bi-check-circle"></i> <?= htmlspecialchars($msg) ?></div>
-                            <?php endforeach; ?>
-                        <?php endif; ?>
-
-                        <!-- Шаг 1: Проверка требований -->
-                        <?php if ($step == 1): ?>
-                            <h5><i class="bi bi-gear"></i> Шаг 1: Проверка системных требований</h5>
-                            <hr>
-
-                            <?php 
-                            $requirements = checkRequirements();
-                            $all_passed = true;
-                            ?>
-
-                            <div class="table-responsive">
-                                <table class="table table-bordered">
-                                    <thead class="table-light">
-                                        <tr>
-                                            <th>Требование</th>
-                                            <th width="100">Статус</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        <?php foreach ($requirements as $req => $passed): ?>
-                                            <tr>
-                                                <td><?= $req ?></td>
-                                                <td>
-                                                    <?php if ($passed): ?>
-                                                        <span class="badge bg-success">OK</span>
-                                                    <?php else: ?>
-                                                        <span class="badge bg-danger">НЕ ВЫПОЛНЕНО</span>
-                                                        <?php $all_passed = false; ?>
-                                                    <?php endif; ?>
-                                                </td>
-                                            </tr>
-                                        <?php endforeach; ?>
-                                    </tbody>
-                                </table>
+                        <div class="card-body p-4">
+                            <!-- Версия и информация -->
+                            <div class="version-info">
+                                <h6 class="mb-1"><i class="bi bi-info-circle"></i> Версия 2.0.0</h6>
+                                <small class="text-muted">PHP <?= PHP_VERSION ?> • MySQL • Bootstrap 5.3</small>
                             </div>
 
-                            <?php if ($all_passed): ?>
-                                <div class="d-grid">
-                                    <a href="?step=2" class="btn btn-success btn-lg">
-                                        <i class="bi bi-arrow-right"></i> Продолжить установку
-                                    </a>
+                            <!-- Индикатор шагов -->
+                            <div class="step-indicator">
+                                <div class="steps-container">
+                                    <div class="text-center">
+                                        <div class="step <?= $step == 1 ? 'active' : ($step > 1 ? 'completed' : 'pending') ?>">1</div>
+                                        <div class="step-label">Проверка</div>
+                                    </div>
+                                    <div class="text-center">
+                                        <div class="step <?= $step == 2 ? 'active' : ($step > 2 ? 'completed' : 'pending') ?>">2</div>
+                                        <div class="step-label">База данных</div>
+                                    </div>
+                                    <div class="text-center">
+                                        <div class="step <?= $step == 3 ? 'active' : ($step > 3 ? 'completed' : 'pending') ?>">3</div>
+                                        <div class="step-label">Структура</div>
+                                    </div>
+                                    <div class="text-center">
+                                        <div class="step <?= $step == 4 ? 'active' : ($step > 4 ? 'completed' : 'pending') ?>">4</div>
+                                        <div class="step-label">Администратор</div>
+                                    </div>
+                                    <div class="text-center">
+                                        <div class="step <?= $step == 5 ? 'active' : ($step > 5 ? 'completed' : 'pending') ?>">5</div>
+                                        <div class="step-label">Настройка</div>
+                                    </div>
+                                    <div class="text-center">
+                                        <div class="step <?= $step == 6 ? 'active' : 'pending' ?>">6</div>
+                                        <div class="step-label">Готово</div>
+                                    </div>
                                 </div>
-                            <?php else: ?>
-                                <div class="alert alert-warning">
-                                    <i class="bi bi-exclamation-triangle"></i>
-                                    Необходимо устранить все проблемы перед продолжением установки.
-                                </div>
+                            </div>
+
+                            <!-- Сообщения -->
+                            <?php if ($errors): ?>
+                                <?php foreach ($errors as $error): ?>
+                                    <div class="alert alert-danger">
+                                        <i class="bi bi-exclamation-triangle me-2"></i>
+                                        <?= htmlspecialchars($error) ?>
+                                    </div>
+                                <?php endforeach; ?>
                             <?php endif; ?>
-                        <?php endif; ?>
 
-                        <!-- Шаг 2: Настройка БД -->
-                        <?php if ($step == 2): ?>
-                            <h5><i class="bi bi-database"></i> Шаг 2: Подключение к базе данных</h5>
-                            <hr>
+                            <?php if ($success): ?>
+                                <?php foreach ($success as $msg): ?>
+                                    <div class="alert alert-success">
+                                        <i class="bi bi-check-circle me-2"></i>
+                                        <?= htmlspecialchars($msg) ?>
+                                    </div>
+                                <?php endforeach; ?>
+                            <?php endif; ?>
 
-                            <form method="post">
-                                <div class="row">
-                                    <div class="col-md-6 mb-3">
-                                        <label class="form-label">Хост БД</label>
-                                        <input type="text" class="form-control" name="db_host" value="localhost" required>
-                                    </div>
-                                    <div class="col-md-6 mb-3">
-                                        <label class="form-label">Имя базы данных</label>
-                                        <input type="text" class="form-control" name="db_name" placeholder="akvasbor_db" required>
-                                    </div>
+                            <!-- Шаг 1: Проверка требований -->
+                            <?php if ($step == 1): ?>
+                                <h5 class="mb-4"><i class="bi bi-gear-fill me-2"></i>Проверка системных требований</h5>
+
+                                <?php
+                                $requirements = checkRequirements();
+                                $all_passed = true;
+                                ?>
+
+                                <div class="requirements-grid">
+                                    <?php foreach ($requirements as $req => $passed): ?>
+                                        <div class="requirement-item">
+                                            <span><?= $req ?></span>
+                                            <?php if ($passed): ?>
+                                                <span class="badge bg-success"><i class="bi bi-check-lg"></i> OK</span>
+                                            <?php else: ?>
+                                                <span class="badge bg-danger"><i class="bi bi-x-lg"></i> ОШИБКА</span>
+                                                <?php $all_passed = false; ?>
+                                            <?php endif; ?>
+                                        </div>
+                                    <?php endforeach; ?>
                                 </div>
-                                <div class="row">
-                                    <div class="col-md-6 mb-3">
-                                        <label class="form-label">Пользователь</label>
-                                        <input type="text" class="form-control" name="db_user" placeholder="root" required>
+
+                                <?php if ($all_passed): ?>
+                                    <div class="text-center mt-4">
+                                        <a href="?step=2" class="btn btn-success btn-lg">
+                                            <i class="bi bi-arrow-right me-2"></i>Продолжить установку
+                                        </a>
                                     </div>
-                                    <div class="col-md-6 mb-3">
-                                        <label class="form-label">Пароль</label>
-                                        <input type="password" class="form-control" name="db_pass" placeholder="">
+                                <?php else: ?>
+                                    <div class="alert alert-warning mt-4">
+                                        <i class="bi bi-exclamation-triangle me-2"></i>
+                                        <strong>Внимание!</strong> Необходимо устранить все проблемы перед продолжением установки.
                                     </div>
-                                </div>
+                                <?php endif; ?>
+                            <?php endif; ?>
+
+                            <!-- Шаг 2: Настройка БД -->
+                            <?php if ($step == 2): ?>
+                                <h5 class="mb-4"><i class="bi bi-database-fill me-2"></i>Подключение к базе данных</h5>
 
                                 <div class="alert alert-info">
-                                    <i class="bi bi-info-circle"></i>
-                                    <strong>Важно!</strong> База данных должна быть создана заранее. Система создаст только таблицы.
+                                    <i class="bi bi-info-circle me-2"></i>
+                                    <strong>Важно!</strong> База данных должна быть создана заранее через панель управления хостингом. Система создаст только таблицы и структуру.
                                 </div>
 
-                                <div class="d-grid">
-                                    <button type="submit" class="btn btn-success btn-lg">
-                                        <i class="bi bi-database-check"></i> Проверить подключение
-                                    </button>
-                                </div>
-                            </form>
-                        <?php endif; ?>
+                                <form method="post" class="row g-3">
+                                    <div class="col-md-6">
+                                        <label class="form-label">Хост базы данных</label>
+                                        <input type="text" class="form-control" name="db_host" value="localhost" required>
+                                        <div class="form-text">Обычно localhost</div>
+                                    </div>
+                                    <div class="col-md-6">
+                                        <label class="form-label">Имя базы данных *</label>
+                                        <input type="text" class="form-control" name="db_name" placeholder="akvasbor_db" required>
+                                        <div class="form-text">Создайте БД в панели хостинга</div>
+                                    </div>
+                                    <div class="col-md-6">
+                                        <label class="form-label">Пользователь БД</label>
+                                        <input type="text" class="form-control" name="db_user" placeholder="root" required>
+                                    </div>
+                                    <div class="col-md-6">
+                                        <label class="form-label">Пароль БД</label>
+                                        <input type="password" class="form-control" name="db_pass" placeholder="">
+                                        <div class="form-text">Может быть пустым</div>
+                                    </div>
+                                    <div class="col-12 text-center mt-4">
+                                        <button type="submit" class="btn btn-success btn-lg">
+                                            <i class="bi bi-database-check me-2"></i>Проверить подключение
+                                        </button>
+                                    </div>
+                                </form>
+                            <?php endif; ?>
 
-                        <!-- Шаг 3: Создание таблиц -->
-                        <?php if ($step == 3): ?>
-                            <h5><i class="bi bi-table"></i> Шаг 3: Создание структуры базы данных</h5>
-                            <hr>
+                            <!-- Шаг 3: Создание таблиц -->
+                            <?php if ($step == 3): ?>
+                                <h5 class="mb-4"><i class="bi bi-table me-2"></i>Создание структуры базы данных</h5>
 
-                            <p>Будут созданы следующие таблицы:</p>
-                            <ul>
-                                <li><code>admins</code> - администраторы системы</li>
-                                <li><code>categories</code> - категории товаров</li>
-                                <li><code>products</code> - товары (аквариумные растения)</li>
-                                <li><code>orders</code> - заказы покупателей</li>
-                                <li><code>order_items</code> - позиции заказов</li>
-                                <li><code>reviews</code> - отзывы о товарах</li>
-                                <li><code>settings</code> - настройки сайта</li>
-                                <li><code>news</code> - новости и статьи</li>
-                            </ul>
-
-                            <form method="post">
-                                <div class="d-grid">
-                                    <button type="submit" name="create_tables" class="btn btn-success btn-lg">
-                                        <i class="bi bi-play-circle"></i> Создать таблицы
-                                    </button>
-                                </div>
-                            </form>
-                        <?php endif; ?>
-
-                        <!-- Шаг 4: Создание админа -->
-                        <?php if ($step == 4): ?>
-                            <h5><i class="bi bi-person-gear"></i> Шаг 4: Создание администратора</h5>
-                            <hr>
-
-                            <form method="post">
-                                <div class="mb-3">
-                                    <label class="form-label">Логин администратора</label>
-                                    <input type="text" class="form-control" name="admin_login" value="admin" required>
-                                </div>
-                                <div class="mb-3">
-                                    <label class="form-label">Email администратора</label>
-                                    <input type="email" class="form-control" name="admin_email" placeholder="admin@akvasbor.ru" required>
-                                </div>
                                 <div class="row">
-                                    <div class="col-md-6 mb-3">
+                                    <div class="col-md-6">
+                                        <div class="feature-card">
+                                            <div class="feature-icon">
+                                                <i class="bi bi-shop"></i>
+                                            </div>
+                                            <h6>Основные таблицы</h6>
+                                            <ul class="list-unstyled small">
+                                                <li><i class="bi bi-check text-success"></i> Администраторы</li>
+                                                <li><i class="bi bi-check text-success"></i> Категории товаров</li>
+                                                <li><i class="bi bi-check text-success"></i> Товары и растения</li>
+                                                <li><i class="bi bi-check text-success"></i> Заказы и позиции</li>
+                                            </ul>
+                                        </div>
+                                    </div>
+                                    <div class="col-md-6">
+                                        <div class="feature-card">
+                                            <div class="feature-icon">
+                                                <i class="bi bi-gear"></i>
+                                            </div>
+                                            <h6>Дополнительные</h6>
+                                            <ul class="list-unstyled small">
+                                                <li><i class="bi bi-check text-success"></i> Отзывы и рейтинги</li>
+                                                <li><i class="bi bi-check text-success"></i> Настройки системы</li>
+                                                <li><i class="bi bi-check text-success"></i> Новости и статьи</li>
+                                                <li><i class="bi bi-check text-success"></i> Аналитика</li>
+                                            </ul>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <form method="post" class="text-center">
+                                    <button type="submit" name="create_tables" class="btn btn-success btn-lg">
+                                        <i class="bi bi-play-circle me-2"></i>Создать структуру БД
+                                    </button>
+                                </form>
+                            <?php endif; ?>
+
+                            <!-- Шаг 4: Создание админа -->
+                            <?php if ($step == 4): ?>
+                                <h5 class="mb-4"><i class="bi bi-person-gear me-2"></i>Создание администратора</h5>
+
+                                <form method="post" class="row g-3">
+                                    <div class="col-12">
+                                        <label class="form-label">Логин администратора</label>
+                                        <input type="text" class="form-control" name="admin_login" value="admin" required>
+                                    </div>
+                                    <div class="col-12">
+                                        <label class="form-label">Email администратора</label>
+                                        <input type="email" class="form-control" name="admin_email" placeholder="admin@akvasbor.ru" required>
+                                    </div>
+                                    <div class="col-md-6">
                                         <label class="form-label">Пароль</label>
                                         <input type="password" class="form-control" name="admin_pass" minlength="6" required>
+                                        <div class="form-text">Минимум 6 символов</div>
                                     </div>
-                                    <div class="col-md-6 mb-3">
+                                    <div class="col-md-6">
                                         <label class="form-label">Повторите пароль</label>
                                         <input type="password" class="form-control" name="admin_pass2" minlength="6" required>
                                     </div>
+                                    <div class="col-12 text-center mt-4">
+                                        <button type="submit" class="btn btn-success btn-lg">
+                                            <i class="bi bi-person-plus me-2"></i>Создать администратора
+                                        </button>
+                                    </div>
+                                </form>
+                            <?php endif; ?>
+
+                            <!-- Шаг 5: Финализация -->
+                            <?php if ($step == 5): ?>
+                                <h5 class="mb-4"><i class="bi bi-gear-fill me-2"></i>Финализация установки</h5>
+
+                                <div class="row">
+                                    <div class="col-md-6">
+                                        <div class="feature-card">
+                                            <div class="feature-icon">
+                                                <i class="bi bi-file-earmark-code"></i>
+                                            </div>
+                                            <h6>Конфигурация</h6>
+                                            <ul class="list-unstyled small">
+                                                <li><i class="bi bi-check text-success"></i> Настройки подключения</li>
+                                                <li><i class="bi bi-check text-success"></i> Параметры системы</li>
+                                                <li><i class="bi bi-check text-success"></i> Модули и компоненты</li>
+                                            </ul>
+                                        </div>
+                                    </div>
+                                    <div class="col-md-6">
+                                        <div class="feature-card">
+                                            <div class="feature-icon">
+                                                <i class="bi bi-folder"></i>
+                                            </div>
+                                            <h6>Структура</h6>
+                                            <ul class="list-unstyled small">
+                                                <li><i class="bi bi-check text-success"></i> Директории загрузок</li>
+                                                <li><i class="bi bi-check text-success"></i> Файлы безопасности</li>
+                                                <li><i class="bi bi-check text-success"></i> Настройки SEO</li>
+                                            </ul>
+                                        </div>
+                                    </div>
                                 </div>
 
-                                <div class="d-grid">
-                                    <button type="submit" class="btn btn-success btn-lg">
-                                        <i class="bi bi-person-plus"></i> Создать администратора
-                                    </button>
-                                </div>
-                            </form>
-                        <?php endif; ?>
-
-                        <!-- Шаг 5: Финализация -->
-                        <?php if ($step == 5): ?>
-                            <h5><i class="bi bi-gear-fill"></i> Шаг 5: Финализация установки</h5>
-                            <hr>
-
-                            <p>На этом шаге будут созданы:</p>
-                            <ul>
-                                <li>Конфигурационные файлы</li>
-                                <li>Файл .htaccess для правильной маршрутизации</li>
-                                <li>Директории для загрузки файлов</li>
-                                <li>Базовые настройки системы</li>
-                            </ul>
-
-                            <form method="post">
-                                <div class="d-grid">
+                                <form method="post" class="text-center">
                                     <button type="submit" name="finalize" class="btn btn-success btn-lg">
-                                        <i class="bi bi-check-circle"></i> Завершить установку
+                                        <i class="bi bi-check-circle me-2"></i>Завершить установку
                                     </button>
-                                </div>
-                            </form>
-                        <?php endif; ?>
+                                </form>
+                            <?php endif; ?>
 
-                        <!-- Шаг 6: Завершение -->
-                        <?php if ($step == 6): ?>
-                            <div class="text-center">
-                                <div class="mb-4">
-                                    <i class="bi bi-check-circle-fill text-success" style="font-size: 4rem;"></i>
-                                </div>
-                                <h4 class="text-success">Установка завершена успешно!</h4>
-                                <p class="text-muted">АкваСбор CMS готова к использованию</p>
+                            <!-- Шаг 6: Завершение -->
+                            <?php if ($step == 6): ?>
+                                <div class="text-center completion-animation">
+                                    <div class="mb-4">
+                                        <i class="bi bi-check-circle-fill text-success" style="font-size: 5rem;"></i>
+                                    </div>
+                                    <h3 class="text-success mb-2">Установка завершена!</h3>
+                                    <p class="text-muted mb-4">АкваСбор CMS 2.0 готова к использованию</p>
 
-                                <div class="row mt-4">
-                                    <div class="col-md-6">
-                                        <div class="card h-100">
-                                            <div class="card-body text-center">
-                                                <i class="bi bi-house-door text-primary" style="font-size: 2rem;"></i>
-                                                <h6 class="mt-2">Фронтенд сайта</h6>
-                                                <a href="index.php" class="btn btn-primary btn-sm">Перейти</a>
+                                    <div class="row g-3 justify-content-center">
+                                        <div class="col-md-4">
+                                            <div class="feature-card text-center">
+                                                <div class="feature-icon mx-auto">
+                                                    <i class="bi bi-house-door"></i>
+                                                </div>
+                                                <h6>Фронтенд сайта</h6>
+                                                <p class="small text-muted">Главная страница магазина</p>
+                                                <a href="index.php" class="btn btn-outline-primary">
+                                                    <i class="bi bi-arrow-right me-2"></i>Открыть
+                                                </a>
+                                            </div>
+                                        </div>
+                                        <div class="col-md-4">
+                                            <div class="feature-card text-center">
+                                                <div class="feature-icon mx-auto">
+                                                    <i class="bi bi-gear"></i>
+                                                </div>
+                                                <h6>Админ-панель</h6>
+                                                <p class="small text-muted">Управление магазином</p>
+                                                <a href="admin.php" class="btn btn-success">
+                                                    <i class="bi bi-arrow-right me-2"></i>Войти
+                                                </a>
                                             </div>
                                         </div>
                                     </div>
-                                    <div class="col-md-6">
-                                        <div class="card h-100">
-                                            <div class="card-body text-center">
-                                                <i class="bi bi-gear text-success" style="font-size: 2rem;"></i>
-                                                <h6 class="mt-2">Админ-панель</h6>
-                                                <a href="admin.php" class="btn btn-success btn-sm">Войти</a>
-                                            </div>
-                                        </div>
+
+                                    <div class="alert alert-warning mt-4">
+                                        <i class="bi bi-shield-exclamation me-2"></i>
+                                        <strong>Безопасность:</strong> Обязательно удалите файл <code>install.php</code> после установки!
+                                    </div>
+
+                                    <div class="alert alert-info">
+                                        <i class="bi bi-lightbulb me-2"></i>
+                                        <strong>Следующие шаги:</strong>
+                                        <ol class="mb-0 mt-2 text-start">
+                                            <li>Войдите в админ-панель и настройте основные параметры</li>
+                                            <li>Добавьте категории товаров</li>
+                                            <li>Загрузите первые товары и изображения</li>
+                                            <li>Настройте способы оплаты и доставки</li>
+                                        </ol>
                                     </div>
                                 </div>
-
-                                <div class="alert alert-warning mt-4">
-                                    <i class="bi bi-shield-exclamation"></i>
-                                    <strong>Безопасность:</strong> Удалите файл <code>install.php</code> после установки!
-                                </div>
-                            </div>
-                        <?php endif; ?>
+                            <?php endif; ?>
+                        </div>
                     </div>
                 </div>
             </div>
         </div>
     </div>
 
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        // Анимации и интерактивность
+        document.addEventListener('DOMContentLoaded', function() {
+            // Анимация появления карточек
+            const cards = document.querySelectorAll('.feature-card');
+            cards.forEach((card, index) => {
+                card.style.opacity = '0';
+                card.style.transform = 'translateY(20px)';
+                setTimeout(() => {
+                    card.style.transition = 'all 0.5s ease';
+                    card.style.opacity = '1';
+                    card.style.transform = 'translateY(0)';
+                }, index * 100);
+            });
+
+            // Валидация форм в реальном времени
+            const forms = document.querySelectorAll('form');
+            forms.forEach(form => {
+                const inputs = form.querySelectorAll('input[required]');
+                inputs.forEach(input => {
+                    input.addEventListener('input', function() {
+                        if (this.value.length > 0) {
+                            this.classList.add('is-valid');
+                            this.classList.remove('is-invalid');
+                        } else {
+                            this.classList.add('is-invalid');
+                            this.classList.remove('is-valid');
+                        }
+                    });
+                });
+            });
+
+            // Прогресс бар
+            const progressBar = document.querySelector('.step-indicator::before');
+            if (progressBar) {
+                const currentStep = <?= $step ?>;
+                const progress = (currentStep - 1) / 5 * 100;
+                progressBar.style.width = progress + '%';
+            }
+        });
+
+        // Эффект печатания для заголовков
+        function typeWriter(element, text, speed = 100) {
+            let i = 0;
+            element.innerHTML = '';
+            function type() {
+                if (i < text.length) {
+                    element.innerHTML += text.charAt(i);
+                    i++;
+                    setTimeout(type, speed);
+                }
+            }
+            type();
+        }
+
+        // Применяем эффект к заголовкам на финальной странице
+        <?php if ($step == 6): ?>
+        setTimeout(() => {
+            const title = document.querySelector('h3.text-success');
+            if (title) {
+                const originalText = title.textContent;
+                typeWriter(title, originalText, 80);
+            }
+        }, 1000);
+        <?php endif; ?>
+    </script>
 </body>
 </html>
