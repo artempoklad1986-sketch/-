@@ -1,7 +1,7 @@
 <?php
 /**
- * АкваСбор - МЕГА Админ-панель v8.0 - УЛЬТРА ВЕРСИЯ + НОВЫЕ МОДУЛИ
- * НОВЫЕ МОДУЛИ: Новости, Страницы, Слайдер, Супер Настройки
+ * АкваСбор - МЕГА Админ-панель v7.2 - ИСПРАВЛЕНО + НОВЫЕ МОДУЛИ
+ * ИСПРАВЛЕНИЯ: супер графики + категории + заказы + отзывы
  */
 session_start();
 
@@ -211,16 +211,13 @@ function updateSiteSettings($data) {
             'site_name', 'site_description', 'site_keywords',
             'admin_email', 'phone', 'address', 'working_hours',
             'currency', 'products_per_page', 'min_order_amount',
-            'free_shipping_from', 'maintenance_mode',
-            'social_vk', 'social_telegram', 'social_instagram', 'social_youtube'
+            'free_shipping_from'
         ];
 
         foreach ($allowedFields as $field) {
             if (isset($data[$field])) {
                 if (in_array($field, ['products_per_page', 'min_order_amount', 'free_shipping_from'])) {
                     $settings[$field] = (int)$data[$field];
-                } elseif ($field === 'maintenance_mode') {
-                    $settings[$field] = !empty($data[$field]);
                 } else {
                     $settings[$field] = trim($data[$field]);
                 }
@@ -234,255 +231,6 @@ function updateSiteSettings($data) {
             return ['success' => true, 'message' => 'Настройки сохранены успешно!'];
         } else {
             return ['success' => false, 'message' => 'Ошибка сохранения настроек'];
-        }
-    } catch (Exception $e) {
-        return ['success' => false, 'message' => 'Ошибка: ' . $e->getMessage()];
-    }
-}
-
-// === НОВЫЕ ФУНКЦИИ ДЛЯ НОВОСТЕЙ ===
-
-function getNews() {
-    $dynamicData = initializeDynamicData();
-    return $dynamicData['news'] ?? [];
-}
-
-function createNews($data) {
-    try {
-        $dynamicData = initializeDynamicData();
-        $news = $dynamicData['news'] ?? [];
-
-        $newId = empty($news) ? 1 : (max(array_column($news, 'id')) + 1);
-
-        $newNews = [
-            'id' => $newId,
-            'title' => trim($data['title'] ?? ''),
-            'excerpt' => trim($data['excerpt'] ?? ''),
-            'content' => trim($data['content'] ?? ''),
-            'image' => trim($data['image'] ?? ''),
-            'author' => trim($data['author'] ?? 'Администратор'),
-            'is_published' => !empty($data['is_published']),
-            'is_featured' => !empty($data['is_featured']),
-            'meta_title' => trim($data['meta_title'] ?? ''),
-            'meta_description' => trim($data['meta_description'] ?? ''),
-            'views' => 0,
-            'created_at' => date('Y-m-d H:i:s'),
-            'updated_at' => date('Y-m-d H:i:s')
-        ];
-
-        $dynamicData['news'][] = $newNews;
-        $dynamicData['last_updated'] = date('Y-m-d H:i:s');
-
-        if (saveDynamicData($dynamicData)) {
-            logAdminAction('NEWS', 'Создана новость: ' . $newNews['title']);
-            return ['success' => true, 'message' => 'Новость создана успешно!', 'news' => $newNews];
-        } else {
-            return ['success' => false, 'message' => 'Ошибка сохранения данных'];
-        }
-    } catch (Exception $e) {
-        return ['success' => false, 'message' => 'Ошибка: ' . $e->getMessage()];
-    }
-}
-
-function updateNews($id, $data) {
-    try {
-        $dynamicData = initializeDynamicData();
-        $news = &$dynamicData['news'];
-
-        $newsIndex = array_search($id, array_column($news, 'id'));
-        if ($newsIndex === false) {
-            return ['success' => false, 'message' => 'Новость не найдена'];
-        }
-
-        $newsItem = &$news[$newsIndex];
-
-        $updateableFields = ['title', 'excerpt', 'content', 'image', 'author', 'meta_title', 'meta_description'];
-        foreach ($updateableFields as $field) {
-            if (isset($data[$field])) {
-                $newsItem[$field] = trim($data[$field]);
-            }
-        }
-
-        $boolFields = ['is_published', 'is_featured'];
-        foreach ($boolFields as $field) {
-            if (array_key_exists($field, $data)) {
-                $newsItem[$field] = !empty($data[$field]);
-            }
-        }
-
-        $newsItem['updated_at'] = date('Y-m-d H:i:s');
-        $dynamicData['last_updated'] = date('Y-m-d H:i:s');
-
-        if (saveDynamicData($dynamicData)) {
-            logAdminAction('NEWS', 'Обновлена новость: ' . $newsItem['title']);
-            return ['success' => true, 'message' => 'Новость обновлена успешно!'];
-        } else {
-            return ['success' => false, 'message' => 'Ошибка сохранения данных'];
-        }
-    } catch (Exception $e) {
-        return ['success' => false, 'message' => 'Ошибка: ' . $e->getMessage()];
-    }
-}
-
-function deleteNews($id) {
-    try {
-        $dynamicData = initializeDynamicData();
-        $news = &$dynamicData['news'];
-
-        $newsIndex = array_search($id, array_column($news, 'id'));
-        if ($newsIndex === false) {
-            return ['success' => false, 'message' => 'Новость не найдена'];
-        }
-
-        $newsTitle = $news[$newsIndex]['title'];
-        array_splice($news, $newsIndex, 1);
-        $dynamicData['last_updated'] = date('Y-m-d H:i:s');
-
-        if (saveDynamicData($dynamicData)) {
-            logAdminAction('NEWS', 'Удалена новость: ' . $newsTitle);
-            return ['success' => true, 'message' => 'Новость удалена'];
-        } else {
-            return ['success' => false, 'message' => 'Ошибка сохранения данных'];
-        }
-    } catch (Exception $e) {
-        return ['success' => false, 'message' => 'Ошибка: ' . $e->getMessage()];
-    }
-}
-
-// === НОВЫЕ ФУНКЦИИ ДЛЯ СТРАНИЦ ===
-
-function getPages() {
-    $dynamicData = initializeDynamicData();
-    return $dynamicData['pages'] ?? [];
-}
-
-function createPage($data) {
-    try {
-        $dynamicData = initializeDynamicData();
-        $pages = $dynamicData['pages'] ?? [];
-
-        $newId = empty($pages) ? 1 : (max(array_column($pages, 'id')) + 1);
-        $slug = trim($data['slug'] ?? '') ?: generateSlug($data['title'] ?? '');
-
-        $newPage = [
-            'id' => $newId,
-            'title' => trim($data['title'] ?? ''),
-            'slug' => $slug,
-            'content' => trim($data['content'] ?? ''),
-            'template' => trim($data['template'] ?? 'default'),
-            'is_published' => !empty($data['is_published']),
-            'show_in_menu' => !empty($data['show_in_menu']),
-            'menu_order' => (int)($data['menu_order'] ?? 999),
-            'meta_title' => trim($data['meta_title'] ?? ''),
-            'meta_description' => trim($data['meta_description'] ?? ''),
-            'created_at' => date('Y-m-d H:i:s'),
-            'updated_at' => date('Y-m-d H:i:s')
-        ];
-
-        $dynamicData['pages'][] = $newPage;
-        $dynamicData['last_updated'] = date('Y-m-d H:i:s');
-
-        if (saveDynamicData($dynamicData)) {
-            logAdminAction('PAGES', 'Создана страница: ' . $newPage['title']);
-            return ['success' => true, 'message' => 'Страница создана успешно!', 'page' => $newPage];
-        } else {
-            return ['success' => false, 'message' => 'Ошибка сохранения данных'];
-        }
-    } catch (Exception $e) {
-        return ['success' => false, 'message' => 'Ошибка: ' . $e->getMessage()];
-    }
-}
-
-function generateSlug($text) {
-    $translit = [
-        'а' => 'a', 'б' => 'b', 'в' => 'v', 'г' => 'g', 'д' => 'd',
-        'е' => 'e', 'ж' => 'zh', 'з' => 'z', 'и' => 'i', 'й' => 'y',
-        'к' => 'k', 'л' => 'l', 'м' => 'm', 'н' => 'n', 'о' => 'o',
-        'п' => 'p', 'р' => 'r', 'с' => 's', 'т' => 't', 'у' => 'u',
-        'ф' => 'f', 'х' => 'h', 'ц' => 'ts', 'ч' => 'ch', 'ш' => 'sh',
-        'щ' => 'sch', 'ы' => 'y', 'э' => 'e', 'ю' => 'yu', 'я' => 'ya'
-    ];
-    
-    $slug = mb_strtolower($text);
-    $slug = strtr($slug, $translit);
-    $slug = preg_replace('/[^a-z0-9-]/', '-', $slug);
-    $slug = preg_replace('/-+/', '-', $slug);
-    $slug = trim($slug, '-');
-    
-    return $slug ?: 'page-' . time();
-}
-
-// === НОВЫЕ ФУНКЦИИ ДЛЯ СЛАЙДЕРА ===
-
-function getSlides() {
-    $dynamicData = initializeDynamicData();
-    $slides = $dynamicData['slides'] ?? [];
-    
-    // Сортируем по порядку
-    usort($slides, fn($a, $b) => ($a['sort_order'] ?? 999) - ($b['sort_order'] ?? 999));
-    
-    return $slides;
-}
-
-function createSlide($data) {
-    try {
-        $dynamicData = initializeDynamicData();
-        $slides = $dynamicData['slides'] ?? [];
-
-        $newId = empty($slides) ? 1 : (max(array_column($slides, 'id')) + 1);
-
-        $newSlide = [
-            'id' => $newId,
-            'title' => trim($data['title'] ?? ''),
-            'subtitle' => trim($data['subtitle'] ?? ''),
-            'description' => trim($data['description'] ?? ''),
-            'image' => trim($data['image'] ?? ''),
-            'link_url' => trim($data['link_url'] ?? ''),
-            'link_text' => trim($data['link_text'] ?? 'Подробнее'),
-            'text_position' => trim($data['text_position'] ?? 'center'),
-            'background_color' => trim($data['background_color'] ?? ''),
-            'text_color' => trim($data['text_color'] ?? '#ffffff'),
-            'is_active' => !empty($data['is_active']),
-            'sort_order' => (int)($data['sort_order'] ?? (count($slides) + 1)),
-            'show_from' => trim($data['show_from'] ?? ''),
-            'show_until' => trim($data['show_until'] ?? ''),
-            'created_at' => date('Y-m-d H:i:s'),
-            'updated_at' => date('Y-m-d H:i:s')
-        ];
-
-        $dynamicData['slides'][] = $newSlide;
-        $dynamicData['last_updated'] = date('Y-m-d H:i:s');
-
-        if (saveDynamicData($dynamicData)) {
-            logAdminAction('SLIDER', 'Создан слайд: ' . $newSlide['title']);
-            return ['success' => true, 'message' => 'Слайд создан успешно!', 'slide' => $newSlide];
-        } else {
-            return ['success' => false, 'message' => 'Ошибка сохранения данных'];
-        }
-    } catch (Exception $e) {
-        return ['success' => false, 'message' => 'Ошибка: ' . $e->getMessage()];
-    }
-}
-
-function deleteSlide($id) {
-    try {
-        $dynamicData = initializeDynamicData();
-        $slides = &$dynamicData['slides'];
-
-        $slideIndex = array_search($id, array_column($slides, 'id'));
-        if ($slideIndex === false) {
-            return ['success' => false, 'message' => 'Слайд не найден'];
-        }
-
-        $slideTitle = $slides[$slideIndex]['title'];
-        array_splice($slides, $slideIndex, 1);
-        $dynamicData['last_updated'] = date('Y-m-d H:i:s');
-
-        if (saveDynamicData($dynamicData)) {
-            logAdminAction('SLIDER', 'Удален слайд: ' . $slideTitle);
-            return ['success' => true, 'message' => 'Слайд удален'];
-        } else {
-            return ['success' => false, 'message' => 'Ошибка сохранения данных'];
         }
     } catch (Exception $e) {
         return ['success' => false, 'message' => 'Ошибка: ' . $e->getMessage()];
@@ -1028,54 +776,6 @@ if (isset($_POST['ajax']) || isset($_GET['ajax'])) {
                 echo json_encode($result);
                 break;
 
-            // === НОВЫЕ AJAX ФУНКЦИИ ДЛЯ НОВОСТЕЙ ===
-            case 'get_news':
-                $newsId = (int)($_GET['id'] ?? 0);
-                $news = getNews();
-                $newsItem = array_filter($news, fn($n) => $n['id'] == $newsId);
-                if ($newsItem) {
-                    echo json_encode(['success' => true, 'news' => array_values($newsItem)[0]]);
-                } else {
-                    echo json_encode(['success' => false, 'message' => 'Новость не найдена']);
-                }
-                break;
-
-            case 'delete_news':
-                $newsId = (int)$_POST['news_id'];
-                $result = deleteNews($newsId);
-                echo json_encode($result);
-                break;
-
-            // === НОВЫЕ AJAX ФУНКЦИИ ДЛЯ СТРАНИЦ ===
-            case 'get_page':
-                $pageId = (int)($_GET['id'] ?? 0);
-                $pages = getPages();
-                $page = array_filter($pages, fn($p) => $p['id'] == $pageId);
-                if ($page) {
-                    echo json_encode(['success' => true, 'page' => array_values($page)[0]]);
-                } else {
-                    echo json_encode(['success' => false, 'message' => 'Страница не найдена']);
-                }
-                break;
-
-            // === НОВЫЕ AJAX ФУНКЦИИ ДЛЯ СЛАЙДЕРА ===
-            case 'get_slide':
-                $slideId = (int)($_GET['id'] ?? 0);
-                $slides = getSlides();
-                $slide = array_filter($slides, fn($s) => $s['id'] == $slideId);
-                if ($slide) {
-                    echo json_encode(['success' => true, 'slide' => array_values($slide)[0]]);
-                } else {
-                    echo json_encode(['success' => false, 'message' => 'Слайд не найден']);
-                }
-                break;
-
-            case 'delete_slide':
-                $slideId = (int)$_POST['slide_id'];
-                $result = deleteSlide($slideId);
-                echo json_encode($result);
-                break;
-
             // === ОСТАЛЬНЫЕ ФУНКЦИИ (БЕЗ ИЗМЕНЕНИЙ) ===
             case 'approve_review':
                 $reviewId = (int)$_POST['review_id'];
@@ -1197,34 +897,6 @@ if ($action && !isset($_POST['ajax'])) {
             ];
             header('Location: admin.php?section=news');
             exit;
-
-        case 'update_news':
-            $newsId = (int)$_POST['news_id'];
-            $result = updateNews($newsId, $_POST);
-            $_SESSION['admin_message'] = [
-                'text' => $result['message'],
-                'type' => $result['success'] ? 'success' : 'error'
-            ];
-            header('Location: admin.php?section=news');
-            exit;
-
-        case 'create_page':
-            $result = createPage($_POST);
-            $_SESSION['admin_message'] = [
-                'text' => $result['message'],
-                'type' => $result['success'] ? 'success' : 'error'
-            ];
-            header('Location: admin.php?section=pages');
-            exit;
-
-        case 'create_slide':
-            $result = createSlide($_POST);
-            $_SESSION['admin_message'] = [
-                'text' => $result['message'],
-                'type' => $result['success'] ? 'success' : 'error'
-            ];
-            header('Location: admin.php?section=slider');
-            exit;
     }
 }
 
@@ -1236,7 +908,7 @@ $adminData = getAdminData($section);
 <head>
     <meta charset='UTF-8'>
     <meta name='viewport' content='width=device-width, initial-scale=1.0'>
-    <title><?= $adminData['title'] ?? 'Админ-панель' ?> - АкваСбор MEGA CRM v8.0</title>
+    <title><?= $adminData['title'] ?? 'Админ-панель' ?> - АкваСбор MEGA CRM v7.2</title>
 
     <link href='https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap' rel='stylesheet'>
     <link rel='stylesheet' href='https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css'>
@@ -2326,6 +1998,7 @@ $adminData = getAdminData($section);
             .stats-grid {
                 grid-template-columns: 1fr;
             }
+
             .analytics-grid {
                 grid-template-columns: 1fr;
             }
@@ -2351,7 +2024,7 @@ $adminData = getAdminData($section);
                     <div class='logo-icon'>🐠</div>
                     <div class='logo-text'>
                         <div class='logo-title'>АкваСбор</div>
-                        <div class='logo-subtitle'>MEGA CRM v8.0</div>
+                        <div class='logo-subtitle'>MEGA CRM v7.2</div>
                     </div>
                 </div>
             </div>
@@ -2398,18 +2071,12 @@ $adminData = getAdminData($section);
                     <div class='nav-title'>📝 Контент & SEO</div>
                     <a href='admin.php?section=news' class='sidebar-link <?= $section === 'news' ? 'active' : '' ?>'>
                         <i class='fas fa-newspaper'></i>
-                        <span class='sidebar-link-text'>📰 Новости MEGA</span>
+                        <span class='sidebar-link-text'>Новости</span>
                         <span class='sidebar-badge'><?= count(getNews()) ?></span>
                     </a>
                     <a href='admin.php?section=pages' class='sidebar-link <?= $section === 'pages' ? 'active' : '' ?>'>
                         <i class='fas fa-file-alt'></i>
-                        <span class='sidebar-link-text'>📄 Страницы MEGA</span>
-                        <span class='sidebar-badge badge-success'><?= count(getPages()) ?></span>
-                    </a>
-                    <a href='admin.php?section=slider' class='sidebar-link <?= $section === 'slider' ? 'active' : '' ?>'>
-                        <i class='fas fa-images'></i>
-                        <span class='sidebar-link-text'>🎚️ Слайдер MEGA</span>
-                        <span class='sidebar-badge badge-info'><?= count(array_filter(getSlides(), fn($s) => $s['is_active'])) ?></span>
+                        <span class='sidebar-link-text'>Страницы</span>
                     </a>
                 </div>
 
@@ -2417,7 +2084,7 @@ $adminData = getAdminData($section);
                     <div class='nav-title'>⚙️ Система & настройки</div>
                     <a href='admin.php?section=settings' class='sidebar-link <?= $section === 'settings' ? 'active' : '' ?>'>
                         <i class='fas fa-cog'></i>
-                        <span class='sidebar-link-text'>⚙️ СУПЕР Настройки</span>
+                        <span class='sidebar-link-text'>Настройки</span>
                         <span class='sidebar-badge badge-success'>PRO</span>
                     </a>
                     <a href='admin.php?section=logs' class='sidebar-link <?= $section === 'logs' ? 'active' : '' ?>'>
@@ -2852,584 +2519,6 @@ $adminData = getAdminData($section);
         </div>
     </div>
 
-    <!-- НОВАЯ МЕГА МОДАЛКА ДЛЯ НОВОСТЕЙ -->
-    <div class='mega-modal' id='megaNewsModal'>
-        <div class='mega-modal-dialog'>
-            <div class='mega-modal-header'>
-                <h3 class='mega-modal-title'>
-                    <i class='fas fa-newspaper'></i>
-                    <span id='newsModalTitle'>📰 Добавить новую новость</span>
-                </h3>
-                <button type='button' class='mega-modal-close' onclick='closeMegaModal("megaNewsModal")'>&times;</button>
-            </div>
-
-            <form method='post' id='megaNewsForm'>
-                <input type='hidden' name='action' value='create_news' id='newsFormAction'>
-                <input type='hidden' name='news_id' id='newsId'>
-
-                <div class='mega-modal-body'>
-                    <div class='mega-modal-tabs'>
-                        <button type='button' class='mega-tab-button active' data-tab='news-basic'>
-                            <i class='fas fa-info-circle'></i>
-                            Основные данные
-                        </button>
-                        <button type='button' class='mega-tab-button' data-tab='news-content'>
-                            <i class='fas fa-file-alt'></i>
-                            Содержание
-                        </button>
-                        <button type='button' class='mega-tab-button' data-tab='news-seo'>
-                            <i class='fas fa-search'></i>
-                            SEO & Публикация
-                        </button>
-                    </div>
-
-                    <div class='mega-tab-content'>
-                        <div class='mega-tab-panel active' data-panel='news-basic'>
-                            <div class='ai-assistant'>
-                                <div class='ai-title'>
-                                    <i class='fas fa-robot'></i>
-                                    AI Помощник для новостей
-                                </div>
-                                <div class='ai-suggestions'>
-                                    <span class='ai-suggestion' onclick='generateNewsTitle()'>Сгенерировать заголовок</span>
-                                    <span class='ai-suggestion' onclick='generateNewsExcerpt()'>Создать анонс</span>
-                                    <span class='ai-suggestion' onclick='generateNewsContent()'>Создать контент</span>
-                                </div>
-                            </div>
-
-                            <div class='form-group'>
-                                <label class='form-label'>Заголовок новости *</label>
-                                <input type='text' name='title' class='form-input' required placeholder='Заголовок новости'>
-                            </div>
-
-                            <div class='form-row'>
-                                <div class='form-group'>
-                                    <label class='form-label'>Автор</label>
-                                    <input type='text' name='author' class='form-input' placeholder='Администратор' value='Администратор'>
-                                </div>
-                                <div class='form-group'>
-                                    <label class='form-label'>Изображение (URL)</label>
-                                    <input type='url' name='image' class='form-input' placeholder='https://example.com/image.jpg'>
-                                </div>
-                            </div>
-
-                            <div class='form-group'>
-                                <label class='form-label'>Краткий анонс *</label>
-                                <textarea name='excerpt' class='form-textarea' rows='3' required placeholder='Краткое описание новости для превью'></textarea>
-                            </div>
-                        </div>
-
-                        <div class='mega-tab-panel' data-panel='news-content'>
-                            <div class='form-group'>
-                                <label class='form-label'>Полный текст новости *</label>
-                                <textarea name='content' class='form-textarea' rows='12' required placeholder='Подробное содержание новости...'></textarea>
-                            </div>
-                        </div>
-
-                        <div class='mega-tab-panel' data-panel='news-seo'>
-                            <div class='form-group'>
-                                <label class='form-label'>SEO заголовок</label>
-                                <input type='text' name='meta_title' class='form-input' placeholder='SEO заголовок для поисковиков'>
-                            </div>
-
-                            <div class='form-group'>
-                                <label class='form-label'>SEO описание</label>
-                                <textarea name='meta_description' class='form-textarea' rows='3' placeholder='Описание для поисковиков'></textarea>
-                            </div>
-
-                            <div class='form-checkbox'>
-                                <input type='checkbox' name='is_published' id='newsPublished' checked>
-                                <label for='newsPublished'>📢 Опубликовать новость</label>
-                            </div>
-
-                            <div class='form-checkbox'>
-                                <input type='checkbox' name='is_featured' id='newsFeatured'>
-                                <label for='newsFeatured'>⭐ Важная новость</label>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                <div class='mega-modal-footer' style='padding: 20px 32px; border-top: 2px solid var(--border-color); display: flex; justify-content: space-between; align-items: center; background: var(--bg-secondary);'>
-                    <button type='button' class='btn btn-outline' onclick='closeMegaModal("megaNewsModal")'>
-                        <i class='fas fa-times'></i> Отмена
-                    </button>
-                    <button type='submit' class='btn btn-success btn-lg'>
-                        <i class='fas fa-check'></i> Сохранить новость
-                    </button>
-                </div>
-            </form>
-        </div>
-    </div>
-
-    <!-- НОВАЯ МЕГА МОДАЛКА ДЛЯ СТРАНИЦ -->
-    <div class='mega-modal' id='megaPageModal'>
-        <div class='mega-modal-dialog'>
-            <div class='mega-modal-header'>
-                <h3 class='mega-modal-title'>
-                    <i class='fas fa-file-alt'></i>
-                    <span id='pageModalTitle'>📄 Добавить новую страницу</span>
-                </h3>
-                <button type='button' class='mega-modal-close' onclick='closeMegaModal("megaPageModal")'>&times;</button>
-            </div>
-
-            <form method='post' id='megaPageForm'>
-                <input type='hidden' name='action' value='create_page' id='pageFormAction'>
-                <input type='hidden' name='page_id' id='pageId'>
-
-                <div class='mega-modal-body'>
-                    <div class='mega-modal-tabs'>
-                        <button type='button' class='mega-tab-button active' data-tab='page-basic'>
-                            <i class='fas fa-info-circle'></i>
-                            Основные данные
-                        </button>
-                        <button type='button' class='mega-tab-button' data-tab='page-content'>
-                            <i class='fas fa-file-alt'></i>
-                            Контент страницы
-                        </button>
-                        <button type='button' class='mega-tab-button' data-tab='page-seo'>
-                            <i class='fas fa-search'></i>
-                            SEO & Настройки
-                        </button>
-                        <button type='button' class='mega-tab-button' data-tab='page-template'>
-                            <i class='fas fa-paint-brush'></i>
-                            Шаблон
-                        </button>
-                    </div>
-
-                    <div class='mega-tab-content'>
-                        <div class='mega-tab-panel active' data-panel='page-basic'>
-                            <div class='form-group'>
-                                <label class='form-label'>Название страницы *</label>
-                                <input type='text' name='title' class='form-input' required placeholder='Название страницы'>
-                            </div>
-
-                            <div class='form-group'>
-                                <label class='form-label'>Адрес страницы (slug)</label>
-                                <input type='text' name='slug' class='form-input' placeholder='o-kompanii (будет сгенерирован автоматически)'>
-                                <small style='color: var(--text-muted); font-size: 12px;'>
-                                    URL будет: /page/o-kompanii
-                                </small>
-                            </div>
-
-                            <div class='form-row'>
-                                <div class='form-checkbox'>
-                                    <input type='checkbox' name='is_published' id='pagePublished' checked>
-                                    <label for='pagePublished'>📢 Опубликовать страницу</label>
-                                </div>
-                                <div class='form-checkbox'>
-                                    <input type='checkbox' name='show_in_menu' id='pageInMenu'>
-                                    <label for='pageInMenu'>📋 Показать в меню</label>
-                                </div>
-                            </div>
-
-                            <div class='form-group'>
-                                <label class='form-label'>Порядок в меню</label>
-                                <input type='number' name='menu_order' class='form-input' value='999' min='0'>
-                            </div>
-                        </div>
-
-                        <div class='mega-tab-panel' data-panel='page-content'>
-                            <div class='form-group'>
-                                <label class='form-label'>Содержание страницы *</label>
-                                <textarea name='content' class='form-textarea' rows='15' required placeholder='HTML контент страницы...'></textarea>
-                            </div>
-                        </div>
-
-                        <div class='mega-tab-panel' data-panel='page-seo'>
-                            <div class='form-group'>
-                                <label class='form-label'>SEO заголовок</label>
-                                <input type='text' name='meta_title' class='form-input' placeholder='SEO заголовок для поисковиков'>
-                            </div>
-
-                            <div class='form-group'>
-                                <label class='form-label'>SEO описание</label>
-                                <textarea name='meta_description' class='form-textarea' rows='3' placeholder='Описание для поисковиков'></textarea>
-                            </div>
-                        </div>
-
-                        <div class='mega-tab-panel' data-panel='page-template'>
-                            <div class='form-group'>
-                                <label class='form-label'>Шаблон страницы</label>
-                                <select name='template' class='form-select'>
-                                    <option value='default'>Стандартный шаблон</option>
-                                    <option value='full-width'>Во всю ширину</option>
-                                    <option value='landing'>Лендинг</option>
-                                    <option value='contact'>Контактная страница</option>
-                                </select>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                <div class='mega-modal-footer' style='padding: 20px 32px; border-top: 2px solid var(--border-color); display: flex; justify-content: space-between; align-items: center; background: var(--bg-secondary);'>
-                    <button type='button' class='btn btn-outline' onclick='closeMegaModal("megaPageModal")'>
-                        <i class='fas fa-times'></i> Отмена
-                    </button>
-                    <button type='submit' class='btn btn-success btn-lg'>
-                        <i class='fas fa-check'></i> Сохранить страницу
-                    </button>
-                </div>
-            </form>
-        </div>
-    </div>
-
-    <!-- НОВАЯ МЕГА МОДАЛКА ДЛЯ СЛАЙДЕРА -->
-    <div class='mega-modal' id='megaSlideModal'>
-        <div class='mega-modal-dialog'>
-            <div class='mega-modal-header'>
-                <h3 class='mega-modal-title'>
-                    <i class='fas fa-images'></i>
-                    <span id='slideModalTitle'>🎚️ Добавить новый слайд</span>
-                </h3>
-                <button type='button' class='mega-modal-close' onclick='closeMegaModal("megaSlideModal")'>&times;</button>
-            </div>
-
-            <form method='post' id='megaSlideForm'>
-                <input type='hidden' name='action' value='create_slide' id='slideFormAction'>
-                <input type='hidden' name='slide_id' id='slideId'>
-
-                <div class='mega-modal-body'>
-                    <div class='mega-modal-tabs'>
-                        <button type='button' class='mega-tab-button active' data-tab='slide-basic'>
-                            <i class='fas fa-info-circle'></i>
-                            Основные данные
-                        </button>
-                        <button type='button' class='mega-tab-button' data-tab='slide-design'>
-                            <i class='fas fa-paint-brush'></i>
-                            Дизайн & Стиль
-                        </button>
-                        <button type='button' class='mega-tab-button' data-tab='slide-settings'>
-                            <i class='fas fa-cogs'></i>
-                            Настройки показа
-                        </button>
-                    </div>
-
-                    <div class='mega-tab-content'>
-                        <div class='mega-tab-panel active' data-panel='slide-basic'>
-                            <div class='form-group'>
-                                <label class='form-label'>Заголовок слайда *</label>
-                                <input type='text' name='title' class='form-input' required placeholder='Основной заголовок'>
-                            </div>
-
-                            <div class='form-group'>
-                                <label class='form-label'>Подзаголовок</label>
-                                <input type='text' name='subtitle' class='form-input' placeholder='Дополнительный подзаголовок'>
-                            </div>
-
-                            <div class='form-group'>
-                                <label class='form-label'>Описание</label>
-                                <textarea name='description' class='form-textarea' rows='3' placeholder='Описание под заголовком'></textarea>
-                            </div>
-
-                            <div class='form-group'>
-                                <label class='form-label'>Изображение слайда (URL) *</label>
-                                <input type='url' name='image' class='form-input' required placeholder='https://example.com/slide.jpg'>
-                            </div>
-
-                            <div class='form-row'>
-                                <div class='form-group'>
-                                    <label class='form-label'>Ссылка (URL)</label>
-                                    <input type='url' name='link_url' class='form-input' placeholder='https://example.com'>
-                                </div>
-                                <div class='form-group'>
-                                    <label class='form-label'>Текст кнопки</label>
-                                    <input type='text' name='link_text' class='form-input' placeholder='Подробнее' value='Подробнее'>
-                                </div>
-                            </div>
-                        </div>
-
-                        <div class='mega-tab-panel' data-panel='slide-design'>
-                            <div class='form-group'>
-                                <label class='form-label'>Позиция текста</label>
-                                <select name='text_position' class='form-select'>
-                                    <option value='center'>По центру</option>
-                                    <option value='left'>Слева</option>
-                                    <option value='right'>Справа</option>
-                                    <option value='top'>Сверху</option>
-                                    <option value='bottom'>Снизу</option>
-                                </select>
-                            </div>
-
-                            <div class='form-row'>
-                                <div class='form-group'>
-                                    <label class='form-label'>Цвет фона (если нет изображения)</label>
-                                    <input type='color' name='background_color' class='form-input' value='#667eea'>
-                                </div>
-                                <div class='form-group'>
-                                    <label class='form-label'>Цвет текста</label>
-                                    <input type='color' name='text_color' class='form-input' value='#ffffff'>
-                                </div>
-                            </div>
-                        </div>
-
-                        <div class='mega-tab-panel' data-panel='slide-settings'>
-                            <div class='form-group'>
-                                <label class='form-label'>Порядок показа</label>
-                                <input type='number' name='sort_order' class='form-input' value='1' min='1'>
-                            </div>
-
-                            <div class='form-row'>
-                                <div class='form-group'>
-                                    <label class='form-label'>Показывать с (необязательно)</label>
-                                    <input type='date' name='show_from' class='form-input'>
-                                </div>
-                                <div class='form-group'>
-                                    <label class='form-label'>Показывать до (необязательно)</label>
-                                    <input type='date' name='show_until' class='form-input'>
-                                </div>
-                            </div>
-
-                            <div class='form-checkbox'>
-                                <input type='checkbox' name='is_active' id='slideActive' checked>
-                                <label for='slideActive'>👁️ Слайд активен</label>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                <div class='mega-modal-footer' style='padding: 20px 32px; border-top: 2px solid var(--border-color); display: flex; justify-content: space-between; align-items: center; background: var(--bg-secondary);'>
-                    <button type='button' class='btn btn-outline' onclick='closeMegaModal("megaSlideModal")'>
-                        <i class='fas fa-times'></i> Отмена
-                    </button>
-                    <button type='submit' class='btn btn-success btn-lg'>
-                        <i class='fas fa-check'></i> Сохранить слайд
-                    </button>
-                </div>
-            </form>
-        </div>
-    </div>
-
-    <!-- СУПЕР МЕГА МОДАЛКА НАСТРОЕК -->
-    <div class='mega-modal' id='ultraSettingsModal'>
-        <div class='mega-modal-dialog' style='width: 1400px;'>
-            <div class='mega-modal-header'>
-                <h3 class='mega-modal-title'>
-                    <i class='fas fa-cogs'></i>
-                    ⚙️ СУПЕР МЕГА ВИЗУАЛ НАСТРОЙКИ САЙТА
-                </h3>
-                <button type='button' class='mega-modal-close' onclick='closeMegaModal("ultraSettingsModal")'>&times;</button>
-            </div>
-
-            <form method='post' id='ultraSettingsForm'>
-                <input type='hidden' name='action' value='save_settings'>
-
-                <div class='mega-modal-body'>
-                    <div class='mega-modal-tabs'>
-                        <button type='button' class='mega-tab-button active' data-tab='settings-general'>
-                            <i class='fas fa-globe'></i>
-                            Общие настройки
-                        </button>
-                        <button type='button' class='mega-tab-button' data-tab='settings-contact'>
-                            <i class='fas fa-phone'></i>
-                            Контактная информация
-                        </button>
-                        <button type='button' class='mega-tab-button' data-tab='settings-social'>
-                            <i class='fas fa-share-alt'></i>
-                            Социальные сети
-                        </button>
-                        <button type='button' class='mega-tab-button' data-tab='settings-shop'>
-                            <i class='fas fa-shopping-cart'></i>
-                            Настройки магазина
-                        </button>
-                        <button type='button' class='mega-tab-button' data-tab='settings-seo'>
-                            <i class='fas fa-search'></i>
-                            SEO оптимизация
-                        </button>
-                        <button type='button' class='mega-tab-button' data-tab='settings-appearance'>
-                            <i class='fas fa-palette'></i>
-                            Внешний вид
-                        </button>
-                        <button type='button' class='mega-tab-button' data-tab='settings-integrations'>
-                            <i class='fas fa-plug'></i>
-                            Интеграции
-                        </button>
-                    </div>
-
-                    <div class='mega-tab-content'>
-                        <div class='mega-tab-panel active' data-panel='settings-general'>
-                            <div class='form-group'>
-                                <label class='form-label'>Название сайта *</label>
-                                <input type='text' name='site_name' class='form-input' required value='<?= htmlspecialchars($adminData['settings']['site_name'] ?? 'АкваСбор') ?>'>
-                            </div>
-
-                            <div class='form-group'>
-                                <label class='form-label'>Описание сайта</label>
-                                <textarea name='site_description' class='form-textarea' rows='3'><?= htmlspecialchars($adminData['settings']['site_description'] ?? '') ?></textarea>
-                            </div>
-
-                            <div class='form-row'>
-                                <div class='form-group'>
-                                    <label class='form-label'>Email администратора *</label>
-                                    <input type='email' name='admin_email' class='form-input' required value='<?= htmlspecialchars($adminData['settings']['admin_email'] ?? '') ?>'>
-                                </div>
-                                <div class='form-group'>
-                                    <label class='form-label'>Валюта</label>
-                                    <select name='currency' class='form-select'>
-                                        <option value='₽' <?= ($adminData['settings']['currency'] ?? '₽') === '₽' ? 'selected' : '' ?>>₽ Российский рубль</option>
-                                        <option value='$' <?= ($adminData['settings']['currency'] ?? '₽') === '$' ? 'selected' : '' ?>>$ Доллар США</option>
-                                        <option value='€' <?= ($adminData['settings']['currency'] ?? '₽') === '€' ? 'selected' : '' ?>>€ Евро</option>
-                                        <option value='₸' <?= ($adminData['settings']['currency'] ?? '₽') === '₸' ? 'selected' : '' ?>>₸ Казахстанский тенге</option>
-                                    </select>
-                                </div>
-                            </div>
-
-                            <div class='form-checkbox'>
-                                <input type='checkbox' name='maintenance_mode' id='maintenanceMode' <?= !empty($adminData['settings']['maintenance_mode']) ? 'checked' : '' ?>>
-                                <label for='maintenanceMode'>🔧 Режим технического обслуживания</label>
-                            </div>
-                        </div>
-
-                        <div class='mega-tab-panel' data-panel='settings-contact'>
-                            <div class='form-row'>
-                                <div class='form-group'>
-                                    <label class='form-label'>Телефон *</label>
-                                    <input type='tel' name='phone' class='form-input' required value='<?= htmlspecialchars($adminData['settings']['phone'] ?? '') ?>'>
-                                </div>
-                                <div class='form-group'>
-                                    <label class='form-label'>Часы работы</label>
-                                    <input type='text' name='working_hours' class='form-input' value='<?= htmlspecialchars($adminData['settings']['working_hours'] ?? 'Пн-Пт: 9:00-18:00') ?>'>
-                                </div>
-                            </div>
-
-                            <div class='form-group'>
-                                <label class='form-label'>Адрес</label>
-                                <textarea name='address' class='form-textarea' rows='2'><?= htmlspecialchars($adminData['settings']['address'] ?? '') ?></textarea>
-                            </div>
-                        </div>
-
-                        <div class='mega-tab-panel' data-panel='settings-social'>
-                            <div class='form-row'>
-                                <div class='form-group'>
-                                    <label class='form-label'>ВКонтакте (URL)</label>
-                                    <input type='url' name='social_vk' class='form-input' placeholder='https://vk.com/yourpage' value='<?= htmlspecialchars($adminData['settings']['social_vk'] ?? '') ?>'>
-                                </div>
-                                <div class='form-group'>
-                                    <label class='form-label'>Telegram (URL)</label>
-                                    <input type='url' name='social_telegram' class='form-input' placeholder='https://t.me/yourchannel' value='<?= htmlspecialchars($adminData['settings']['social_telegram'] ?? '') ?>'>
-                                </div>
-                            </div>
-
-                            <div class='form-row'>
-                                <div class='form-group'>
-                                    <label class='form-label'>Instagram (URL)</label>
-                                    <input type='url' name='social_instagram' class='form-input' placeholder='https://instagram.com/yourpage' value='<?= htmlspecialchars($adminData['settings']['social_instagram'] ?? '') ?>'>
-                                </div>
-                                <div class='form-group'>
-                                    <label class='form-label'>YouTube (URL)</label>
-                                    <input type='url' name='social_youtube' class='form-input' placeholder='https://youtube.com/yourchannel' value='<?= htmlspecialchars($adminData['settings']['social_youtube'] ?? '') ?>'>
-                                </div>
-                            </div>
-                        </div>
-
-                        <div class='mega-tab-panel' data-panel='settings-shop'>
-                            <div class='form-row-3'>
-                                <div class='form-group'>
-                                    <label class='form-label'>Товаров на странице</label>
-                                    <select name='products_per_page' class='form-select'>
-                                        <option value='6' <?= ($adminData['settings']['products_per_page'] ?? 12) == 6 ? 'selected' : '' ?>>6 товаров</option>
-                                        <option value='9' <?= ($adminData['settings']['products_per_page'] ?? 12) == 9 ? 'selected' : '' ?>>9 товаров</option>
-                                        <option value='12' <?= ($adminData['settings']['products_per_page'] ?? 12) == 12 ? 'selected' : '' ?>>12 товаров</option>
-                                        <option value='15' <?= ($adminData['settings']['products_per_page'] ?? 12) == 15 ? 'selected' : '' ?>>15 товаров</option>
-                                        <option value='18' <?= ($adminData['settings']['products_per_page'] ?? 12) == 18 ? 'selected' : '' ?>>18 товаров</option>
-                                        <option value='24' <?= ($adminData['settings']['products_per_page'] ?? 12) == 24 ? 'selected' : '' ?>>24 товара</option>
-                                    </select>
-                                </div>
-
-                                <div class='form-group'>
-                                    <label class='form-label'>Минимальная сумма заказа (₽)</label>
-                                    <input type='number' name='min_order_amount' class='form-input' min='0' value='<?= $adminData['settings']['min_order_amount'] ?? 1000 ?>'>
-                                </div>
-
-                                <div class='form-group'>
-                                    <label class='form-label'>Бесплатная доставка от (₽)</label>
-                                    <input type='number' name='free_shipping_from' class='form-input' min='0' value='<?= $adminData['settings']['free_shipping_from'] ?? 5000 ?>'>
-                                </div>
-                            </div>
-                        </div>
-
-                        <div class='mega-tab-panel' data-panel='settings-seo'>
-                            <div class='form-group'>
-                                <label class='form-label'>Ключевые слова сайта</label>
-                                <input type='text' name='site_keywords' class='form-input' value='<?= htmlspecialchars($adminData['settings']['site_keywords'] ?? '') ?>' placeholder='аквариум, рыбки, растения, корм'>
-                            </div>
-
-                            <div class='form-group'>
-                                <label class='form-label'>Google Analytics ID</label>
-                                <input type='text' name='google_analytics' class='form-input' placeholder='GA-XXXXXXXXX-X' value='<?= htmlspecialchars($adminData['settings']['google_analytics'] ?? '') ?>'>
-                            </div>
-
-                            <div class='form-group'>
-                                <label class='form-label'>Yandex.Metrika ID</label>
-                                <input type='text' name='yandex_metrika' class='form-input' placeholder='12345678' value='<?= htmlspecialchars($adminData['settings']['yandex_metrika'] ?? '') ?>'>
-                            </div>
-                        </div>
-
-                        <div class='mega-tab-panel' data-panel='settings-appearance'>
-                            <div class='form-row'>
-                                <div class='form-group'>
-                                    <label class='form-label'>Основной цвет сайта</label>
-                                    <input type='color' name='primary_color' class='form-input' value='<?= $adminData['settings']['primary_color'] ?? '#667eea' ?>'>
-                                </div>
-                                <div class='form-group'>
-                                    <label class='form-label'>Вторичный цвет</label>
-                                    <input type='color' name='secondary_color' class='form-input' value='<?= $adminData['settings']['secondary_color'] ?? '#764ba2' ?>'>
-                                </div>
-                            </div>
-
-                            <div class='form-group'>
-                                <label class='form-label'>Логотип сайта (URL)</label>
-                                <input type='url' name='logo_url' class='form-input' placeholder='https://example.com/logo.png' value='<?= htmlspecialchars($adminData['settings']['logo_url'] ?? '') ?>'>
-                            </div>
-
-                            <div class='form-group'>
-                                <label class='form-label'>Фоновое изображение главной страницы (URL)</label>
-                                <input type='url' name='hero_background' class='form-input' placeholder='https://example.com/bg.jpg' value='<?= htmlspecialchars($adminData['settings']['hero_background'] ?? '') ?>'>
-                            </div>
-                        </div>
-
-                        <div class='mega-tab-panel' data-panel='settings-integrations'>
-                            <div class='form-group'>
-                                <label class='form-label'>API ключ платежной системы</label>
-                                <input type='password' name='payment_api_key' class='form-input' placeholder='Секретный ключ' value='<?= htmlspecialchars($adminData['settings']['payment_api_key'] ?? '') ?>'>
-                            </div>
-
-                            <div class='form-group'>
-                                <label class='form-label'>SMTP сервер для почты</label>
-                                <input type='text' name='smtp_host' class='form-input' placeholder='smtp.gmail.com' value='<?= htmlspecialchars($adminData['settings']['smtp_host'] ?? '') ?>'>
-                            </div>
-
-                            <div class='form-row'>
-                                <div class='form-group'>
-                                    <label class='form-label'>SMTP пользователь</label>
-                                    <input type='email' name='smtp_user' class='form-input' placeholder='your@email.com' value='<?= htmlspecialchars($adminData['settings']['smtp_user'] ?? '') ?>'>
-                                </div>
-                                <div class='form-group'>
-                                    <label class='form-label'>SMTP пароль</label>
-                                    <input type='password' name='smtp_password' class='form-input' placeholder='Пароль от почты' value='<?= htmlspecialchars($adminData['settings']['smtp_password'] ?? '') ?>'>
-                                </div>
-                            </div>
-
-                            <div class='form-group'>
-                                <label class='form-label'>1C API endpoint</label>
-                                <input type='url' name='onec_api_url' class='form-input' placeholder='https://your1c.com/api' value='<?= htmlspecialchars($adminData['settings']['onec_api_url'] ?? '') ?>'>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                <div class='mega-modal-footer' style='padding: 20px 32px; border-top: 2px solid var(--border-color); display: flex; justify-content: space-between; align-items: center; background: var(--bg-secondary);'>
-                    <button type='button' class='btn btn-outline' onclick='closeMegaModal("ultraSettingsModal")'>
-                        <i class='fas fa-times'></i> Отмена
-                    </button>
-                    <button type='submit' class='btn btn-success btn-lg'>
-                        <i class='fas fa-check'></i> Сохранить все настройки
-                    </button>
-                </div>
-            </form>
-        </div>
-    </div>
-
     <!-- Лоадер -->
     <div class='loading-overlay' id='loadingOverlay'>
         <div class='spinner'></div>
@@ -3495,26 +2584,6 @@ $adminData = getAdminData($section);
                 formActionElement = document.getElementById('reviewFormAction');
                 idElement = document.getElementById('reviewId');
                 formElement = document.getElementById('megaReviewForm');
-            } else if (modalId === 'megaNewsModal') {
-                titleElement = document.getElementById('newsModalTitle');
-                formActionElement = document.getElementById('newsFormAction');
-                idElement = document.getElementById('newsId');
-                formElement = document.getElementById('megaNewsForm');
-            } else if (modalId === 'megaPageModal') {
-                titleElement = document.getElementById('pageModalTitle');
-                formActionElement = document.getElementById('pageFormAction');
-                idElement = document.getElementById('pageId');
-                formElement = document.getElementById('megaPageForm');
-            } else if (modalId === 'megaSlideModal') {
-                titleElement = document.getElementById('slideModalTitle');
-                formActionElement = document.getElementById('slideFormAction');
-                idElement = document.getElementById('slideId');
-                formElement = document.getElementById('megaSlideForm');
-            } else if (modalId === 'ultraSettingsModal') {
-                // Для модалки настроек
-                modal.classList.add('show');
-                document.body.style.overflow = 'hidden';
-                return;
             }
 
             if (itemId) {
@@ -3531,18 +2600,6 @@ $adminData = getAdminData($section);
                     titleElement.textContent = 'Редактировать отзыв';
                     formActionElement.value = 'update_review';
                     loadReviewData(itemId);
-                } else if (itemType === 'news') {
-                    titleElement.textContent = '📰 Редактировать новость';
-                    formActionElement.value = 'update_news';
-                    loadNewsData(itemId);
-                } else if (itemType === 'page') {
-                    titleElement.textContent = '📄 Редактировать страницу';
-                    formActionElement.value = 'update_page';
-                    loadPageData(itemId);
-                } else if (itemType === 'slide') {
-                    titleElement.textContent = '🎚️ Редактировать слайд';
-                    formActionElement.value = 'update_slide';
-                    loadSlideData(itemId);
                 }
                 idElement.value = itemId;
             } else {
@@ -3556,15 +2613,6 @@ $adminData = getAdminData($section);
                 } else if (itemType === 'review') {
                     titleElement.textContent = 'Добавить новый отзыв';
                     formActionElement.value = 'create_review';
-                } else if (itemType === 'news') {
-                    titleElement.textContent = '📰 Добавить новую новость';
-                    formActionElement.value = 'create_news';
-                } else if (itemType === 'page') {
-                    titleElement.textContent = '📄 Добавить новую страницу';
-                    formActionElement.value = 'create_page';
-                } else if (itemType === 'slide') {
-                    titleElement.textContent = '🎚️ Добавить новый слайд';
-                    formActionElement.value = 'create_slide';
                 }
                 idElement.value = '';
                 formElement.reset();
@@ -3577,12 +2625,6 @@ $adminData = getAdminData($section);
                     document.getElementById('categoryActive').checked = true;
                 } else if (itemType === 'review') {
                     document.getElementById('reviewApproved').checked = true;
-                } else if (itemType === 'news') {
-                    document.getElementById('newsPublished').checked = true;
-                } else if (itemType === 'page') {
-                    document.getElementById('pagePublished').checked = true;
-                } else if (itemType === 'slide') {
-                    document.getElementById('slideActive').checked = true;
                 }
             }
 
@@ -3685,97 +2727,6 @@ $adminData = getAdminData($section);
             }
         }
 
-        // НОВАЯ ФУНКЦИЯ: Загрузка данных новости
-        async function loadNewsData(newsId) {
-            try {
-                const response = await fetch(`admin.php?action=get_news&ajax=1&id=${newsId}`);
-                const result = await response.json();
-
-                if (result.success) {
-                    const news = result.news;
-                    document.querySelector('#megaNewsForm [name="title"]').value = news.title || '';
-                    document.querySelector('#megaNewsForm [name="author"]').value = news.author || '';
-                    document.querySelector('#megaNewsForm [name="image"]').value = news.image || '';
-                    document.querySelector('#megaNewsForm [name="excerpt"]').value = news.excerpt || '';
-                    document.querySelector('#megaNewsForm [name="content"]').value = news.content || '';
-                    document.querySelector('#megaNewsForm [name="meta_title"]').value = news.meta_title || '';
-                    document.querySelector('#megaNewsForm [name="meta_description"]').value = news.meta_description || '';
-
-                    document.getElementById('newsPublished').checked = !!news.is_published;
-                    document.getElementById('newsFeatured').checked = !!news.is_featured;
-
-                    showNotification('Данные новости загружены', 'success');
-                } else {
-                    showNotification('Ошибка загрузки новости: ' + result.message, 'error');
-                }
-            } catch (error) {
-                console.error('Ошибка загрузки новости:', error);
-                showNotification('Ошибка сети при загрузке новости', 'error');
-            }
-        }
-
-        // НОВАЯ ФУНКЦИЯ: Загрузка данных страницы  
-        async function loadPageData(pageId) {
-            try {
-                const response = await fetch(`admin.php?action=get_page&ajax=1&id=${pageId}`);
-                const result = await response.json();
-
-                if (result.success) {
-                    const page = result.page;
-                    document.querySelector('#megaPageForm [name="title"]').value = page.title || '';
-                    document.querySelector('#megaPageForm [name="slug"]').value = page.slug || '';
-                    document.querySelector('#megaPageForm [name="content"]').value = page.content || '';
-                    document.querySelector('#megaPageForm [name="template"]').value = page.template || 'default';
-                    document.querySelector('#megaPageForm [name="meta_title"]').value = page.meta_title || '';
-                    document.querySelector('#megaPageForm [name="meta_description"]').value = page.meta_description || '';
-                    document.querySelector('#megaPageForm [name="menu_order"]').value = page.menu_order || 999;
-
-                    document.getElementById('pagePublished').checked = !!page.is_published;
-                    document.getElementById('pageInMenu').checked = !!page.show_in_menu;
-
-                    showNotification('Данные страницы загружены', 'success');
-                } else {
-                    showNotification('Ошибка загрузки страницы: ' + result.message, 'error');
-                }
-            } catch (error) {
-                console.error('Ошибка загрузки страницы:', error);
-                showNotification('Ошибка сети при загрузке страницы', 'error');
-            }
-        }
-
-        // НОВАЯ ФУНКЦИЯ: Загрузка данных слайда
-        async function loadSlideData(slideId) {
-            try {
-                const response = await fetch(`admin.php?action=get_slide&ajax=1&id=${slideId}`);
-                const result = await response.json();
-
-                if (result.success) {
-                    const slide = result.slide;
-                    document.querySelector('#megaSlideForm [name="title"]').value = slide.title || '';
-                    document.querySelector('#megaSlideForm [name="subtitle"]').value = slide.subtitle || '';
-                    document.querySelector('#megaSlideForm [name="description"]').value = slide.description || '';
-                    document.querySelector('#megaSlideForm [name="image"]').value = slide.image || '';
-                    document.querySelector('#megaSlideForm [name="link_url"]').value = slide.link_url || '';
-                    document.querySelector('#megaSlideForm [name="link_text"]').value = slide.link_text || 'Подробнее';
-                    document.querySelector('#megaSlideForm [name="text_position"]').value = slide.text_position || 'center';
-                    document.querySelector('#megaSlideForm [name="background_color"]').value = slide.background_color || '#667eea';
-                    document.querySelector('#megaSlideForm [name="text_color"]').value = slide.text_color || '#ffffff';
-                    document.querySelector('#megaSlideForm [name="sort_order"]').value = slide.sort_order || 1;
-                    document.querySelector('#megaSlideForm [name="show_from"]').value = slide.show_from || '';
-                    document.querySelector('#megaSlideForm [name="show_until"]').value = slide.show_until || '';
-
-                    document.getElementById('slideActive').checked = !!slide.is_active;
-
-                    showNotification('Данные слайда загружены', 'success');
-                } else {
-                    showNotification('Ошибка загрузки слайда: ' + result.message, 'error');
-                }
-            } catch (error) {
-                console.error('Ошибка загрузки слайда:', error);
-                showNotification('Ошибка сети при загрузке слайда', 'error');
-            }
-        }
-
         // Переключение вкладок
         document.addEventListener('DOMContentLoaded', function() {
             const tabButtons = document.querySelectorAll('.mega-tab-button');
@@ -3871,51 +2822,6 @@ $adminData = getAdminData($section);
             const randomIcon = icons[Math.floor(Math.random() * icons.length)];
             document.querySelector('#megaCategoryForm [name="icon"]').value = randomIcon;
             showNotification('Иконка подобрана', 'success');
-        }
-
-        // НОВЫЕ AI ФУНКЦИИ ДЛЯ НОВОСТЕЙ
-        function generateNewsTitle() {
-            const titles = [
-                'Новое поступление тропических рыбок!',
-                'Скидки на аквариумное оборудование до 50%',
-                'Открытие нового отдела морских растений',
-                'Мастер-класс по запуску аквариума',
-                'Эксклюзивная коллекция креветок поступила в продажу'
-            ];
-            const randomTitle = titles[Math.floor(Math.random() * titles.length)];
-            document.querySelector('#megaNewsForm [name="title"]').value = randomTitle;
-            showNotification('Заголовок новости сгенерирован', 'success');
-        }
-
-        function generateNewsExcerpt() {
-            const excerpts = [
-                'Узнайте первыми о новых поступлениях и специальных предложениях нашего магазина.',
-                'Не пропустите выгодные акции и скидки на популярные товары для аквариума.',
-                'Читайте полезные советы и рекомендации от наших экспертов.'
-            ];
-            const randomExcerpt = excerpts[Math.floor(Math.random() * excerpts.length)];
-            document.querySelector('#megaNewsForm [name="excerpt"]').value = randomExcerpt;
-            showNotification('Анонс новости сгенерирован', 'success');
-        }
-
-        function generateNewsContent() {
-            const content = `
-<p>Уважаемые покупатели!</p>
-
-<p>Мы рады сообщить вам о важных новостях нашего магазина. В ближайшее время ожидается поступление новых товаров, которые обязательно заинтересуют всех любителей аквариумистики.</p>
-
-<h3>Что нового?</h3>
-<ul>
-<li>Новые виды тропических рыбок</li>
-<li>Современное оборудование для аквариумов</li>
-<li>Качественные корма от проверенных производителей</li>
-</ul>
-
-<p>Следите за обновлениями на нашем сайте и не пропускайте выгодные предложения!</p>
-            `.trim();
-            
-            document.querySelector('#megaNewsForm [name="content"]').value = content;
-            showNotification('Контент новости сгенерирован', 'success');
         }
 
         // === AJAX ФУНКЦИИ ===
@@ -4079,38 +2985,6 @@ $adminData = getAdminData($section);
             const result = await makeAjaxRequest('bulk_reviews', {
                 review_ids: selectedIds.join(','),
                 bulk_action: action
-            });
-
-            if (result.success) {
-                showNotification(result.message, 'success');
-                setTimeout(() => location.reload(), 1000);
-            } else {
-                showNotification(result.message, 'error');
-            }
-        }
-
-        // === НОВЫЕ ФУНКЦИИ ДЛЯ НОВОСТЕЙ ===
-        async function deleteNews(newsId) {
-            if (!confirm('Удалить новость? Это действие нельзя отменить.')) return;
-
-            const result = await makeAjaxRequest('delete_news', {
-                news_id: newsId
-            });
-
-            if (result.success) {
-                showNotification(result.message, 'success');
-                setTimeout(() => location.reload(), 1000);
-            } else {
-                showNotification(result.message, 'error');
-            }
-        }
-
-        // === НОВЫЕ ФУНКЦИИ ДЛЯ СЛАЙДЕРА ===
-        async function deleteSlide(slideId) {
-            if (!confirm('Удалить слайд? Это действие нельзя отменить.')) return;
-
-            const result = await makeAjaxRequest('delete_slide', {
-                slide_id: slideId
             });
 
             if (result.success) {
@@ -4446,21 +3320,9 @@ function getAdminData($section) {
             ];
         case 'news':
             return [
-                'title' => '📰 МЕГА Управление новостями',
+                'title' => 'Управление новостями',
                 'news' => getNews(),
                 'stats' => getNewsStats()
-            ];
-        case 'pages':
-            return [
-                'title' => '📄 МЕГА Управление страницами',
-                'pages' => getPages(),
-                'stats' => getPagesStats()
-            ];
-        case 'slider':
-            return [
-                'title' => '🎚️ МЕГА Управление слайдером',
-                'slides' => getSlides(),
-                'stats' => getSliderStats()
             ];
         case 'analytics':
             return [
@@ -4469,13 +3331,18 @@ function getAdminData($section) {
             ];
         case 'settings':
             return [
-                'title' => '⚙️ СУПЕР МЕГА НАСТРОЙКИ',
+                'title' => 'Настройки системы',
                 'settings' => getSiteSettings()
             ];
         case 'logs':
             return [
                 'title' => 'Системные логи',
                 'logs' => getAdminLogs()
+            ];
+        case 'pages':
+            return [
+                'title' => 'Управление страницами',
+                'pages' => [] // Заглушка
             ];
         default:
             return [
@@ -4493,11 +3360,10 @@ function getPageIcon($section) {
         'orders' => 'fas fa-shopping-bag',
         'reviews' => 'fas fa-star',
         'news' => 'fas fa-newspaper',
-        'pages' => 'fas fa-file-alt',
-        'slider' => 'fas fa-images',
         'analytics' => 'fas fa-chart-line',
         'settings' => 'fas fa-cog',
-        'logs' => 'fas fa-list-alt'
+        'logs' => 'fas fa-list-alt',
+        'pages' => 'fas fa-file-alt'
     ];
 
     return $icons[$section] ?? 'fas fa-cog';
@@ -4508,16 +3374,12 @@ function getDashboardStats() {
     $orders = getOrders();
     $reviews = getReviews();
     $categories = getCategories();
-    $news = getNews();
-    $pages = getPages();
-    $slides = getSlides();
 
     $totalRevenue = array_sum(array_column($orders, 'total_amount'));
     $newOrders = count(array_filter($orders, fn($o) => $o['status'] === 'new'));
     $activeProducts = count(array_filter($products, fn($p) => $p['is_active']));
     $avgRating = count($reviews) > 0 ? array_sum(array_column($reviews, 'rating')) / count($reviews) : 0;
     $pendingReviews = count(array_filter($reviews, fn($r) => !$r['is_approved']));
-    $publishedNews = count(array_filter($news, fn($n) => $n['is_published']));
 
     // Данные за последний месяц для расчета роста
     $monthAgo = date('Y-m-d', strtotime('-30 days'));
@@ -4560,27 +3422,6 @@ function getDashboardStats() {
             'trend' => 'neutral',
             'icon' => 'fas fa-tags'
         ],
-        'news' => [
-            'value' => $publishedNews,
-            'label' => 'Опубликовано новостей',
-            'change' => 'из ' . count($news) . ' всего',
-            'trend' => 'positive',
-            'icon' => 'fas fa-newspaper'
-        ],
-        'pages' => [
-            'value' => count($pages),
-            'label' => 'Страниц сайта',
-            'change' => 'активных разделов',
-            'trend' => 'neutral',
-            'icon' => 'fas fa-file-alt'
-        ],
-        'slider' => [
-            'value' => count(array_filter($slides, fn($s) => $s['is_active'])),
-            'label' => 'Активных слайдов',
-            'change' => 'из ' . count($slides) . ' всего',
-            'trend' => 'positive',
-            'icon' => 'fas fa-images'
-        ],
         'pending' => [
             'value' => $pendingReviews,
             'label' => 'Ожидают модерации',
@@ -4601,13 +3442,6 @@ function getRecentActivity() {
             'type' => 'success'
         ],
         [
-            'time' => '5 мин назад',
-            'action' => 'Новая новость',
-            'details' => 'Опубликована новость "Поступление новых товаров"',
-            'icon' => 'fas fa-newspaper',
-            'type' => 'info'
-        ],
-        [
             'time' => '8 мин назад',
             'action' => 'Новый отзыв',
             'details' => 'Отзыв на товар "Анубиас Бартера нана"',
@@ -4615,25 +3449,11 @@ function getRecentActivity() {
             'type' => 'info'
         ],
         [
-            'time' => '12 мин назад',
-            'action' => 'Обновлен слайдер',
-            'details' => 'Добавлен новый слайд с акцией',
-            'icon' => 'fas fa-images',
-            'type' => 'primary'
-        ],
-        [
             'time' => '15 мин назад',
             'action' => 'Товар обновлен',
             'details' => 'Обновлен товар "Скалярия серебристая"',
             'icon' => 'fas fa-edit',
             'type' => 'primary'
-        ],
-        [
-            'time' => '20 мин назад',
-            'action' => 'Новая страница',
-            'details' => 'Создана страница "О доставке"',
-            'icon' => 'fas fa-file-alt',
-            'type' => 'success'
         ],
         [
             'time' => '1 час назад',
@@ -4644,10 +3464,10 @@ function getRecentActivity() {
         ],
         [
             'time' => '2 часа назад',
-            'action' => 'Обновлены настройки',
-            'details' => 'Изменены настройки интернет-магазина',
-            'icon' => 'fas fa-cog',
-            'type' => 'primary'
+            'action' => 'Новая категория',
+            'details' => 'Добавлена категория "Морские рыбки"',
+            'icon' => 'fas fa-plus',
+            'type' => 'success'
         ]
     ];
 }
@@ -4704,27 +3524,7 @@ function getNewsStats() {
         'total' => count($news),
         'published' => count(array_filter($news, fn($n) => $n['is_published'])),
         'drafts' => count(array_filter($news, fn($n) => !$n['is_published'])),
-        'featured' => count(array_filter($news, fn($n) => $n['is_featured'])),
         'total_views' => array_sum(array_column($news, 'views'))
-    ];
-}
-
-function getPagesStats() {
-    $pages = getPages();
-
-    return [
-        'total' => count($pages),
-        'published' => count(array_filter($pages, fn($p) => $p['is_published'])),
-        'in_menu' => count(array_filter($pages, fn($p) => $p['show_in_menu']))
-    ];
-}
-
-function getSliderStats() {
-    $slides = getSlides();
-
-    return [
-        'total' => count($slides),
-        'active' => count(array_filter($slides, fn($s) => $s['is_active']))
     ];
 }
 
@@ -4863,22 +3663,19 @@ function renderAdminSection($section, $data) {
             renderMegaReviewsSection($data);
             break;
         case 'news':
-            renderMegaNewsSection($data);
-            break;
-        case 'pages':
-            renderMegaPagesSection($data);
-            break;
-        case 'slider':
-            renderMegaSliderSection($data);
+            renderNewsSection($data);
             break;
         case 'analytics':
             renderSuperAnalyticsSection($data);
             break;
         case 'settings':
-            renderUltraSettingsSection($data);
+            renderSettingsSection($data);
             break;
         case 'logs':
             renderLogsSection($data);
+            break;
+        case 'pages':
+            renderPagesSection($data);
             break;
         default:
             renderDefaultSection($section, $data);
@@ -4890,11 +3687,9 @@ function renderDashboard($data) {
     $stats = $data['stats'];
     $activity = $data['recent_activity'] ?? [];
     ?>
-    <!-- СУПЕР KPI Карточки -->
-    <div class='stats-grid' style='grid-template-columns: repeat(3, 1fr); margin-bottom: 40px;'>
-        <?php 
-        $displayedStats = array_slice($stats, 0, 9, true); // Показываем первые 9 карточек
-        foreach ($displayedStats as $key => $stat): ?>
+    <!-- KPI Карточки -->
+    <div class='stats-grid'>
+        <?php foreach ($stats as $key => $stat): ?>
             <div class='stat-card stat-<?= $stat['trend'] === 'positive' ? 'success' : ($stat['trend'] === 'negative' ? 'danger' : 'primary') ?>' data-stat='<?= $key ?>'>
                 <div class='stat-header'>
                     <div class='stat-icon stat-<?= $stat['trend'] === 'positive' ? 'success' : ($stat['trend'] === 'negative' ? 'danger' : 'primary') ?>'>
@@ -4920,7 +3715,7 @@ function renderDashboard($data) {
         <div class='content-card-header'>
             <h3 class='content-card-title'>
                 <i class='fas fa-clock'></i>
-                Последняя активность системы
+                Последняя активность
             </h3>
             <button class='btn btn-outline btn-sm' onclick='location.reload()'>
                 <i class='fas fa-sync-alt'></i>
@@ -4943,39 +3738,6 @@ function renderDashboard($data) {
                         </div>
                     </div>
                 <?php endforeach; ?>
-            </div>
-        </div>
-    </div>
-
-    <!-- Быстрые действия -->
-    <div class='content-card'>
-        <div class='content-card-header'>
-            <h3 class='content-card-title'>
-                <i class='fas fa-rocket'></i>
-                Быстрые действия
-            </h3>
-        </div>
-        <div class='content-card-body'>
-            <div style='display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px;'>
-                <button class='btn btn-success btn-lg' onclick='openMegaModal("megaProductModal", null, "product")' style='height: 60px; display: flex; flex-direction: column; gap: 8px; justify-content: center;'>
-                    <i class='fas fa-plus'></i>
-                    Добавить товар
-                </button>
-                
-                <button class='btn btn-primary btn-lg' onclick='openMegaModal("megaNewsModal", null, "news")' style='height: 60px; display: flex; flex-direction: column; gap: 8px; justify-content: center;'>
-                    <i class='fas fa-newspaper'></i>
-                    Создать новость
-                </button>
-                
-                <button class='btn btn-info btn-lg' onclick='openMegaModal("megaSlideModal", null, "slide")' style='height: 60px; display: flex; flex-direction: column; gap: 8px; justify-content: center;'>
-                    <i class='fas fa-images'></i>
-                    Добавить слайд
-                </button>
-                
-                <button class='btn btn-warning btn-lg' onclick='openMegaModal("ultraSettingsModal")' style='height: 60px; display: flex; flex-direction: column; gap: 8px; justify-content: center;'>
-                    <i class='fas fa-cog'></i>
-                    Настройки
-                </button>
             </div>
         </div>
     </div>
@@ -5165,7 +3927,7 @@ function renderMegaProductsSection($data) {
     </div>
 
     <!-- МЕГА Действия -->
-    <div style='display: flex; justify-content: space-between; align-items: center; margin-bottom: 32px;'>
+    <div class='d-flex justify-content-between align-items-center mb-4' style='display: flex; justify-content: space-between; align-items: center; margin-bottom: 32px;'>
         <div style='display: flex; gap: 16px; align-items: center;'>
             <button class='btn btn-success btn-lg' onclick='openMegaModal("megaProductModal", null, "product")'>
                 <i class='fas fa-plus'></i>
@@ -5450,7 +4212,7 @@ function renderMegaOrdersSection($data) {
             </h3>
         </div>
         <div class='content-card-body'>
-            <div style='display: flex; gap: : 12px; align-items: center; flex-wrap: wrap;'>
+            <div style='display: flex; gap: 12px; align-items: center; flex-wrap: wrap;'>
                 <span>Выделенные заказы:</span>
                 <select class='form-select' id='bulkOrderStatus' style='width: auto;'>
                     <option value=''>Изменить статус</option>
@@ -5783,611 +4545,21 @@ function renderMegaReviewsSection($data) {
     <?php
 }
 
-// === НОВАЯ МЕГА СЕКЦИЯ НОВОСТЕЙ ===
-function renderMegaNewsSection($data) {
-    $news = $data['news'];
-    $stats = $data['stats'];
-    ?>
-    <!-- Статистика новостей -->
-    <div class='stats-grid' style='grid-template-columns: repeat(4, 1fr); margin-bottom: 32px;'>
-        <div class='stat-card stat-primary'>
-            <div class='stat-value'><?= $stats['total'] ?></div>
-            <div class='stat-label'>Всего новостей</div>
-        </div>
-        <div class='stat-card stat-success'>
-            <div class='stat-value'><?= $stats['published'] ?></div>
-            <div class='stat-label'>Опубликовано</div>
-        </div>
-        <div class='stat-card stat-warning'>
-            <div class='stat-value'><?= $stats['drafts'] ?></div>
-            <div class='stat-label'>Черновики</div>
-        </div>
-        <div class='stat-card stat-info'>
-            <div class='stat-value'><?= $stats['featured'] ?></div>
-            <div class='stat-label'>Важные новости</div>
-        </div>
-    </div>
-
-    <!-- МЕГА Действия для новостей -->
-    <div style='display: flex; justify-content: space-between; align-items: center; margin-bottom: 32px;'>
-        <button class='btn btn-success btn-lg' onclick='openMegaModal("megaNewsModal", null, "news")'>
-            <i class='fas fa-plus'></i>
-            📰 МЕГА Добавить новость
-        </button>
-    </div>
-
-    <!-- Таблица новостей -->
-    <div class='content-card'>
-        <div class='content-card-header'>
-            <h3 class='content-card-title'>
-                <i class='fas fa-newspaper'></i>
-                Все новости
-            </h3>
-            <div style='display: flex; gap: 12px;'>
-                <select class='form-select' onchange='filterNewsByStatus(this.value)'>
-                    <option value=''>Все новости</option>
-                    <option value='published'>Опубликованные</option>
-                    <option value='drafts'>Черновики</option>
-                    <option value='featured'>Важные</option>
-                </select>
-                <button class='btn btn-outline btn-sm' onclick='location.reload()'>
-                    <i class='fas fa-sync-alt'></i> Обновить
-                </button>
-            </div>
-        </div>
-        <div class='table-container'>
-            <table class='table' id='newsTable'>
-                <thead>
-                    <tr>
-                        <th style='width: 60px;'>Изображение</th>
-                        <th>Заголовок</th>
-                        <th>Анонс</th>
-                        <th>Статус</th>
-                        <th>Просмотры</th>
-                        <th>Дата</th>
-                        <th>Действия</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    <?php foreach ($news as $newsItem): ?>
-                        <tr data-status='<?= $newsItem['is_published'] ? 'published' : 'drafts' ?>' data-featured='<?= $newsItem['is_featured'] ? 'yes' : 'no' ?>'>
-                            <td>
-                                <div style='width: 50px; height: 50px; border-radius: var(--border-radius); overflow: hidden; background: var(--bg-tertiary); display: flex; align-items: center; justify-content: center;'>
-                                    <?php if (!empty($newsItem['image'])): ?>
-                                        <img src='<?= htmlspecialchars($newsItem['image']) ?>' alt='<?= htmlspecialchars($newsItem['title']) ?>' style='width: 100%; height: 100%; object-fit: cover;'>
-                                    <?php else: ?>
-                                        <i class='fas fa-newspaper' style='color: var(--text-muted);'></i>
-                                    <?php endif; ?>
-                                </div>
-                            </td>
-                            <td>
-                                <div style='font-weight: 600; max-width: 250px;'>
-                                    <?= htmlspecialchars(mb_substr($newsItem['title'], 0, 60)) ?>
-                                    <?= mb_strlen($newsItem['title']) > 60 ? '...' : '' ?>
-                                </div>
-                                <div style='font-size: 12px; color: var(--text-muted);'>
-                                    ID: <?= $newsItem['id'] ?> | Автор: <?= $newsItem['author'] ?? 'Администратор' ?>
-                                </div>
-                            </td>
-                            <td>
-                                <div style='max-width: 200px; font-size: 13px; color: var(--text-secondary);'>
-                                    <?= htmlspecialchars(mb_substr($newsItem['excerpt'], 0, 80)) ?>
-                                    <?= mb_strlen($newsItem['excerpt']) > 80 ? '...' : '' ?>
-                                </div>
-                            </td>
-                            <td>
-                                <div style='display: flex; flex-direction: column; gap: 4px;'>
-                                    <span class='status-badge <?= $newsItem['is_published'] ? 'status-active' : 'status-inactive' ?>'>
-                                        <?= $newsItem['is_published'] ? 'Опубликована' : 'Черновик' ?>
-                                    </span>
-                                    <?php if ($newsItem['is_featured']): ?>
-                                        <span class='status-badge' style='background: var(--warning-color); color: white;'>
-                                            ⭐ Важная
-                                        </span>
-                                    <?php endif; ?>
-                                </div>
-                            </td>
-                            <td>
-                                <span style='font-weight: 600; color: var(--primary-color);'>
-                                    <?= number_format($newsItem['views'] ?? 0) ?>
-                                </span>
-                            </td>
-                            <td>
-                                <div><?= formatDateRussian($newsItem['created_at'], 'short') ?></div>
-                            </td>
-                            <td>
-                                <div style='display: flex; gap: 4px; flex-wrap: wrap;'>
-                                    <button class='btn btn-primary btn-sm' onclick='openMegaModal("megaNewsModal", <?= $newsItem['id'] ?>, "news")' title='Редактировать'>
-                                        <i class='fas fa-edit'></i>
-                                    </button>
-                                    <button class='btn btn-info btn-sm' onclick='window.open("?page=news&id=<?= $newsItem['id'] ?>", "_blank")' title='Просмотр'>
-                                        <i class='fas fa-eye'></i>
-                                    </button>
-                                    <button class='btn btn-danger btn-sm' onclick='deleteNews(<?= $newsItem['id'] ?>)' title='Удалить'>
-                                        <i class='fas fa-trash'></i>
-                                    </button>
-                                </div>
-                            </td>
-                        </tr>
-                    <?php endforeach; ?>
-                </tbody>
-            </table>
-        </div>
-    </div>
-
-    <script>
-        function filterNewsByStatus(filter) {
-            const rows = document.querySelectorAll('#newsTable tbody tr');
-            rows.forEach(row => {
-                const status = row.dataset.status;
-                const featured = row.dataset.featured;
-                let visible = true;
-
-                switch(filter) {
-                    case 'published':
-                        visible = status === 'published';
-                        break;
-                    case 'drafts':
-                        visible = status === 'drafts';
-                        break;
-                    case 'featured':
-                        visible = featured === 'yes';
-                        break;
-                }
-
-                row.style.display = visible ? '' : 'none';
-            });
-        }
-    </script>
-    <?php
-}
-
-// === НОВАЯ МЕГА СЕКЦИЯ СТРАНИЦ ===
-function renderMegaPagesSection($data) {
-    $pages = $data['pages'];
-    $stats = $data['stats'];
-    ?>
-    <!-- Статистика страниц -->
-    <div class='stats-grid' style='grid-template-columns: repeat(3, 1fr); margin-bottom: 32px;'>
-        <div class='stat-card stat-primary'>
-            <div class='stat-value'><?= $stats['total'] ?></div>
-            <div class='stat-label'>Всего страниц</div>
-        </div>
-        <div class='stat-card stat-success'>
-            <div class='stat-value'><?= $stats['published'] ?></div>
-            <div class='stat-label'>Опубликовано</div>
-        </div>
-        <div class='stat-card stat-info'>
-            <div class='stat-value'><?= $stats['in_menu'] ?></div>
-            <div class='stat-label'>В меню</div>
-        </div>
-    </div>
-
-    <!-- МЕГА Действия для страниц -->
-    <div style='display: flex; justify-content: space-between; align-items: center; margin-bottom: 32px;'>
-        <button class='btn btn-success btn-lg' onclick='openMegaModal("megaPageModal", null, "page")'>
-            <i class='fas fa-plus'></i>
-            📄 МЕГА Добавить страницу
-        </button>
-    </div>
-
-    <!-- Таблица страниц -->
-    <div class='content-card'>
-        <div class='content-card-header'>
-            <h3 class='content-card-title'>
-                <i class='fas fa-file-alt'></i>
-                Все страницы
-            </h3>
-            <div style='display: flex; gap: 12px;'>
-                <select class='form-select' onchange='filterPagesByStatus(this.value)'>
-                    <option value=''>Все страницы</option>
-                    <option value='published'>Опубликованные</option>
-                    <option value='drafts'>Черновики</option>
-                    <option value='in_menu'>В меню</option>
-                </select>
-                <button class='btn btn-outline btn-sm' onclick='location.reload()'>
-                    <i class='fas fa-sync-alt'></i> Обновить
-                </button>
-            </div>
-        </div>
-        <div class='table-container'>
-            <table class='table' id='pagesTable'>
-                <thead>
-                    <tr>
-                        <th>Название</th>
-                        <th>Шаблон</th>
-                        <th>Порядок в меню</th>
-                        <th>Статус</th>
-                        <th>Дата создания</th>
-                        <th>Действия</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    <?php foreach ($pages as $page): ?>
-                        <tr data-status='<?= $page['is_published'] ? 'published' : 'drafts' ?>' data-in-menu='<?= $page['show_in_menu'] ? 'yes' : 'no' ?>'>
-                            <td>
-                                <div style='font-weight: 600; font-size: 16px;'>
-                                    <?= htmlspecialchars($page['title']) ?>
-                                </div>
-                                <div style='font-size: 12px; color: var(--text-muted);'>
-                                    Slug: <?= htmlspecialchars($page['slug']) ?> | ID: <?= $page['id'] ?>
-                                </div>
-                            </td>
-                            <td>
-                                <span class='status-badge' style='background: rgba(102, 126, 234, 0.1); color: var(--primary-color);'>
-                                    <?= ucfirst($page['template']) ?>
-                                </span>
-                            </td>
-                            <td>
-                                <?php if ($page['show_in_menu']): ?>
-                                    <span style='font-weight: 600; color: var(--primary-color);'>
-                                        <?= $page['menu_order'] ?>
-                                    </span>
-                                <?php else: ?>
-                                    <span style='color: var(--text-muted);'>Не в меню</span>
-                                <?php endif; ?>
-                            </td>
-                            <td>
-                                <div style='display: flex; flex-direction: column; gap: 4px;'>
-                                    <span class='status-badge <?= $page['is_published'] ? 'status-active' : 'status-inactive' ?>'>
-                                        <?= $page['is_published'] ? 'Опубликована' : 'Черновик' ?>
-                                    </span>
-                                    <?php if ($page['show_in_menu']): ?>
-                                        <span class='status-badge status-new'>В меню</span>
-                                    <?php endif; ?>
-                                </div>
-                            </td>
-                            <td>
-                                <div><?= formatDateRussian($page['created_at'], 'short') ?></div>
-                            </td>
-                            <td>
-                                <div style='display: flex; gap: 4px; flex-wrap: wrap;'>
-                                    <button class='btn btn-primary btn-sm' onclick='openMegaModal("megaPageModal", <?= $page['id'] ?>, "page")' title='Редактировать'>
-                                        <i class='fas fa-edit'></i>
-                                    </button>
-                                    <button class='btn btn-info btn-sm' onclick='window.open("?page=custom&slug=<?= $page['slug'] ?>", "_blank")' title='Просмотр'>
-                                        <i class='fas fa-eye'></i>
-                                    </button>
-                                    <button class='btn btn-danger btn-sm' onclick='deletePage(<?= $page['id'] ?>)' title='Удалить'>
-                                        <i class='fas fa-trash'></i>
-                                    </button>
-                                </div>
-                            </td>
-                        </tr>
-                    <?php endforeach; ?>
-                </tbody>
-            </table>
-        </div>
-    </div>
-
-    <script>
-        function filterPagesByStatus(filter) {
-            const rows = document.querySelectorAll('#pagesTable tbody tr');
-            rows.forEach(row => {
-                const status = row.dataset.status;
-                const inMenu = row.dataset.inMenu;
-                let visible = true;
-
-                switch(filter) {
-                    case 'published':
-                        visible = status === 'published';
-                        break;
-                    case 'drafts':
-                        visible = status === 'drafts';
-                        break;
-                    case 'in_menu':
-                        visible = inMenu === 'yes';
-                        break;
-                }
-
-                row.style.display = visible ? '' : 'none';
-            });
-        }
-    </script>
-    <?php
-}
-
-// === НОВАЯ МЕГА СЕКЦИЯ СЛАЙДЕРА ===
-function renderMegaSliderSection($data) {
-    $slides = $data['slides'];
-    $stats = $data['stats'];
-    ?>
-    <!-- Статистика слайдера -->
-    <div class='stats-grid' style='grid-template-columns: repeat(2, 1fr); margin-bottom: 32px;'>
-        <div class='stat-card stat-primary'>
-            <div class='stat-value'><?= $stats['total'] ?></div>
-            <div class='stat-label'>Всего слайдов</div>
-        </div>
-        <div class='stat-card stat-success'>
-            <div class='stat-value'><?= $stats['active'] ?></div>
-            <div class='stat-label'>Активных слайдов</div>
-        </div>
-    </div>
-
-    <!-- МЕГА Действия для слайдера -->
-    <div style='display: flex; justify-content: space-between; align-items: center; margin-bottom: 32px;'>
-        <button class='btn btn-success btn-lg' onclick='openMegaModal("megaSlideModal", null, "slide")'>
-            <i class='fas fa-plus'></i>
-            🎚️ МЕГА Добавить слайд
-        </button>
-    </div>
-
-    <!-- Управление слайдами -->
-    <div class='content-card'>
-        <div class='content-card-header'>
-            <h3 class='content-card-title'>
-                <i class='fas fa-images'></i>
-                Управление слайдами
-            </h3>
-            <div style='display: flex; gap: 12px;'>
-                <select class='form-select' onchange='filterSlidesByStatus(this.value)'>
-                    <option value=''>Все слайды</option>
-                    <option value='active'>Активные</option>
-                    <option value='inactive'>Неактивные</option>
-                </select>
-                <button class='btn btn-outline btn-sm' onclick='location.reload()'>
-                    <i class='fas fa-sync-alt'></i> Обновить
-                </button>
-            </div>
-        </div>
-        <div style='padding: 28px;'>
-            <div id='sortableSlides' style='display: grid; gap: 20px;'>
-                <?php foreach ($slides as $slide): ?>
-                    <div class='slide-item' data-id='<?= $slide['id'] ?>' data-status='<?= $slide['is_active'] ? 'active' : 'inactive' ?>' 
-                         style='display: flex; align-items: center; gap: 20px; padding: 20px; background: var(--bg-secondary); border-radius: var(--border-radius-lg); border: 1px solid var(--border-color); cursor: move; transition: var(--transition);'>
-
-                        <!-- Превью изображения -->
-                        <div style='width: 120px; height: 80px; border-radius: var(--border-radius); overflow: hidden; background: var(--bg-tertiary); display: flex; align-items: center; justify-content: center; flex-shrink: 0;'>
-                            <?php if (!empty($slide['image'])): ?>
-                                <img src='<?= htmlspecialchars($slide['image']) ?>' alt='<?= htmlspecialchars($slide['title']) ?>' 
-                                     style='width: 100%; height: 100%; object-fit: cover;'>
-                            <?php else: ?>
-                                <i class='fas fa-image' style='color: var(--text-muted); font-size: 24px;'></i>
-                            <?php endif; ?>
-                        </div>
-
-                        <!-- Информация о слайде -->
-                        <div style='flex: 1; min-width: 0;'>
-                            <div style='display: flex; align-items: center; gap: 12px; margin-bottom: 8px;'>
-                                <h4 style='margin: 0; font-size: 18px;'>
-                                    <?= htmlspecialchars($slide['title']) ?>
-                                </h4>
-                                <span class='status-badge <?= $slide['is_active'] ? 'status-active' : 'status-inactive' ?>'>
-                                    <?= $slide['is_active'] ? 'Активен' : 'Скрыт' ?>
-                                </span>
-                                <span style='background: var(--primary-color); color: white; padding: 2px 8px; border-radius: 12px; font-size: 12px;'>
-                                    #{<?= $slide['sort_order'] ?>}
-                                </span>
-                            </div>
-
-                            <?php if (!empty($slide['subtitle'])): ?>
-                                <div style='color: var(--text-secondary); margin-bottom: 8px;'>
-                                    <?= htmlspecialchars($slide['subtitle']) ?>
-                                </div>
-                            <?php endif; ?>
-
-                            <?php if (!empty($slide['description'])): ?>
-                                <div style='color: var(--text-muted); font-size: 14px; margin-bottom: 12px;'>
-                                    <?= htmlspecialchars(mb_substr($slide['description'], 0, 100)) ?>
-                                    <?= mb_strlen($slide['description']) > 100 ? '...' : '' ?>
-                                </div>
-                            <?php endif; ?>
-
-                            <!-- Настройки слайда -->
-                            <div style='display: flex; gap: 16px; font-size: 12px; color: var(--text-muted);'>
-                                <span><i class='fas fa-palette'></i> Позиция: <?= ucfirst($slide['text_position']) ?></span>
-                                <?php if (!empty($slide['link_url'])): ?>
-                                    <span><i class='fas fa-link'></i> Есть ссылка</span>
-                                <?php endif; ?>
-                                <?php if (!empty($slide['show_from']) || !empty($slide['show_until'])): ?>
-                                    <span><i class='fas fa-clock'></i> По расписанию</span>
-                                <?php endif; ?>
-                            </div>
-                        </div>
-
-                        <!-- Действия -->
-                        <div style='display: flex; gap: 8px; flex-shrink: 0;'>
-                            <button class='btn btn-primary btn-sm' onclick='openMegaModal("megaSlideModal", <?= $slide['id'] ?>, "slide")' title='Редактировать'>
-                                <i class='fas fa-edit'></i>
-                            </button>
-                            <button class='btn btn-info btn-sm' onclick='previewSlide(<?= $slide['id'] ?>)' title='Превью'>
-                                <i class='fas fa-eye'></i>
-                            </button>
-                            <button class='btn btn-success btn-sm' onclick='duplicateSlide(<?= $slide['id'] ?>)' title='Дублировать'>
-                                <i class='fas fa-copy'></i>
-                            </button>
-                            <button class='btn btn-danger btn-sm' onclick='deleteSlide(<?= $slide['id'] ?>)' title='Удалить'>
-                                <i class='fas fa-trash'></i>
-                            </button>
-                        </div>
-                    </div>
-                <?php endforeach; ?>
-            </div>
-
-            <?php if (empty($slides)): ?>
-                <div class='empty-state' style='text-align: center; padding: 60px 20px;'>
-                    <div style='font-size: 4em; margin-bottom: 20px; opacity: 0.6;'>🖼️</div>
-                    <h3>Нет слайдов</h3>
-                    <p style='margin: 20px 0; color: var(--text-secondary);'>
-                        Создайте первый слайд для главной страницы сайта
-                    </p>
-                    <button class='btn btn-success' onclick='openMegaModal("megaSlideModal", null, "slide")'>
-                        <i class='fas fa-plus'></i> Добавить слайд
-                    </button>
-                </div>
-            <?php endif; ?>
-        </div>
-    </div>
-
-    <script>
-        function filterSlidesByStatus(filter) {
-            const slides = document.querySelectorAll('.slide-item');
-            slides.forEach(slide => {
-                const status = slide.dataset.status;
-                const visible = !filter || status === filter;
-                slide.style.display = visible ? 'flex' : 'none';
-            });
-        }
-
-        function previewSlide(slideId) {
-            showNotification('Функция превью будет доступна в следующей версии', 'info');
-        }
-
-        function duplicateSlide(slideId) {
-            if (confirm('Создать копию слайда?')) {
-                showNotification('Функция дублирования будет доступна в следующей версии', 'info');
-            }
-        }
-    </script>
-    <?php
-}
-
-// === УЛЬТРА МЕГА СЕКЦИЯ НАСТРОЕК ===
-function renderUltraSettingsSection($data) {
-    $settings = $data['settings'];
-    ?>
-    <!-- Быстрые действия -->
-    <div class='stats-grid' style='margin-bottom: 40px;'>
-        <div class='stat-card stat-primary' style='cursor: pointer;' onclick='openMegaModal("ultraSettingsModal")'>
-            <div class='stat-header'>
-                <div class='stat-icon'>
-                    <i class='fas fa-cogs'></i>
-                </div>
-            </div>
-            <div class='stat-value'>⚙️</div>
-            <div class='stat-label'>Основные настройки</div>
-            <div class='stat-change neutral'>
-                <i class='fas fa-arrow-right'></i>
-                Открыть панель
-            </div>
-        </div>
-
-        <div class='stat-card stat-success' style='cursor: pointer;' onclick='backupSettings()'>
-            <div class='stat-header'>
-                <div class='stat-icon stat-success'>
-                    <i class='fas fa-download'></i>
-                </div>
-            </div>
-            <div class='stat-value'>💾</div>
-            <div class='stat-label'>Резервная копия</div>
-            <div class='stat-change positive'>
-                <i class='fas fa-download'></i>
-                Скачать настройки
-            </div>
-        </div>
-
-        <div class='stat-card stat-info' style='cursor: pointer;' onclick='showSystemInfo()'>
-            <div class='stat-header'>
-                <div class='stat-icon stat-info'>
-                    <i class='fas fa-info-circle'></i>
-                </div>
-            </div>
-            <div class='stat-value'>ℹ️</div>
-            <div class='stat-label'>Информация</div>
-            <div class='stat-change neutral'>
-                <i class='fas fa-server'></i>
-                О системе
-            </div>
-        </div>
-    </div>
-
-    <!-- Превью настроек -->
-    <div class='content-card' style='margin-bottom: 32px;'>
-        <div class='content-card-header'>
-            <h3 class='content-card-title'>
-                <i class='fas fa-eye'></i>
-                Текущие настройки сайта
-            </h3>
-            <button class='btn btn-primary' onclick='openMegaModal("ultraSettingsModal")'>
-                <i class='fas fa-edit'></i> Редактировать все
-            </button>
-        </div>
-        <div class='content-card-body'>
-            <div style='display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 24px;'>
-                <!-- Основная информация -->
-                <div style='padding: 20px; background: var(--bg-secondary); border-radius: var(--border-radius-lg);'>
-                    <h4 style='color: var(--primary-color); margin-bottom: 16px;'>
-                        <i class='fas fa-globe'></i> Основная информация
-                    </h4>
-                    <div style='display: grid; gap: 12px;'>
-                        <div><strong>Название:</strong> <?= htmlspecialchars($settings['site_name'] ?? 'АкваСбор') ?></div>
-                        <div><strong>Описание:</strong> <?= htmlspecialchars($settings['site_description'] ?? 'Интернет-магазин для аквариумистов') ?></div>
-                        <div><strong>Email:</strong> <?= htmlspecialchars($settings['admin_email'] ?? 'admin@example.com') ?></div>
-                    </div>
-                </div>
-
-                <!-- Контакты -->
-                <div style='padding: 20px; background: var(--bg-secondary); border-radius: var(--border-radius-lg);'>
-                    <h4 style='color: var(--success-color); margin-bottom: 16px;'>
-                        <i class='fas fa-phone'></i> Контактная информация
-                    </h4>
-                    <div style='display: grid; gap: 12px;'>
-                        <div><strong>Телефон:</strong> <?= htmlspecialchars($settings['phone'] ?? '+7 (XXX) XXX-XX-XX') ?></div>
-                        <div><strong>Адрес:</strong> <?= htmlspecialchars($settings['address'] ?? 'Адрес не указан') ?></div>
-                        <div><strong>Часы работы:</strong> <?= htmlspecialchars($settings['working_hours'] ?? 'Пн-Пт: 9:00-18:00') ?></div>
-                    </div>
-                </div>
-
-                <!-- Настройки магазина -->
-                <div style='padding: 20px; background: var(--bg-secondary); border-radius: var(--border-radius-lg);'>
-                    <h4 style='color: var(--warning-color); margin-bottom: 16px;'>
-                        <i class='fas fa-shopping-cart'></i> Настройки магазина
-                    </h4>
-                    <div style='display: grid; gap: 12px;'>
-                        <div><strong>Товаров на странице:</strong> <?= $settings['products_per_page'] ?? 12 ?></div>
-                        <div><strong>Мин. сумма заказа:</strong> <?= number_format($settings['min_order_amount'] ?? 1000) ?> ₽</div>
-                        <div><strong>Бесплатная доставка от:</strong> <?= number_format($settings['free_shipping_from'] ?? 5000) ?> ₽</div>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <script>
-        function backupSettings() {
-            const settings = <?= json_encode($settings ?? [], JSON_UNESCAPED_UNICODE) ?>;
-            const dataStr = JSON.stringify(settings, null, 2);
-            const dataBlob = new Blob([dataStr], {type: 'application/json'});
-
-            const link = document.createElement('a');
-            link.href = URL.createObjectURL(dataBlob);
-            link.download = 'akvasbor-settings-' + new Date().toISOString().slice(0, 10) + '.json';
-            link.click();
-
-            showNotification('Резервная копия настроек сохранена', 'success');
-        }
-
-        function showSystemInfo() {
-            const info = `
-                🐠 АкваСбор MEGA CRM v8.0
-                📅 Версия от: ${new Date().toLocaleDateString('ru-RU')}
-                💾 Хранилище: JSON Database
-                🔐 Аутентификация: Session-based
-                🌐 Домен: ${window.location.hostname}
-                📱 User Agent: ${navigator.userAgent.substring(0, 50)}...
-            `;
-
-            alert(info);
-        }
-    </script>
-    <?php
-}
-
 // Остальные функции рендеринга (упрощенные версии для экономии места)
+function renderNewsSection($data) { 
+    echo "<div class='content-card'><div class='content-card-body'><h3>Управление новостями</h3><p>Функционал в разработке</p></div></div>";
+}
+
+function renderSettingsSection($data) { 
+    echo "<div class='content-card'><div class='content-card-body'><h3>Настройки системы</h3><p>Функционал в разработке</p></div></div>";
+}
+
 function renderLogsSection($data) { 
-    ?>
-    <div class='content-card'>
-        <div class='content-card-header'>
-            <h3 class='content-card-title'>
-                <i class='fas fa-list-alt'></i>
-                Системные логи
-            </h3>
-        </div>
-        <div class='content-card-body'>
-            <p>Логи системы будут отображаться здесь. Функционал в разработке.</p>
-        </div>
-    </div>
-    <?php
+    echo "<div class='content-card'><div class='content-card-body'><h3>Логи системы</h3><p>Функционал в разработке</p></div></div>";
+}
+
+function renderPagesSection($data) { 
+    echo "<div class='content-card'><div class='content-card-body'><h3>Управление страницами</h3><p>Функционал в разработке</p></div></div>";
 }
 
 function renderDefaultSection($section, $data) {
