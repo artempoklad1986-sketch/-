@@ -53,13 +53,21 @@ try {
     $page = trim($_GET['page'] ?? 'dashboard');
 
     // Безопасность: разрешенные страницы
-    $allowedPages = ['dashboard', 'products', 'add_product', 'edit_product', 'categories', 'orders', 'statistics', 'settings', 'news_mega_system', 'reviews', 'slider', 'plant_constructor', 'plant_library'];
+    $allowedPages = [
+        'dashboard', 'products', 'add_product', 'product_editor', 'categories', 
+        'orders', 'statistics', 'settings', 'news_mega_system', 'reviews', 
+        'slider', 'plant_constructor', 'plant_library'
+    ];
+
     if (!in_array($page, $allowedPages)) {
         $page = 'dashboard';
     }
 } catch (Exception $e) {
     error_log('Ошибка загрузки админ данных: ' . $e->getMessage());
-    $stats = ['total_products' => 0, 'total_categories' => 0, 'total_orders' => 0, 'today_orders' => 0, 'month_orders' => 0, 'total_revenue' => 0, 'month_revenue' => 0];
+    $stats = [
+        'total_products' => 0, 'total_categories' => 0, 'total_orders' => 0, 
+        'today_orders' => 0, 'month_orders' => 0, 'total_revenue' => 0, 'month_revenue' => 0
+    ];
     $page = 'dashboard';
 }
 ?>
@@ -69,8 +77,8 @@ try {
     <meta charset='UTF-8'>
     <meta name='viewport' content='width=device-width, initial-scale=1.0'>
     <title>Админ панель - АкваСбор</title>
-    <link href='https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css' rel='stylesheet'>
-    <link href='https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css' rel='stylesheet'>
+    <link href='https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css' rel='stylesheet'>
+    <link href='https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css' rel='stylesheet'>
     <link href='https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap' rel='stylesheet'>
 
     <style>
@@ -95,6 +103,7 @@ try {
             border-radius: 8px;
             transition: all 0.3s ease;
             font-weight: 500;
+            text-decoration: none;
         }
 
         .sidebar .nav-link:hover,
@@ -206,6 +215,9 @@ try {
             </a>
             <a class='nav-link <?= $page == 'add_product' ? 'active' : '' ?>' href='?page=add_product'>
                 <i class='fas fa-plus me-2'></i> Добавить товар
+            </a>
+            <a class='nav-link <?= $page == 'product_editor' ? 'active' : '' ?>' href='?page=product_editor'>
+                <i class='fas fa-edit me-2'></i> Редактор товаров
             </a>
             <a class='nav-link <?= $page == 'categories' ? 'active' : '' ?>' href='?page=categories'>
                 <i class='fas fa-tags me-2'></i> Категории
@@ -321,9 +333,9 @@ try {
                         </a>
                     </div>
                     <div class='col-md-3 mb-3'>
-                        <a href='?page=categories' class='btn btn-success w-100 py-3'>
-                            <i class='fas fa-tags d-block mb-2' style='font-size: 2rem;'></i>
-                            Категории
+                        <a href='?page=product_editor' class='btn btn-success w-100 py-3'>
+                            <i class='fas fa-edit d-block mb-2' style='font-size: 2rem;'></i>
+                            Редактор товаров
                         </a>
                     </div>
                     <div class='col-md-3 mb-3'>
@@ -353,7 +365,7 @@ try {
         ?>
     </div>
 
-    <script src='https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js'></script>
+    <script src='https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js'></script>
     <script>
         // Переключение сайдбара на мобильных
         function toggleSidebar() {
@@ -364,7 +376,7 @@ try {
         // Закрытие сайдбара при клике вне его на мобильных
         document.addEventListener('click', function(event) {
             const sidebar = document.getElementById('sidebar');
-            const toggleBtn = event.target.closest('[onclick=\'toggleSidebar()\']');
+            const toggleBtn = event.target.closest('[onclick="toggleSidebar()"]');
 
             if (!sidebar.contains(event.target) && !toggleBtn && window.innerWidth <= 768) {
                 sidebar.classList.remove('show');
