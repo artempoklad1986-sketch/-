@@ -1,5 +1,5 @@
 <?php
-// functions.php - Полный файл функций для интернет-магазина (ИСПРАВЛЕННАЯ ВЕРСИЯ)
+// functions.php - Полный файл функций для интернет-магазина (МЕГА ВЕРСИЯ)
 error_reporting(E_ALL);
 ini_set('display_errors', 1);
 
@@ -7,9 +7,8 @@ ini_set('display_errors', 1);
  * Функция для надежного запуска сессии
  */
 function initSession() {
-    // Настройки сессии ПЕРЕД запуском
     if (session_status() === PHP_SESSION_NONE) {
-        ini_set('session.cookie_lifetime', 86400); // 24 часа
+        ini_set('session.cookie_lifetime', 86400);
         ini_set('session.gc_maxlifetime', 86400);
         ini_set('session.cookie_httponly', 1);
         ini_set('session.cookie_samesite', 'Lax');
@@ -19,8 +18,6 @@ function initSession() {
             return false;
         }
         error_log('Сессия запущена: ' . session_id());
-    } else {
-        error_log('Сессия уже активна: ' . session_id());
     }
     return true;
 }
@@ -61,47 +58,83 @@ function saveJsonData($filename, $data) {
         return false;
     }
     $result = file_put_contents($filepath, $json, LOCK_EX);
-    if ($result === false) {
-        error_log("Не удалось записать файл: $filepath");
-        return false;
-    }
-    return $result;
+    return $result !== false;
 }
 
-/**
- * ИНТЕГРИРОВАННАЯ ФУНКЦИЯ СОХРАНЕНИЯ ТОВАРА ДЛЯ РЕДАКТОРА
- */
+// ========== ТОВАРЫ ==========
+
+function getProducts($filters = []) {
+    $products = loadJsonData('products.json');
+
+    if (!empty($filters['category_id'])) {
+        $products = array_filter($products, function($product) use ($filters) {
+            return isset($product['category_id']) && $product['category_id'] == $filters['category_id'];
+        });
+    }
+
+    if (!empty($filters['search'])) {
+        $search = mb_strtolower($filters['search']);
+        $products = array_filter($products, function($product) use ($search) {
+            $name = mb_strtolower($product['name'] ?? '');
+            $desc = mb_strtolower($product['description'] ?? '');
+            return mb_strpos($name, $search) !== false || mb_strpos($desc, $search) !== false;
+        });
+    }
+
+    if (!empty($filters['price_min'])) {
+        $products = array_filter($products, function($product) use ($filters) {
+            return isset($product['price']) && $product['price'] >= $filters['price_min'];
+        });
+    }
+
+    if (!empty($filters['price_max'])) {
+        $products = array_filter($products, function($product) use ($filters) {
+            return isset($product['price']) && $product['price'] <= $filters['price_max'];
+        });
+    }
+
+    if (!isset($filters['include_inactive'])) {
+        $products = array_filter($products, function($product) {
+            return !isset($product['status']) || $product['status'] == 1;
+        });
+    }
+
+    return array_values($products);
+}
+
+function getAllProducts() {
+    return loadJsonData('products.json');
+}
+
+function getProductById($id) {
+    if (empty($id)) return null;
+    $products = loadJsonData('products.json');
+    foreach ($products as $product) {
+        if (isset($product['id']) && $product['id'] == $id) {
+            return $product;
+        }
+    }
+    return null;
+}
+
+function getFeaturedProducts($limit = 8) {
+    $products = getProducts();
+    if (empty($products)) return [];
+    shuffle($products);
+    return array_slice($products, 0, $limit);
+}
+
 function saveProduct($productData) {
     try {
         $products = loadJsonData('products.json');
 
-        // Генерируем ID если его нет (новый товар)
         if (empty($productData['id'])) {
-            $productData['id'] = generateProductId();
+            $productData['id'] = 'prod_' . time() . '_' . uniqid();
             $productData['created_at'] = date('Y-m-d H:i:s');
         }
 
         $productData['updated_at'] = date('Y-m-d H:i:s');
 
-        // Обработка изображений
-        if (isset($productData['main_image'])) {
-            $productData['image'] = $productData['main_image']; // Для совместимости
-        }
-
-        // Обработка галереи
-        if (isset($productData['gallery']) && is_string($productData['gallery'])) {
-            $productData['gallery'] = json_decode($productData['gallery'], true) ?: [];
-        }
-
-        // Обработка ярлыков
-        if (isset($productData['badges']) && is_string($productData['badges'])) {
-            $productData['badges'] = json_decode($productData['badges'], true) ?: [];
-        }
-
-        // Создаем папку для загрузки изображений
-        createProductUploadDirs($productData['id']);
-
-        // Ищем существующий товар
         $productExists = false;
         foreach ($products as $key => $product) {
             if ($product['id'] == $productData['id']) {
@@ -111,7 +144,6 @@ function saveProduct($productData) {
             }
         }
 
-        // Если товар не найден, добавляем новый
         if (!$productExists) {
             $products[] = $productData;
         }
@@ -128,286 +160,24 @@ function saveProduct($productData) {
     }
 }
 
-/**
- * Создание папок для загрузки товара
- */
-function createProductUploadDirs($productId) {
-    $basePath = __DIR__ . "/uploads/products/$productId";
-    $dirs = ['main', 'gallery', 'thumbnails'];
-
-    foreach ($dirs as $dir) {
-        $fullPath = "$basePath/$dir";
-        if (!is_dir($fullPath)) {
-            if (!mkdir($fullPath, 0755, true)) {
-                throw new Exception("Не удалось создать папку: $fullPath");
-            }
-        }
-    }
-
-    return $basePath;
-}
-
-/**
- * Генерация уникального ID для товара
- */
-function generateProductId() {
-    return 'prod_' . time() . '_' . uniqid();
-}
-
-/**
- * Обработка загрузки изображений
- */
-function handleImageUpload($file, $productId, $type = 'main') {
-    try {
-        $uploadPath = createProductUploadDirs($productId);
-
-        $allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp'];
-        if (!in_array($file['type'], $allowedTypes)) {
-            throw new Exception('Неподдерживаемый тип файла');
-        }
-
-        $maxSize = 10 * 1024 * 1024; // 10MB
-        if ($file['size'] > $maxSize) {
-            throw new Exception('Файл слишком большой');
-        }
-
-        $extension = pathinfo($file['name'], PATHINFO_EXTENSION);
-        $fileName = $type . '_' . uniqid() . '.' . $extension;
-        $targetPath = "$uploadPath/$type/$fileName";
-
-        if (move_uploaded_file($file['tmp_name'], $targetPath)) {
-            // Создаем thumbnail для основного изображения
-            if ($type === 'main') {
-                $thumbnailPath = "$uploadPath/thumbnails/thumb_$fileName";
-                createThumbnail($targetPath, $thumbnailPath, 300, 300);
-            }
-
-            return [
-                'success' => true,
-                'path' => "/uploads/products/$productId/$type/$fileName",
-                'filename' => $fileName
-            ];
-        } else {
-            throw new Exception('Не удалось переместить загруженный файл');
-        }
-
-    } catch (Exception $e) {
-        return ['success' => false, 'error' => $e->getMessage()];
-    }
-}
-
-/**
- * Создание thumbnail изображения (ЕДИНСТВЕННАЯ ВЕРСИЯ)
- */
-function createThumbnail($source, $destination, $width, $height) {
-    // Проверяем наличие GD расширения
-    if (!extension_loaded('gd')) {
-        // Если GD недоступно, просто копируем файл
-        return copy($source, $destination);
-    }
-
-    $imageInfo = getimagesize($source);
-    if (!$imageInfo) return false;
-
-    switch ($imageInfo[2]) {
-        case IMAGETYPE_JPEG:
-            $sourceImage = imagecreatefromjpeg($source);
-            break;
-        case IMAGETYPE_PNG:
-            $sourceImage = imagecreatefrompng($source);
-            break;
-        case IMAGETYPE_GIF:
-            $sourceImage = imagecreatefromgif($source);
-            break;
-        case IMAGETYPE_WEBP:
-            $sourceImage = imagecreatefromwebp($source);
-            break;
-        default:
-            return false;
-    }
-
-    if (!$sourceImage) return false;
-
-    $sourceWidth = imagesx($sourceImage);
-    $sourceHeight = imagesy($sourceImage);
-
-    $thumbnail = imagecreatetruecolor($width, $height);
-
-    // Прозрачность для PNG
-    if ($imageInfo[2] == IMAGETYPE_PNG || $imageInfo[2] == IMAGETYPE_WEBP) {
-        imagealphablending($thumbnail, false);
-        imagesavealpha($thumbnail, true);
-        $transparent = imagecolorallocatealpha($thumbnail, 255, 255, 255, 127);
-        imagefill($thumbnail, 0, 0, $transparent);
-    }
-
-    imagecopyresampled(
-        $thumbnail, $sourceImage,
-        0, 0, 0, 0,
-        $width, $height, $sourceWidth, $sourceHeight
-    );
-
-    $result = false;
-    switch ($imageInfo[2]) {
-        case IMAGETYPE_JPEG:
-            $result = imagejpeg($thumbnail, $destination, 90);
-            break;
-        case IMAGETYPE_PNG:
-            $result = imagepng($thumbnail, $destination);
-            break;
-        case IMAGETYPE_GIF:
-            $result = imagegif($thumbnail, $destination);
-            break;
-        case IMAGETYPE_WEBP:
-            $result = imagewebp($thumbnail, $destination, 90);
-            break;
-    }
-
-    imagedestroy($sourceImage);
-    imagedestroy($thumbnail);
-
-    return $result;
-}
-
-/**
- * Копирование товара
- */
-function copyProduct($productId) {
-    try {
-        $product = getProductById($productId);
-        if (!$product) {
-            return ['success' => false, 'error' => 'Товар не найден'];
-        }
-
-        // Очищаем ID и обновляем название
-        unset($product['id']);
-        $product['name'] = 'Копия - ' . $product['name'];
-        $product['sku'] = $product['sku'] . '_copy';
-
-        $result = saveProduct($product);
-        return $result;
-
-    } catch (Exception $e) {
-        return ['success' => false, 'error' => $e->getMessage()];
-    }
-}
-
-/**
- * Получение товаров с фильтрацией
- */
-function getProducts($filters = []) {
-    $products = loadJsonData('products.json');
-
-    if (!empty($filters['category_id'])) {
-        $products = array_filter($products, function($product) use ($filters) {
-            return isset($product['category_id']) && $product['category_id'] == $filters['category_id'];
-        });
-    }
-
-    if (!empty($filters['search'])) {
-        $search = mb_strtolower($filters['search']);
-        $products = array_filter($products, function($product) use ($search) {
-            $name = mb_strtolower($product['name'] ?? '');
-            $latin = mb_strtolower($product['latin_name'] ?? '');
-            $desc = mb_strtolower($product['description'] ?? '');
-            $tags = mb_strtolower($product['tags'] ?? '');
-            return mb_strpos($name, $search) !== false ||
-                   mb_strpos($latin, $search) !== false ||
-                   mb_strpos($desc, $search) !== false ||
-                   mb_strpos($tags, $search) !== false;
-        });
-    }
-
-    if (!empty($filters['price_min'])) {
-        $products = array_filter($products, function($product) use ($filters) {
-            return isset($product['price']) && $product['price'] >= $filters['price_min'];
-        });
-    }
-
-    if (!empty($filters['price_max'])) {
-        $products = array_filter($products, function($product) use ($filters) {
-            return isset($product['price']) && $product['price'] <= $filters['price_max'];
-        });
-    }
-
-    // Фильтр по статусу (активные товары)
-    if (!isset($filters['include_inactive'])) {
-        $products = array_filter($products, function($product) {
-            return !isset($product['status']) || $product['status'] == 1;
-        });
-    }
-
-    return array_values($products);
-}
-
-/**
- * Получение всех товаров без фильтров (для админки)
- */
-function getAllProducts() {
-    return loadJsonData('products.json');
-}
-
-/**
- * Получение товара по ID
- */
-function getProductById($id) {
-    if (empty($id)) {
-        return null;
-    }
-    $products = loadJsonData('products.json');
-    foreach ($products as $product) {
-        if (isset($product['id']) && $product['id'] == $id) {
-            return $product;
-        }
-    }
-    return null;
-}
-
-/**
- * Добавление товара (для совместимости)
- */
-function addProduct($productData) {
-    return saveProduct($productData);
-}
-
-/**
- * Обновление товара (для совместимости)
- */
-function updateProduct($id, $productData) {
-    $productData['id'] = $id;
-    return saveProduct($productData);
-}
-
-/**
- * Удаление товара
- */
 function deleteProduct($id) {
     try {
         $products = loadJsonData('products.json');
         $products = array_filter($products, function($product) use ($id) {
             return $product['id'] != $id;
         });
-
-        if (saveJsonData('products.json', array_values($products))) {
-            return ['success' => true];
-        } else {
-            return ['success' => false, 'error' => 'Не удалось сохранить изменения'];
-        }
+        return saveJsonData('products.json', array_values($products));
     } catch (Exception $e) {
-        return ['success' => false, 'error' => $e->getMessage()];
+        return false;
     }
 }
 
-/**
- * Получение категорий
- */
+// ========== КАТЕГОРИИ ==========
+
 function getCategories() {
     return loadJsonData('categories.json');
 }
 
-/**
- * Получение категорий с подсчетом товаров
- */
 function getCategoriesWithCount() {
     $categories = loadJsonData('categories.json');
     $products = getProducts();
@@ -425,13 +195,8 @@ function getCategoriesWithCount() {
     return $categories;
 }
 
-/**
- * Получение категории по ID
- */
 function getCategoryById($id) {
-    if (!is_numeric($id) || $id <= 0) {
-        return null;
-    }
+    if (!is_numeric($id) || $id <= 0) return null;
     $categories = loadJsonData('categories.json');
     foreach ($categories as $category) {
         if (isset($category['id']) && $category['id'] == $id) {
@@ -441,207 +206,74 @@ function getCategoryById($id) {
     return null;
 }
 
-/**
- * Добавление категории
- */
-function addCategory($categoryData) {
-    $categories = loadJsonData('categories.json');
-    $categoryData['id'] = generateId($categories);
-    $categoryData['created_at'] = date('Y-m-d H:i:s');
-    $categories[] = $categoryData;
-    return saveJsonData('categories.json', $categories);
-}
+// ========== МЕГА КОРЗИНА (ПОЛНОСТЬЮ ПЕРЕПИСАННАЯ) ==========
 
 /**
- * Обновление категории
+ * МЕГА функция инициализации корзины
  */
-function updateCategory($id, $categoryData) {
-    $categories = loadJsonData('categories.json');
-    foreach ($categories as &$category) {
-        if ($category['id'] == $id) {
-            $categoryData['id'] = $id;
-            $categoryData['updated_at'] = date('Y-m-d H:i:s');
-            $category = array_merge($category, $categoryData);
-            return saveJsonData('categories.json', $categories);
-        }
-    }
-    return false;
-}
-
-/**
- * Удаление категории
- */
-function deleteCategory($id) {
-    $categories = loadJsonData('categories.json');
-    $categories = array_filter($categories, function($category) use ($id) {
-        return $category['id'] != $id;
-    });
-    return saveJsonData('categories.json', array_values($categories));
-}
-
-/**
- * Генерация уникального ID для старых функций
- */
-function generateId($data) {
-    if (empty($data)) return 1;
-    $maxId = 0;
-    foreach ($data as $item) {
-        if (isset($item['id']) && is_numeric($item['id']) && $item['id'] > $maxId) {
-            $maxId = (int)$item['id'];
-        }
-    }
-    return $maxId + 1;
-}
-
-/**
- * Создание slug из названия
- */
-function createSlug($text) {
-    $text = mb_strtolower(trim($text));
-    $text = preg_replace('/[^a-z0-9а-я\s-]/u', '', $text);
-    $text = preg_replace('/\s+/', '-', $text);
-    $text = trim($text, '-');
-    return $text;
-}
-
-/**
- * Форматирование цены
- */
-function formatPrice($price) {
-    if (!is_numeric($price)) return '0 ₽';
-    return number_format((float)$price, 0, ',', ' ') . ' ₽';
-}
-
-/**
- * Получение настроек сайта
- */
-function getSettings() {
-    return loadJsonData('settings.json');
-}
-
-/**
- * Получение корзины из сессии
- */
-function getCart() {
-    // Если сессия не активна, запускаем её
-    if (session_status() === PHP_SESSION_NONE) {
-        initSession();
-    }
-
-    $cart = $_SESSION['cart'] ?? [];
-    error_log('getCart: Текущая корзина - ' . print_r($cart, true));
-    return $cart;
-}
-
-/**
- * Добавление товара в корзину - УПРОЩЕННАЯ ВЕРСИЯ
- */
-function addToCart($productId, $quantity = 1) {
-    // Проверяем сессию
-    if (session_status() === PHP_SESSION_NONE) {
-        if (!initSession()) {
-            error_log('addToCart: Не удалось инициализировать сессию');
-            return false;
-        }
-    }
-
-    error_log('addToCart: Статус сессии - ' . session_status());
-    error_log('addToCart: ID сессии - ' . session_id());
-
-    // Валидация
-    if (!is_numeric($productId) || !is_numeric($quantity) || $productId <= 0 || $quantity <= 0) {
-        error_log("addToCart: Некорректные параметры - productId: $productId, quantity: $quantity");
+function initCart() {
+    if (!initSession()) {
         return false;
     }
 
-    $productId = (int)$productId;
+    if (!isset($_SESSION['cart'])) {
+        $_SESSION['cart'] = [];
+        error_log('КОРЗИНА: Инициализирована новая корзина');
+    }
+
+    return true;
+}
+
+/**
+ * МЕГА функция добавления товара в корзину
+ */
+function addToCart($productId, $quantity = 1) {
+    error_log("КОРЗИНА: Попытка добавить товар ID=$productId, количество=$quantity");
+
+    // Инициализация
+    if (!initCart()) {
+        error_log('КОРЗИНА: Ошибка инициализации');
+        return false;
+    }
+
+    // Валидация параметров
+    if (!is_numeric($productId) || !is_numeric($quantity) || $productId <= 0 || $quantity <= 0) {
+        error_log("КОРЗИНА: Некорректные параметры - productId: $productId, quantity: $quantity");
+        return false;
+    }
+
+    $productId = strval($productId); // Используем строковый ID для консистентности
     $quantity = (int)$quantity;
 
     // Проверяем существование товара
     $product = getProductById($productId);
     if (!$product) {
-        error_log("addToCart: Товар с ID $productId не найден");
+        error_log("КОРЗИНА: Товар с ID $productId не найден");
         return false;
     }
-
-    // Инициализируем корзину если её нет
-    if (!isset($_SESSION['cart'])) {
-        $_SESSION['cart'] = [];
-        error_log('addToCart: Инициализирована новая корзина');
-    }
-
-    error_log('addToCart: Корзина ДО добавления - ' . print_r($_SESSION['cart'], true));
 
     // Добавляем товар
     if (isset($_SESSION['cart'][$productId])) {
         $_SESSION['cart'][$productId] += $quantity;
-        error_log("addToCart: Увеличено количество товара $productId до " . $_SESSION['cart'][$productId]);
+        error_log("КОРЗИНА: Увеличено количество товара $productId до " . $_SESSION['cart'][$productId]);
     } else {
         $_SESSION['cart'][$productId] = $quantity;
-        error_log("addToCart: Добавлен новый товар $productId в количестве $quantity");
+        error_log("КОРЗИНА: Добавлен новый товар $productId в количестве $quantity");
     }
 
-    error_log('addToCart: Корзина ПОСЛЕ добавления - ' . print_r($_SESSION['cart'], true));
-    error_log('addToCart: УСПЕШНО ЗАВЕРШЕНО');
-
+    error_log('КОРЗИНА: Текущее состояние - ' . json_encode($_SESSION['cart']));
     return true;
 }
 
 /**
- * Обновление количества товара в корзине
- */
-function updateCartItem($productId, $quantity) {
-    if (session_status() === PHP_SESSION_NONE) {
-        initSession();
-    }
-
-    if (!is_numeric($productId) || !is_numeric($quantity) || $productId <= 0) {
-        return false;
-    }
-
-    $productId = (int)$productId;
-    $quantity = (int)$quantity;
-
-    if (!isset($_SESSION['cart'])) {
-        $_SESSION['cart'] = [];
-    }
-
-    if ($quantity > 0) {
-        $_SESSION['cart'][$productId] = $quantity;
-    } else {
-        unset($_SESSION['cart'][$productId]);
-    }
-
-    return true;
-}
-
-/**
- * Удаление товара из корзины
- */
-function removeFromCart($productId) {
-    if (session_status() === PHP_SESSION_NONE) {
-        initSession();
-    }
-
-    if (!is_numeric($productId) || $productId <= 0) {
-        return false;
-    }
-
-    $productId = (int)$productId;
-
-    if (isset($_SESSION['cart'][$productId])) {
-        unset($_SESSION['cart'][$productId]);
-        return true;
-    }
-
-    return false;
-}
-
-/**
- * Получение товаров корзины с деталями
+ * МЕГА функция получения содержимого корзины
  */
 function getCartItems() {
-    $cart = getCart();
+    if (!initCart()) {
+        return ['items' => [], 'total' => 0, 'count' => 0];
+    }
+
+    $cart = $_SESSION['cart'] ?? [];
     $items = [];
     $total = 0;
 
@@ -664,34 +296,240 @@ function getCartItems() {
 }
 
 /**
- * Очистка корзины
- */
-function clearCart() {
-    if (session_status() === PHP_SESSION_NONE) {
-        initSession();
-    }
-    $_SESSION['cart'] = [];
-    return true;
-}
-
-/**
- * Получение количества товаров в корзине
+ * МЕГА функция получения количества товаров в корзине
  */
 function getCartCount() {
-    $cart = getCart();
+    if (!initCart()) {
+        return 0;
+    }
+
+    $cart = $_SESSION['cart'] ?? [];
     $count = array_sum($cart);
-    error_log("getCartCount: Всего товаров в корзине - $count");
+    error_log("КОРЗИНА: Общее количество товаров - $count");
     return $count;
 }
 
 /**
- * Сохранение заказа
+ * МЕГА функция обновления количества товара
  */
+function updateCartItem($productId, $quantity) {
+    if (!initCart()) {
+        return false;
+    }
+
+    $productId = strval($productId);
+    $quantity = (int)$quantity;
+
+    if ($quantity > 0) {
+        $_SESSION['cart'][$productId] = $quantity;
+        error_log("КОРЗИНА: Обновлено количество товара $productId до $quantity");
+    } else {
+        unset($_SESSION['cart'][$productId]);
+        error_log("КОРЗИНА: Удален товар $productId");
+    }
+
+    return true;
+}
+
+/**
+ * МЕГА функция удаления товара из корзины
+ */
+function removeFromCart($productId) {
+    if (!initCart()) {
+        return false;
+    }
+
+    $productId = strval($productId);
+
+    if (isset($_SESSION['cart'][$productId])) {
+        unset($_SESSION['cart'][$productId]);
+        error_log("КОРЗИНА: Удален товар $productId");
+        return true;
+    }
+
+    return false;
+}
+
+/**
+ * МЕГА функция очистки корзины
+ */
+function clearCart() {
+    if (!initCart()) {
+        return false;
+    }
+    $_SESSION['cart'] = [];
+    error_log('КОРЗИНА: Корзина очищена');
+    return true;
+}
+
+// ========== ИЗБРАННОЕ ==========
+
+function getFavorites() {
+    if (!initSession()) return [];
+    return $_SESSION['favorites'] ?? [];
+}
+
+function addToFavorites($productId) {
+    if (!initSession()) return false;
+
+    if (!isset($_SESSION['favorites'])) {
+        $_SESSION['favorites'] = [];
+    }
+
+    $productId = strval($productId);
+    if (!in_array($productId, $_SESSION['favorites'])) {
+        $_SESSION['favorites'][] = $productId;
+        return true;
+    }
+    return false;
+}
+
+function removeFromFavorites($productId) {
+    if (!initSession()) return false;
+
+    if (isset($_SESSION['favorites'])) {
+        $productId = strval($productId);
+        $key = array_search($productId, $_SESSION['favorites']);
+        if ($key !== false) {
+            unset($_SESSION['favorites'][$key]);
+            $_SESSION['favorites'] = array_values($_SESSION['favorites']);
+            return true;
+        }
+    }
+    return false;
+}
+
+function getFavoritesCount() {
+    return count(getFavorites());
+}
+
+function isInFavorites($productId) {
+    return in_array(strval($productId), getFavorites());
+}
+
+// ========== ОТЗЫВЫ ==========
+
+function getAllReviews() {
+    return loadJsonData('reviews.json');
+}
+
+function getReviewById($id) {
+    $reviews = getAllReviews();
+    foreach ($reviews as $review) {
+        if ($review['id'] === $id) {
+            return $review;
+        }
+    }
+    return null;
+}
+
+function getProductReviews($productId) {
+    $reviews = loadJsonData('reviews.json');
+    $productReviews = array_filter($reviews, function($review) use ($productId) {
+        return isset($review['product_id']) && $review['product_id'] == $productId && $review['status'] === 'approved';
+    });
+    return array_values($productReviews);
+}
+
+function getProductRating($productId) {
+    $reviews = getProductReviews($productId);
+    if (empty($reviews)) {
+        return ['average' => 0, 'count' => 0];
+    }
+
+    $ratings = array_column($reviews, 'rating');
+    $average = array_sum($ratings) / count($ratings);
+
+    return [
+        'average' => round($average, 1),
+        'count' => count($reviews)
+    ];
+}
+
+function saveReview($reviewData) {
+    try {
+        $reviews = getAllReviews();
+
+        $exists = false;
+        foreach ($reviews as $key => $review) {
+            if ($review['id'] === $reviewData['id']) {
+                $reviews[$key] = $reviewData;
+                $exists = true;
+                break;
+            }
+        }
+
+        if (!$exists) {
+            $reviews[] = $reviewData;
+        }
+
+        if (saveJsonData('reviews.json', $reviews)) {
+            return ['success' => true, 'message' => 'Отзыв сохранен'];
+        } else {
+            return ['success' => false, 'message' => 'Ошибка сохранения'];
+        }
+    } catch (Exception $e) {
+        return ['success' => false, 'message' => $e->getMessage()];
+    }
+}
+
+function updateReviewStatus($id, $status) {
+    $reviews = getAllReviews();
+    foreach ($reviews as &$review) {
+        if ($review['id'] === $id) {
+            $review['status'] = $status;
+            $review['updated_at'] = date('Y-m-d H:i:s');
+            return saveJsonData('reviews.json', $reviews);
+        }
+    }
+    return false;
+}
+
+function deleteReview($id) {
+    $reviews = getAllReviews();
+    $reviews = array_filter($reviews, function($review) use ($id) {
+        return $review['id'] !== $id;
+    });
+    return saveJsonData('reviews.json', array_values($reviews));
+}
+
+function generateUniqueId() {
+    return 'review_' . time() . '_' . uniqid();
+}
+
+function getProductLabels($productId) {
+    $rating = getProductRating($productId);
+    $labels = [];
+
+    if ($rating['count'] > 0) {
+        if ($rating['average'] >= 4.5 && $rating['count'] >= 5) {
+            $labels[] = ['text' => 'ПРЕМИУМ', 'class' => 'bg-gradient-danger'];
+        } elseif ($rating['average'] >= 4.0 && $rating['count'] >= 3) {
+            $labels[] = ['text' => 'ХОРОШИЙ ТОВАР', 'class' => 'bg-gradient-success'];
+        } elseif ($rating['count'] >= 10) {
+            $labels[] = ['text' => 'ПОПУЛЯРНЫЙ', 'class' => 'bg-gradient-info'];
+        }
+    }
+
+    $product = getProductById($productId);
+    if ($product && isset($product['is_new']) && $product['is_new']) {
+        $labels[] = ['text' => 'НОВИНКА', 'class' => 'bg-gradient-warning'];
+    }
+
+    if ($product && isset($product['is_sale']) && $product['is_sale']) {
+        $labels[] = ['text' => 'АКЦИЯ', 'class' => 'bg-gradient-danger'];
+    }
+
+    return $labels;
+}
+
+// ========== ЗАКАЗЫ ==========
+
 function saveOrder($orderData) {
     $orders = loadJsonData('orders.json');
 
     $order = [
-        'id' => generateId($orders),
+        'id' => time() . '_' . uniqid(),
         'date' => date('Y-m-d H:i:s'),
         'status' => 'new',
         'customer' => $orderData['customer'] ?? [],
@@ -706,16 +544,10 @@ function saveOrder($orderData) {
     return false;
 }
 
-/**
- * Получение заказов
- */
 function getOrders() {
     return loadJsonData('orders.json');
 }
 
-/**
- * Обновление статуса заказа
- */
 function updateOrderStatus($id, $status) {
     $orders = loadJsonData('orders.json');
     foreach ($orders as &$order) {
@@ -728,21 +560,13 @@ function updateOrderStatus($id, $status) {
     return false;
 }
 
-/**
- * Получение популярных товаров
- */
-function getFeaturedProducts($limit = 8) {
-    $products = getProducts();
-    if (empty($products)) {
-        return [];
-    }
-    shuffle($products);
-    return array_slice($products, 0, $limit);
+// ========== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
+
+function formatPrice($price) {
+    if (!is_numeric($price)) return '0 ₽';
+    return number_format((float)$price, 0, ',', ' ') . ' ₽';
 }
 
-/**
- * Получение статистики для дашборда
- */
 function getDashboardStats() {
     $products = getAllProducts();
     $orders = getOrders();
@@ -752,95 +576,25 @@ function getDashboardStats() {
         return !isset($p['status']) || $p['status'] == 1;
     });
 
-    $today = date('Y-m-d');
-    $todayOrders = array_filter($orders, function($o) use ($today) {
-        return isset($o['date']) && date('Y-m-d', strtotime($o['date'])) === $today;
-    });
-
-    $thisMonth = date('Y-m');
-    $thisMonthOrders = array_filter($orders, function($o) use ($thisMonth) {
-        return isset($o['date']) && date('Y-m', strtotime($o['date'])) === $thisMonth;
-    });
-
-    $totalRevenue = 0;
-    $monthRevenue = 0;
-
-    foreach ($orders as $order) {
-        if (isset($order['total']) && is_numeric($order['total'])) {
-            $totalRevenue += (float)$order['total'];
-        }
-    }
-
-    foreach ($thisMonthOrders as $order) {
-        if (isset($order['total']) && is_numeric($order['total'])) {
-            $monthRevenue += (float)$order['total'];
-        }
-    }
-
     return [
         'total_products' => count($activeProducts),
         'total_categories' => count($categories),
         'total_orders' => count($orders),
-        'today_orders' => count($todayOrders),
-        'month_orders' => count($thisMonthOrders),
-        'total_revenue' => $totalRevenue,
-        'month_revenue' => $monthRevenue
+        'today_orders' => 0,
+        'month_orders' => 0,
+        'total_revenue' => 0,
+        'month_revenue' => 0
     ];
 }
 
-/**
- * Получение настроек сайта
- */
 function getSiteSettings() {
     return loadJsonData('settings.json');
 }
 
-/**
- * Сохранение настроек сайта
- */
 function saveSiteSettings($settingsData) {
     return saveJsonData('settings.json', $settingsData);
 }
 
-/**
- * Получение конкретной настройки
- */
-function getSiteSetting($key, $default = '') {
-    static $settings = null;
-    if ($settings === null) {
-        $settings = getSiteSettings();
-    }
-    return $settings[$key] ?? $default;
-}
-
-/**
- * Валидация данных товара
- */
-function validateProductData($data) {
-    $errors = [];
-
-    if (empty($data['name'])) {
-        $errors[] = 'Название товара обязательно';
-    }
-
-    if (empty($data['description'])) {
-        $errors[] = 'Описание товара обязательно';
-    }
-
-    if (!isset($data['price']) || !is_numeric($data['price']) || $data['price'] <= 0) {
-        $errors[] = 'Цена должна быть положительным числом';
-    }
-
-    if (empty($data['category_id'])) {
-        $errors[] = 'Категория товара обязательна';
-    }
-
-    return $errors;
-}
-
-/**
- * Инициализация базовых данных (категории по умолчанию)
- */
 function initializeDefaultData() {
     $categories = getCategories();
     if (empty($categories)) {
@@ -853,7 +607,6 @@ function initializeDefaultData() {
         saveJsonData('categories.json', $defaultCategories);
     }
 
-    // Создаем базовые настройки
     $settings = getSiteSettings();
     if (empty($settings)) {
         $defaultSettings = [
@@ -868,7 +621,7 @@ function initializeDefaultData() {
     }
 }
 
-// Автоматическая инициализация при подключении файла
+// Автоматическая инициализация
 if (!defined('SKIP_AUTO_INIT')) {
     initializeDefaultData();
 }
