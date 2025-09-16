@@ -1,822 +1,1485 @@
 <?php
-require_once '../includes/db.php';
+/**
+ * АкваСбор - МЕГА магазин аквариумных растений
+ * Товары теперь загружаются из базы данных
+ */
 
-// Обработка действий
-$action = $_GET['action'] ?? 'list';
-$message = '';
-
-// Получаем категории для селекта
-$stmt = $pdo->query("SELECT * FROM categories ORDER BY name");
-$categories = $stmt->fetchAll();
-
-// ДОБАВЛЕНИЕ товара
-if ($action == 'add' && $_POST) {
-    try {
-        $sql = "INSERT INTO products (
-            category_id, name, latin_name, category, slug, description, 
-            short_description, difficulty, care, features, main_image, 
-            price, stock_quantity, status
-        ) VALUES (
-            :category_id, :name, :latin_name, :category, :slug, :description,
-            :short_description, :difficulty, :care, :features, :main_image,
-            :price, :stock_quantity, :status
-        )";
-
-        $stmt = $pdo->prepare($sql);
-        $result = $stmt->execute([
-            'category_id' => $_POST['category_id'],
-            'name' => $_POST['name'],
-            'latin_name' => $_POST['latin_name'],
-            'category' => $_POST['category'],
-            'slug' => $_POST['slug'],
-            'description' => $_POST['description'],
-            'short_description' => $_POST['short_description'],
-            'difficulty' => $_POST['difficulty'],
-            'care' => json_encode([
-                'lighting' => $_POST['lighting'],
-                'temperature' => $_POST['temperature'],
-                'ph' => $_POST['ph']
-            ]),
-            'features' => json_encode(array_filter(explode(',', $_POST['features']))),
-            'main_image' => $_POST['main_image'],
-            'price' => $_POST['price'],
-            'stock_quantity' => $_POST['stock_quantity'],
-            'status' => $_POST['status']
-        ]);
-
-        $message = $result ? "✅ Товар успешно добавлен!" : "❌ Ошибка добавления";
-        $action = 'list';
-    } catch (Exception $e) {
-        $message = "❌ Ошибка: " . $e->getMessage();
-    }
+// Проверяем установку
+if (!file_exists('config/.installed')) {
+    header('Location: install.php');
+    exit;
 }
 
-// РЕДАКТИРОВАНИЕ товара
-if ($action == 'edit' && $_POST) {
-    try {
-        $sql = "UPDATE products SET 
-            category_id = :category_id, name = :name, latin_name = :latin_name, 
-            category = :category, slug = :slug, description = :description,
-            short_description = :short_description, difficulty = :difficulty, 
-            care = :care, features = :features, main_image = :main_image,
-            price = :price, stock_quantity = :stock_quantity, status = :status
-        WHERE id = :id";
-
-        $stmt = $pdo->prepare($sql);
-        $result = $stmt->execute([
-            'id' => $_POST['id'],
-            'category_id' => $_POST['category_id'],
-            'name' => $_POST['name'],
-            'latin_name' => $_POST['latin_name'],
-            'category' => $_POST['category'],
-            'slug' => $_POST['slug'],
-            'description' => $_POST['description'],
-            'short_description' => $_POST['short_description'],
-            'difficulty' => $_POST['difficulty'],
-            'care' => json_encode([
-                'lighting' => $_POST['lighting'],
-                'temperature' => $_POST['temperature'],
-                'ph' => $_POST['ph']
-            ]),
-            'features' => json_encode(array_filter(explode(',', $_POST['features']))),
-            'main_image' => $_POST['main_image'],
-            'price' => $_POST['price'],
-            'stock_quantity' => $_POST['stock_quantity'],
-            'status' => $_POST['status']
-        ]);
-
-        $message = $result ? "✅ Товар обновлен!" : "❌ Ошибка обновления";
-        $action = 'list';
-    } catch (Exception $e) {
-        $message = "❌ Ошибка: " . $e->getMessage();
-    }
-}
-
-// УДАЛЕНИЕ товара
-if ($action == 'delete' && isset($_GET['id'])) {
-    try {
-        $stmt = $pdo->prepare("DELETE FROM products WHERE id = ?");
-        $result = $stmt->execute([$_GET['id']]);
-        $message = $result ? "✅ Товар удален!" : "❌ Ошибка удаления";
-    } catch (Exception $e) {
-        $message = "❌ Ошибка: " . $e->getMessage();
-    }
-}
-
-// МАССОВЫЕ операции
-if (isset($_POST['bulk_action']) && !empty($_POST['selected_products'])) {
-    $ids = implode(',', array_map('intval', $_POST['selected_products']));
-
-    switch ($_POST['bulk_action']) {
-        case 'activate':
-            $pdo->exec("UPDATE products SET status = 1 WHERE id IN ($ids)");
-            $message = "✅ Товары активированы!";
-            break;
-        case 'deactivate':
-            $pdo->exec("UPDATE products SET status = 0 WHERE id IN ($ids)");
-            $message = "⚠️ Товары деактивированы!";
-            break;
-        case 'delete':
-            $pdo->exec("DELETE FROM products WHERE id IN ($ids)");
-            $message = "🗑️ Товары удалены!";
-            break;
-    }
-}
-
-// Получение товара для редактирования
-$editProduct = null;
-if ($action == 'edit' && isset($_GET['id'])) {
-    $stmt = $pdo->prepare("SELECT * FROM products WHERE id = ?");
-    $stmt->execute([$_GET['id']]);
-    $editProduct = $stmt->fetch();
-
-    if ($editProduct && $editProduct['care']) {
-        $editProduct['care_decoded'] = json_decode($editProduct['care'], true);
-    }
-    if ($editProduct && $editProduct['features']) {
-        $editProduct['features_decoded'] = json_decode($editProduct['features'], true);
-    }
-}
-
-// ПОИСК и ФИЛЬТРЫ
-$search = $_GET['search'] ?? '';
-$category_filter = $_GET['category_filter'] ?? '';
-$status_filter = $_GET['status_filter'] ?? '';
-$sort = $_GET['sort'] ?? 'id';
-$order = $_GET['order'] ?? 'DESC';
-
-$whereConditions = [];
-$params = [];
-
-if ($search) {
-    $whereConditions[] = "(name LIKE :search OR latin_name LIKE :search OR description LIKE :search)";
-    $params['search'] = "%$search%";
-}
-
-if ($category_filter) {
-    $whereConditions[] = "category_id = :category_filter";
-    $params['category_filter'] = $category_filter;
-}
-
-if ($status_filter !== '') {
-    $whereConditions[] = "status = :status_filter";
-    $params['status_filter'] = $status_filter;
-}
-
-$whereSQL = !empty($whereConditions) ? 'WHERE ' . implode(' AND ', $whereConditions) : '';
-
-// Пагинация
-$page = $_GET['page'] ?? 1;
-$limit = $_GET['limit'] ?? 20;
-$offset = ($page - 1) * $limit;
-
-// Получаем товары
-$sql = "SELECT p.*, c.name as category_name 
-        FROM products p 
-        LEFT JOIN categories c ON p.category_id = c.id 
-        $whereSQL 
-        ORDER BY p.$sort $order 
-        LIMIT $limit OFFSET $offset";
-
-$stmt = $pdo->prepare($sql);
-$stmt->execute($params);
-$products = $stmt->fetchAll();
-
-// Общее количество товаров
-$countSQL = "SELECT COUNT(*) FROM products p $whereSQL";
-$stmt = $pdo->prepare($countSQL);
-$stmt->execute($params);
-$totalProducts = $stmt->fetchColumn();
-$totalPages = ceil($totalProducts / $limit);
-?>
-
-<style>
-.products-header {
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    color: white;
-    padding: 20px;
-    border-radius: 10px;
-    margin-bottom: 30px;
-}
-
-.products-stats {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-    gap: 20px;
-    margin-bottom: 30px;
-}
-
-.stat-card {
-    background: white;
-    padding: 20px;
-    border-radius: 10px;
-    text-align: center;
-    box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-}
-
-.stat-card h3 {
-    font-size: 2.5em;
-    margin: 0;
-    color: #667eea;
-}
-
-.filters-panel {
-    background: white;
-    padding: 20px;
-    border-radius: 10px;
-    margin-bottom: 20px;
-    box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-}
-
-.filters-row {
-    display: grid;
-    grid-template-columns: 2fr 1fr 1fr 1fr 100px auto;
-    gap: 15px;
-    align-items: end;
-}
-
-.form-group {
-    display: flex;
-    flex-direction: column;
-}
-
-.form-group label {
-    margin-bottom: 5px;
-    font-weight: bold;
-    color: #333;
-}
-
-.form-control {
-    padding: 10px;
-    border: 2px solid #e1e5e9;
-    border-radius: 5px;
-    font-size: 14px;
-}
-
-.form-control:focus {
-    border-color: #667eea;
-    outline: none;
-}
-
-.btn {
-    padding: 10px 20px;
-    border: none;
-    border-radius: 5px;
-    cursor: pointer;
-    text-decoration: none;
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    transition: all 0.3s;
-}
-
-.btn-primary { background: #667eea; color: white; }
-.btn-success { background: #28a745; color: white; }
-.btn-danger { background: #dc3545; color: white; }
-.btn-warning { background: #ffc107; color: #333; }
-.btn-info { background: #17a2b8; color: white; }
-
-.btn:hover { transform: translateY(-2px); box-shadow: 0 4px 8px rgba(0,0,0,0.2); }
-
-.products-table {
-    background: white;
-    border-radius: 10px;
-    overflow: hidden;
-    box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-}
-
-.table {
-    width: 100%;
-    border-collapse: collapse;
-}
-
-.table th {
-    background: #f8f9fa;
-    padding: 15px 10px;
-    text-align: left;
-    font-weight: bold;
-    border-bottom: 2px solid #e1e5e9;
-    position: relative;
-}
-
-.table th a {
-    color: #333;
-    text-decoration: none;
-    display: flex;
-    align-items: center;
-    gap: 5px;
-}
-
-.table td {
-    padding: 12px 10px;
-    border-bottom: 1px solid #e1e5e9;
-    vertical-align: middle;
-}
-
-.table tr:hover {
-    background: #f8f9fa;
-}
-
-.product-image {
-    width: 60px;
-    height: 60px;
-    object-fit: cover;
-    border-radius: 8px;
-    border: 2px solid #e1e5e9;
-}
-
-.product-name {
-    font-weight: bold;
-    color: #333;
-    margin-bottom: 4px;
-}
-
-.product-latin {
-    font-style: italic;
-    color: #666;
-    font-size: 12px;
-}
-
-.status-badge {
-    padding: 4px 12px;
-    border-radius: 20px;
-    font-size: 12px;
-    font-weight: bold;
-}
-
-.status-active {
-    background: #d4edda;
-    color: #155724;
-}
-
-.status-inactive {
-    background: #f8d7da;
-    color: #721c24;
-}
-
-.actions-group {
-    display: flex;
-    gap: 5px;
-}
-
-.btn-sm {
-    padding: 5px 10px;
-    font-size: 12px;
-}
-
-.bulk-actions {
-    background: #f8f9fa;
-    padding: 15px 20px;
-    border-bottom: 1px solid #e1e5e9;
-    display: flex;
-    align-items: center;
-    gap: 15px;
-}
-
-.pagination {
-    display: flex;
-    justify-content: center;
-    gap: 5px;
-    margin-top: 20px;
-}
-
-.pagination a, .pagination span {
-    padding: 10px 15px;
-    border: 1px solid #e1e5e9;
-    border-radius: 5px;
-    text-decoration: none;
-    color: #333;
-}
-
-.pagination .current {
-    background: #667eea;
-    color: white;
-}
-
-.modal {
-    display: none;
-    position: fixed;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    background: rgba(0,0,0,0.5);
-    z-index: 1000;
-}
-
-.modal-content {
-    background: white;
-    margin: 5% auto;
-    padding: 30px;
-    width: 90%;
-    max-width: 800px;
-    border-radius: 10px;
-    max-height: 90vh;
-    overflow-y: auto;
-}
-
-.form-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 20px;
-}
-
-.form-grid-full {
-    grid-column: 1 / -1;
-}
-
-.form-row {
-    display: grid;
-    grid-template-columns: 1fr 1fr 1fr;
-    gap: 15px;
-}
-
-textarea {
-    resize: vertical;
-    min-height: 100px;
-}
-
-@media (max-width: 768px) {
-    .filters-row {
-        grid-template-columns: 1fr;
-        gap: 10px;
-    }
-
-    .form-grid {
-        grid-template-columns: 1fr;
-    }
-
-    .form-row {
-        grid-template-columns: 1fr;
-    }
-
-    .table {
-        font-size: 12px;
-    }
-
-    .products-stats {
-        grid-template-columns: 1fr 1fr;
-    }
-}
-</style>
-
-<div class="products-header">
-    <h1>🌿 Управление товарами</h1>
-    <p>Полное управление каталогом аквариумных растений</p>
-</div>
-
-<?php if ($message): ?>
-    <div class="alert alert-info" style="padding: 15px; background: #d4edda; color: #155724; border-radius: 5px; margin-bottom: 20px;">
-        <?= $message ?>
-    </div>
-<?php endif; ?>
-
-<!-- СТАТИСТИКА -->
-<?php 
-$stmt = $pdo->query("SELECT 
-    COUNT(*) as total,
-    COUNT(CASE WHEN status = 1 THEN 1 END) as active,
-    COUNT(CASE WHEN status = 0 THEN 1 END) as inactive,
-    AVG(price) as avg_price
-FROM products");
-$stats = $stmt->fetch();
-?>
-
-<div class="products-stats">
-    <div class="stat-card">
-        <h3><?= number_format($stats['total']) ?></h3>
-        <p>Всего товаров</p>
-    </div>
-    <div class="stat-card">
-        <h3><?= number_format($stats['active']) ?></h3>
-        <p>Активные</p>
-    </div>
-    <div class="stat-card">
-        <h3><?= number_format($stats['inactive']) ?></h3>
-        <p>Неактивные</p>
-    </div>
-    <div class="stat-card">
-        <h3><?= number_format($stats['avg_price'], 0) ?>₽</h3>
-        <p>Средняя цена</p>
-    </div>
-</div>
-
-<?php if ($action == 'list'): ?>
-
-<!-- ФИЛЬТРЫ И ПОИСК -->
-<div class="filters-panel">
-    <form method="GET" action="">
-        <input type="hidden" name="page" value="products">
-        <div class="filters-row">
-            <div class="form-group">
-                <label>🔍 Поиск</label>
-                <input type="text" name="search" class="form-control" value="<?= htmlspecialchars($search) ?>" placeholder="Название, латинское название, описание...">
-            </div>
-
-            <div class="form-group">
-                <label>📂 Категория</label>
-                <select name="category_filter" class="form-control">
-                    <option value="">Все категории</option>
-                    <?php foreach ($categories as $cat): ?>
-                        <option value="<?= $cat['id'] ?>" <?= $category_filter == $cat['id'] ? 'selected' : '' ?>>
-                            <?= htmlspecialchars($cat['name']) ?>
-                        </option>
-                    <?php endforeach; ?>
-                </select>
-            </div>
-
-            <div class="form-group">
-                <label>📊 Статус</label>
-                <select name="status_filter" class="form-control">
-                    <option value="">Все статусы</option>
-                    <option value="1" <?= $status_filter === '1' ? 'selected' : '' ?>>Активные</option>
-                    <option value="0" <?= $status_filter === '0' ? 'selected' : '' ?>>Неактивные</option>
-                </select>
-            </div>
-
-            <div class="form-group">
-                <label>📄 На странице</label>
-                <select name="limit" class="form-control">
-                    <option value="20" <?= $limit == 20 ? 'selected' : '' ?>>20</option>
-                    <option value="50" <?= $limit == 50 ? 'selected' : '' ?>>50</option>
-                    <option value="100" <?= $limit == 100 ? 'selected' : '' ?>>100</option>
-                </select>
-            </div>
-
-            <button type="submit" class="btn btn-primary">🔍 Найти</button>
-
-            <a href="?page=products&action=add" class="btn btn-success">➕ Добавить товар</a>
-        </div>
-    </form>
-</div>
-
-<!-- ТАБЛИЦА ТОВАРОВ -->
-<div class="products-table">
-    <form method="POST" action="">
-        <div class="bulk-actions">
-            <input type="checkbox" id="select-all" onclick="toggleAll(this)">
-            <label for="select-all">Выбрать все</label>
-
-            <select name="bulk_action" class="form-control" style="width: auto;">
-                <option value="">Массовые действия...</option>
-                <option value="activate">Активировать</option>
-                <option value="deactivate">Деактивировать</option>
-                <option value="delete">Удалить</option>
-            </select>
-
-            <button type="submit" class="btn btn-warning btn-sm" onclick="return confirm('Выполнить действие для выбранных товаров?')">
-                ⚡ Выполнить
-            </button>
-        </div>
-
-        <table class="table">
-            <thead>
-                <tr>
-                    <th width="30"></th>
-                    <th width="80">Фото</th>
-                    <th>
-                        <a href="?page=products&sort=name&order=<?= $sort == 'name' && $order == 'ASC' ? 'DESC' : 'ASC' ?>&<?= http_build_query($_GET) ?>">
-                            Название <?= $sort == 'name' ? ($order == 'ASC' ? '↑' : '↓') : '' ?>
-                        </a>
-                    </th>
-                    <th>Категория</th>
-                    <th>
-                        <a href="?page=products&sort=price&order=<?= $sort == 'price' && $order == 'ASC' ? 'DESC' : 'ASC' ?>&<?= http_build_query($_GET) ?>">
-                            Цена <?= $sort == 'price' ? ($order == 'ASC' ? '↑' : '↓') : '' ?>
-                        </a>
-                    </th>
-                    <th>Остаток</th>
-                    <th>Статус</th>
-                    <th width="150">Действия</th>
-                </tr>
-            </thead>
-            <tbody>
-                <?php foreach ($products as $product): ?>
-                    <tr>
-                        <td>
-                            <input type="checkbox" name="selected_products[]" value="<?= $product['id'] ?>" class="product-checkbox">
-                        </td>
-                        <td>
-                            <img src="<?= htmlspecialchars($product['main_image']) ?>" alt="" class="product-image">
-                        </td>
-                        <td>
-                            <div class="product-name"><?= htmlspecialchars($product['name']) ?></div>
-                            <div class="product-latin"><?= htmlspecialchars($product['latin_name']) ?></div>
-                        </td>
-                        <td><?= htmlspecialchars($product['category_name']) ?></td>
-                        <td><strong><?= number_format($product['price'], 0, ',', ' ') ?> ₽</strong></td>
-                        <td><?= $product['stock_quantity'] ?> шт.</td>
-                        <td>
-                            <span class="status-badge status-<?= $product['status'] ? 'active' : 'inactive' ?>">
-                                <?= $product['status'] ? 'Активен' : 'Неактивен' ?>
-                            </span>
-                        </td>
-                        <td>
-                            <div class="actions-group">
-                                <a href="../product.php?slug=<?= $product['slug'] ?>" target="_blank" class="btn btn-info btn-sm" title="Посмотреть">👁️</a>
-                                <a href="?page=products&action=edit&id=<?= $product['id'] ?>" class="btn btn-primary btn-sm" title="Редактировать">✏️</a>
-                                <a href="?page=products&action=delete&id=<?= $product['id'] ?>" class="btn btn-danger btn-sm" title="Удалить" onclick="return confirm('Удалить товар?')">🗑️</a>
-                            </div>
-                        </td>
-                    </tr>
-                <?php endforeach; ?>
-            </tbody>
-        </table>
-    </form>
-</div>
-
-<!-- ПАГИНАЦИЯ -->
-<?php if ($totalPages > 1): ?>
-    <div class="pagination">
-        <?php if ($page > 1): ?>
-            <a href="?page=products&page=<?= $page - 1 ?>&<?= http_build_query($_GET) ?>">« Пред</a>
-        <?php endif; ?>
-
-        <?php for ($i = max(1, $page - 2); $i <= min($totalPages, $page + 2); $i++): ?>
-            <?php if ($i == $page): ?>
-                <span class="current"><?= $i ?></span>
-            <?php else: ?>
-                <a href="?page=products&page=<?= $i ?>&<?= http_build_query($_GET) ?>"><?= $i ?></a>
-            <?php endif; ?>
-        <?php endfor; ?>
-
-        <?php if ($page < $totalPages): ?>
-            <a href="?page=products&page=<?= $page + 1 ?>&<?= http_build_query($_GET) ?>">След »</a>
-        <?php endif; ?>
-    </div>
-
-    <div style="text-align: center; margin-top: 10px; color: #666;">
-        Показано <?= count($products) ?> из <?= $totalProducts ?> товаров (страница <?= $page ?> из <?= $totalPages ?>)
-    </div>
-<?php endif; ?>
-
-<?php elseif ($action == 'add' || $action == 'edit'): ?>
-
-<!-- ФОРМА ДОБАВЛЕНИЯ/РЕДАКТИРОВАНИЯ -->
-<div style="background: white; padding: 30px; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
-    <h2><?= $action == 'add' ? '➕ Добавить товар' : '✏️ Редактировать товар' ?></h2>
-
-    <form method="POST" action="">
-        <?php if ($action == 'edit'): ?>
-            <input type="hidden" name="id" value="<?= $editProduct['id'] ?>">
-        <?php endif; ?>
-
-        <div class="form-grid">
-            <div class="form-group">
-                <label>* Название товара</label>
-                <input type="text" name="name" class="form-control" value="<?= htmlspecialchars($editProduct['name'] ?? '') ?>" required>
-            </div>
-
-            <div class="form-group">
-                <label>Латинское название</label>
-                <input type="text" name="latin_name" class="form-control" value="<?= htmlspecialchars($editProduct['latin_name'] ?? '') ?>">
-            </div>
-
-            <div class="form-group">
-                <label>* Категория</label>
-                <select name="category_id" class="form-control" required onchange="updateCategory(this)">
-                    <option value="">Выберите категорию</option>
-                    <?php foreach ($categories as $cat): ?>
-                        <option value="<?= $cat['id'] ?>" <?= ($editProduct['category_id'] ?? '') == $cat['id'] ? 'selected' : '' ?>>
-                            <?= htmlspecialchars($cat['name']) ?>
-                        </option>
-                    <?php endforeach; ?>
-                </select>
-                <input type="hidden" name="category" id="category_name" value="<?= htmlspecialchars($editProduct['category'] ?? '') ?>">
-            </div>
-
-            <div class="form-group">
-                <label>* URL (slug)</label>
-                <input type="text" name="slug" class="form-control" value="<?= htmlspecialchars($editProduct['slug'] ?? '') ?>" required>
-            </div>
-
-            <div class="form-group form-grid-full">
-                <label>Краткое описание</label>
-                <input type="text" name="short_description" class="form-control" value="<?= htmlspecialchars($editProduct['short_description'] ?? '') ?>">
-            </div>
-
-            <div class="form-group form-grid-full">
-                <label>Полное описание</label>
-                <textarea name="description" class="form-control" rows="4"><?= htmlspecialchars($editProduct['description'] ?? '') ?></textarea>
-            </div>
-
-            <div class="form-row form-grid-full">
-                <div class="form-group">
-                    <label>Сложность содержания</label>
-                    <select name="difficulty" class="form-control">
-                        <option value="Легко" <?= ($editProduct['difficulty'] ?? '') == 'Легко' ? 'selected' : '' ?>>Легко</option>
-                        <option value="Средне" <?= ($editProduct['difficulty'] ?? '') == 'Средне' ? 'selected' : '' ?>>Средне</option>
-                        <option value="Сложно" <?= ($editProduct['difficulty'] ?? '') == 'Сложно' ? 'selected' : '' ?>>Сложно</option>
-                    </select>
-                </div>
-
-                <div class="form-group">
-                    <label>* Цена (₽)</label>
-                    <input type="number" name="price" class="form-control" value="<?= $editProduct['price'] ?? '' ?>" required min="0" step="0.01">
-                </div>
-
-                <div class="form-group">
-                    <label>Количество на складе</label>
-                    <input type="number" name="stock_quantity" class="form-control" value="<?= $editProduct['stock_quantity'] ?? '0' ?>" min="0">
-                </div>
-            </div>
-
-            <div class="form-row form-grid-full">
-                <div class="form-group">
-                    <label>💡 Освещение</label>
-                    <select name="lighting" class="form-control">
-                        <option value="Слабое" <?= ($editProduct['care_decoded']['lighting'] ?? '') == 'Слабое' ? 'selected' : '' ?>>Слабое</option>
-                        <option value="Слабое-среднее" <?= ($editProduct['care_decoded']['lighting'] ?? '') == 'Слабое-среднее' ? 'selected' : '' ?>>Слабое-среднее</option>
-                        <option value="Среднее" <?= ($editProduct['care_decoded']['lighting'] ?? '') == 'Среднее' ? 'selected' : '' ?>>Среднее</option>
-                        <option value="Среднее-яркое" <?= ($editProduct['care_decoded']['lighting'] ?? '') == 'Среднее-яркое' ? 'selected' : '' ?>>Среднее-яркое</option>
-                        <option value="Яркое" <?= ($editProduct['care_decoded']['lighting'] ?? '') == 'Яркое' ? 'selected' : '' ?>>Яркое</option>
-                    </select>
-                </div>
-
-                <div class="form-group">
-                    <label>🌡️ Температура</label>
-                    <input type="text" name="temperature" class="form-control" value="<?= htmlspecialchars($editProduct['care_decoded']['temperature'] ?? '20-28°C') ?>" placeholder="20-28°C">
-                </div>
-
-                <div class="form-group">
-                    <label>⚗️ pH</label>
-                    <input type="text" name="ph" class="form-control" value="<?= htmlspecialchars($editProduct['care_decoded']['ph'] ?? '6.0-7.5') ?>" placeholder="6.0-7.5">
-                </div>
-            </div>
-
-            <div class="form-group form-grid-full">
-                <label>✨ Особенности (через запятую)</label>
-                <input type="text" name="features" class="form-control" value="<?= $editProduct['features_decoded'] ? implode(', ', $editProduct['features_decoded']) : '' ?>" placeholder="Быстрый рост, Неприхотливое, Красивое">
-            </div>
-
-            <div class="form-group form-grid-full">
-                <label>🖼️ Главное изображение (URL)</label>
-                <input type="url" name="main_image" class="form-control" value="<?= htmlspecialchars($editProduct['main_image'] ?? '') ?>" placeholder="https://example.com/image.jpg">
-            </div>
-
-            <div class="form-group">
-                <label>📊 Статус</label>
-                <select name="status" class="form-control">
-                    <option value="1" <?= ($editProduct['status'] ?? 1) == 1 ? 'selected' : '' ?>>Активен</option>
-                    <option value="0" <?= ($editProduct['status'] ?? 1) == 0 ? 'selected' : '' ?>>Неактивен</option>
-                </select>
-            </div>
-        </div>
-
-        <div style="margin-top: 30px; text-align: center; display: flex; gap: 15px; justify-content: center;">
-            <button type="submit" class="btn btn-success">
-                <?= $action == 'add' ? '➕ Добавить товар' : '💾 Сохранить изменения' ?>
-            </button>
-            <a href="?page=products" class="btn btn-warning">⬅️ Назад к списку</a>
-        </div>
-    </form>
-</div>
-
-<?php endif; ?>
-
-<script>
-function toggleAll(source) {
-    const checkboxes = document.querySelectorAll('.product-checkbox');
-    checkboxes.forEach(checkbox => {
-        checkbox.checked = source.checked;
-    });
-}
-
-function updateCategory(select) {
-    const categoryName = select.options[select.selectedIndex].text;
-    document.getElementById('category_name').value = categoryName;
-}
-
-// Автогенерация slug из названия
-document.querySelector('input[name="name"]')?.addEventListener('input', function(e) {
-    const slugInput = document.querySelector('input[name="slug"]');
-    if (slugInput && !slugInput.value) {
-        let slug = e.target.value
-            .toLowerCase()
-            .replace(/[а-я]/g, char => {
-                const map = {'а':'a','б':'b','в':'v','г':'g','д':'d','е':'e','ё':'e','ж':'zh','з':'z','и':'i','й':'j','к':'k','л':'l','м':'m','н':'n','о':'o','п':'p','р':'r','с':'s','т':'t','у':'u','ф':'f','х':'h','ц':'ts','ч':'ch','ш':'sh','щ':'sch','ы':'y','э':'e','ю':'ju','я':'ja','ь':'','ъ':''};
-                return map[char] || char;
-            })
-            .replace(/[^a-z0-9\s-]/g, '')
-            .replace(/[\s-]+/g, '-')
-            .replace(/^-+|-+$/g, '');
-        slugInput.value = slug;
-    }
-});
-
-// Предпросмотр изображения
-document.querySelector('input[name="main_image"]')?.addEventListener('input', function(e) {
-    if (e.target.value) {
-        const preview = document.getElementById('image-preview') || document.createElement('img');
-        preview.id = 'image-preview';
-        preview.src = e.target.value;
-        preview.style.cssText = 'width: 200px; height: 150px; object-fit: cover; border-radius: 8px; margin-top: 10px; border: 2px solid #e1e5e9;';
-        preview.onerror = function() { this.style.display = 'none'; };
-        preview.onload = function() { this.style.display = 'block'; };
-
-        if (!document.getElementById('image-preview')) {
-            e.target.parentNode.appendChild(preview);
+session_start();
+
+// Подключение к базе данных (копируем логику из admin.php)
+$pdo = null;
+$dbError = null;
+
+try {
+    // Пытаемся подключиться через конфигурационный файл
+    $dbConfigPath = 'config/database.php';
+    if (file_exists($dbConfigPath)) {
+        $dbConfig = require $dbConfigPath;
+        if (is_array($dbConfig) && isset($dbConfig['host'], $dbConfig['database'], $dbConfig['username'], $dbConfig['password'])) {
+            $dsn = "mysql:host={$dbConfig['host']};dbname={$dbConfig['database']};charset=utf8mb4";
+            $pdo = new PDO($dsn, $dbConfig['username'], $dbConfig['password'], [
+                PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+                PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+                PDO::MYSQL_ATTR_INIT_COMMAND => 'SET NAMES utf8mb4 COLLATE utf8mb4_unicode_ci'
+            ]);
+        }
+    } else {
+        // Стандартные конфигурации для shared hosting
+        $possibleConfigs = [
+            ['localhost', 'dizain9n_aqua', 'dizain9n_aqua', ''],
+            ['localhost', 'aquasbor', 'root', ''],
+            ['mysql', 'aquasbor', 'root', ''],
+            ['127.0.0.1', 'aquasbor', 'root', '']
+        ];
+
+        foreach ($possibleConfigs as $config) {
+            try {
+                $dsn = "mysql:host={$config[0]};dbname={$config[1]};charset=utf8mb4";
+                $pdo = new PDO($dsn, $config[2], $config[3], [
+                    PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+                    PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+                    PDO::MYSQL_ATTR_INIT_COMMAND => 'SET NAMES utf8mb4 COLLATE utf8mb4_unicode_ci'
+                ]);
+                break;
+            } catch (PDOException $e) {
+                continue;
+            }
         }
     }
-});
-</script>
+} catch (Exception $e) {
+    $dbError = $e->getMessage();
+    error_log('DB Connection Error: ' . $dbError);
+}
+
+// Функция загрузки растений из БД
+function loadPlantsFromDB($pdo, $category = '', $difficulty = '', $search = '', $sortBy = 'name') {
+    if (!$pdo) {
+        // Если БД недоступна, возвращаем заглушки
+        return [
+            [
+                'id' => 1,
+                'name' => 'База данных недоступна',
+                'latin_name' => 'Database unavailable',
+                'category' => 'Системное сообщение',
+                'price' => 0,
+                'main_image' => 'https://images.unsplash.com/photo-1544551763-46a013bb70d5?w=400',
+                'description' => 'Для просмотра товаров необходимо подключение к базе данных. Выполните миграцию данных.',
+                'care' => json_encode(['lighting' => 'Н/Д', 'temperature' => 'Н/Д', 'ph' => 'Н/Д']),
+                'features' => json_encode(['Системное сообщение']),
+                'difficulty' => 'Н/Д',
+                'status' => 'active'
+            ]
+        ];
+    }
+
+    try {
+        // Строим запрос с фильтрами
+        $sql = "SELECT *, latin_name as latin FROM products WHERE status = 'active'";
+        $params = [];
+
+        if ($category) {
+            $sql .= " AND category = ?";
+            $params[] = $category;
+        }
+
+        if ($difficulty) {
+            $sql .= " AND difficulty = ?";
+            $params[] = $difficulty;
+        }
+
+        if ($search) {
+            $sql .= " AND (name LIKE ? OR latin_name LIKE ? OR description LIKE ?)";
+            $searchParam = "%{$search}%";
+            $params[] = $searchParam;
+            $params[] = $searchParam;
+            $params[] = $searchParam;
+        }
+
+        // Добавляем сортировку
+        switch ($sortBy) {
+            case 'price_asc':
+                $sql .= " ORDER BY price ASC";
+                break;
+            case 'price_desc':
+                $sql .= " ORDER BY price DESC";
+                break;
+            case 'difficulty':
+                $sql .= " ORDER BY FIELD(difficulty, 'Легко', 'Средне', 'Сложно', 'Очень сложно', 'Экстремально сложно')";
+                break;
+            default:
+                $sql .= " ORDER BY name ASC";
+        }
+
+        $stmt = $pdo->prepare($sql);
+        $stmt->execute($params);
+        $plants = $stmt->fetchAll();
+
+        // Преобразуем JSON поля обратно в массивы
+        foreach ($plants as &$plant) {
+            $plant['care'] = json_decode($plant['care'], true) ?: [];
+            $plant['features'] = json_decode($plant['features'], true) ?: [];
+            $plant['images'] = json_decode($plant['images'], true) ?: [];
+
+            // Для совместимости с фронтендом
+            $plant['image'] = $plant['main_image'];
+            $plant['latin'] = $plant['latin_name'];
+        }
+
+        return $plants;
+
+    } catch (Exception $e) {
+        error_log('Load plants error: ' . $e->getMessage());
+        return [];
+    }
+}
+
+// Получаем категории из БД
+function loadCategoriesFromDB($pdo) {
+    if (!$pdo) {
+        return ['Плавающие растения', 'Длинностебельные', 'Розеточные', 'Эпифиты', 'Мхи'];
+    }
+
+    try {
+        $stmt = $pdo->query("SELECT DISTINCT category FROM products WHERE status = 'active' AND category IS NOT NULL ORDER BY category");
+        $categories = $stmt->fetchAll(PDO::FETCH_COLUMN);
+        return $categories ?: [];
+    } catch (Exception $e) {
+        error_log('Load categories error: ' . $e->getMessage());
+        return [];
+    }
+}
+
+// Подключаем модули если есть
+if (file_exists('core/ModuleManager.php')) {
+    require_once 'core/ModuleManager.php';
+    $allModules = ModuleManager::scanAllModules();
+} else {
+    $allModules = [];
+}
+
+// Получаем данные из БД
+$categories = loadCategoriesFromDB($pdo);
+$difficulties = ['Легко', 'Средне', 'Сложно', 'Очень сложно', 'Экстремально сложно'];
+
+// Фильтрация
+$selectedCategory = $_GET['category'] ?? '';
+$selectedDifficulty = $_GET['difficulty'] ?? '';
+$searchQuery = $_GET['search'] ?? '';
+$sortBy = $_GET['sort'] ?? 'name';
+
+// Загружаем отфильтрованные растения
+$filteredPlants = loadPlantsFromDB($pdo, $selectedCategory, $selectedDifficulty, $searchQuery, $sortBy);
+$allPlants = loadPlantsFromDB($pdo); // Для общей статистики
+
+// Пагинация
+$itemsPerPage = 12;
+$currentPage = (int)($_GET['page'] ?? 1);
+$totalItems = count($filteredPlants);
+$totalPages = ceil($totalItems / $itemsPerPage);
+$offset = ($currentPage - 1) * $itemsPerPage;
+$currentPlants = array_slice($filteredPlants, $offset, $itemsPerPage);
+
+// Статистика корзины
+$cartCount = $_SESSION['cart_count'] ?? 0;
+$cartTotal = $_SESSION['cart_total'] ?? 0;
+
+?>
+<!DOCTYPE html>
+<html lang='ru' data-bs-theme='auto'>
+<head>
+    <meta charset='UTF-8'>
+    <meta name='viewport' content='width=device-width, initial-scale=1.0'>
+    <title>АкваСбор - Магазин аквариумных растений №1 в России</title>
+    <meta name='description' content='Купить аквариумные растения с доставкой. Более <?= count($allPlants) ?> видов живых растений для аквариума. Профессиональные консультации по содержанию.'>
+    <meta name='keywords' content='аквариумные растения, купить растения для аквариума, живые растения, аквариум, растения'>
+
+    <!-- Open Graph -->
+    <meta property='og:title' content='АкваСбор - Магазин аквариумных растений'>
+    <meta property='og:description' content='<?= count($allPlants) ?>+ видов аквариумных растений с профессиональными советами по содержанию'>
+    <meta property='og:type' content='website'>
+
+    <link href='https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css' rel='stylesheet'>
+    <link href='https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.2/font/bootstrap-icons.css' rel='stylesheet'>
+    <link href='https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap' rel='stylesheet'>
+    <link rel='stylesheet' href='https://cdn.jsdelivr.net/npm/aos@2.3.4/dist/aos.css'>
+
+    <style>
+        :root {
+            --primary: #0066cc;
+            --secondary: #28a745;
+            --accent: #17a2b8;
+            --dark: #2c3e50;
+            --light: #f8f9fa;
+            --water-blue: #1e90ff;
+            --plant-green: #32cd32;
+        }
+
+        * { font-family: 'Inter', sans-serif; }
+
+        body {
+            background: linear-gradient(135deg, #e3f2fd 0%, #f1f8e9 100%);
+            line-height: 1.6;
+        }
+
+        /* Навигация */
+        .navbar {
+            background: rgba(255, 255, 255, 0.95) !important;
+            backdrop-filter: blur(20px);
+            border-bottom: 2px solid var(--plant-green);
+            box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+        }
+
+        .navbar-brand {
+            font-weight: 800;
+            font-size: 1.8rem;
+            color: var(--primary) !important;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.1);
+        }
+
+        .navbar-brand i {
+            color: var(--water-blue);
+            margin-right: 10px;
+        }
+
+        /* Алерт для БД */
+        .db-error-alert {
+            background: linear-gradient(45deg, #ff6b6b, #feca57);
+            color: white;
+            border: none;
+            border-radius: 15px;
+            margin-bottom: 2rem;
+            box-shadow: 0 10px 30px rgba(255, 107, 107, 0.3);
+        }
+
+        /* Герой секция */
+        .hero {
+            background: linear-gradient(135deg, var(--water-blue) 0%, var(--plant-green) 100%);
+            color: white;
+            padding: 100px 0;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .hero::before {
+            content: '';
+            position: absolute;
+            width: 200%;
+            height: 200%;
+            background: url('data:image/svg+xml,%3Csvg width="60" height="60" viewBox="0 0 60 60" xmlns="http://www.w3.org/2000/svg"%3E%3Cg fill="none" fill-rule="evenodd"%3E%3Cg fill="%23ffffff" fill-opacity="0.1"%3E%3Cpath d="M30 30c0-11.046-8.954-20-20-20s-20 8.954-20 20 8.954 20 20 20 20-8.954 20-20zM10 30a20 20 0 1 1 40 0 20 20 0 0 1-40 0z"/%3E%3C/g%3E%3C/g%3E%3C/svg%3E') repeat;
+            animation: float 30s linear infinite;
+            opacity: 0.3;
+        }
+
+        @keyframes float {
+            0% { transform: translate(-50px, -50px); }
+            100% { transform: translate(0px, 0px); }
+        }
+
+        /* Статистика */
+        .stats-section {
+            background: white;
+            margin-top: -50px;
+            position: relative;
+            z-index: 10;
+            border-radius: 20px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.1);
+        }
+
+        .stat-item {
+            text-align: center;
+            padding: 2rem 1rem;
+        }
+
+        .stat-number {
+            font-size: 3rem;
+            font-weight: 800;
+            color: var(--primary);
+            margin-bottom: 0.5rem;
+        }
+
+        .stat-label {
+            color: #6c757d;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        /* Фильтры */
+        .filters-section {
+            background: white;
+            border-radius: 15px;
+            padding: 2rem;
+            box-shadow: 0 5px 20px rgba(0,0,0,0.05);
+            margin-bottom: 2rem;
+        }
+
+        .filter-btn {
+            border: 2px solid #e9ecef;
+            color: #495057;
+            padding: 0.5rem 1rem;
+            border-radius: 25px;
+            text-decoration: none;
+            transition: all 0.3s ease;
+            margin: 0.25rem;
+            display: inline-block;
+        }
+
+        .filter-btn:hover,
+        .filter-btn.active {
+            border-color: var(--primary);
+            background: var(--primary);
+            color: white;
+            transform: translateY(-2px);
+        }
+
+        /* Карточки растений */
+        .plant-card {
+            background: white;
+            border: none;
+            border-radius: 20px;
+            box-shadow: 0 5px 20px rgba(0,0,0,0.08);
+            transition: all 0.4s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+            overflow: hidden;
+            height: 100%;
+        }
+
+        .plant-card:hover {
+            transform: translateY(-10px) scale(1.02);
+            box-shadow: 0 20px 40px rgba(0,0,0,0.15);
+        }
+
+        .plant-image {
+            height: 250px;
+            background-size: cover;
+            background-position: center;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .plant-image::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: linear-gradient(45deg, rgba(30,144,255,0.1) 0%, rgba(50,205,50,0.1) 100%);
+            opacity: 0;
+            transition: opacity 0.3s ease;
+        }
+
+        .plant-card:hover .plant-image::before {
+            opacity: 1;
+        }
+
+        .difficulty-badge {
+            position: absolute;
+            top: 1rem;
+            right: 1rem;
+            padding: 0.3rem 0.8rem;
+            border-radius: 15px;
+            font-size: 0.8rem;
+            font-weight: 600;
+            text-shadow: none;
+        }
+
+        .difficulty-easy, .difficulty-легко { background: rgba(40, 167, 69, 0.9); color: white; }
+        .difficulty-medium, .difficulty-средне { background: rgba(255, 193, 7, 0.9); color: #212529; }
+        .difficulty-hard, .difficulty-сложно { background: rgba(220, 53, 69, 0.9); color: white; }
+        .difficulty-very-hard, .difficulty-очень { background: rgba(108, 117, 125, 0.9); color: white; }
+        .difficulty-extreme, .difficulty-экстремально { background: rgba(52, 58, 64, 0.9); color: white; }
+
+        .plant-info {
+            padding: 1.5rem;
+        }
+
+        .plant-title {
+            font-size: 1.25rem;
+            font-weight: 700;
+            color: var(--dark);
+            margin-bottom: 0.5rem;
+            line-height: 1.2;
+        }
+
+        .plant-latin {
+            font-style: italic;
+            color: #6c757d;
+            font-size: 0.9rem;
+            margin-bottom: 1rem;
+        }
+
+        .plant-category {
+            display: inline-block;
+            background: linear-gradient(45deg, var(--water-blue), var(--plant-green));
+            color: white;
+            padding: 0.25rem 0.75rem;
+            border-radius: 12px;
+            font-size: 0.8rem;
+            font-weight: 600;
+            margin-bottom: 1rem;
+        }
+
+        .plant-description {
+            color: #495057;
+            font-size: 0.9rem;
+            line-height: 1.5;
+            margin-bottom: 1.5rem;
+            display: -webkit-box;
+            -webkit-line-clamp: 3;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+        }
+
+        .care-info {
+            background: #f8f9fa;
+            border-radius: 10px;
+            padding: 1rem;
+            margin-bottom: 1rem;
+        }
+
+        .care-item {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 0.5rem;
+            font-size: 0.85rem;
+        }
+
+        .care-item:last-child {
+            margin-bottom: 0;
+        }
+
+        .care-label {
+            font-weight: 600;
+            color: var(--dark);
+        }
+
+        .care-value {
+            color: #495057;
+        }
+
+        .features-list {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .feature-tag {
+            background: rgba(30, 144, 255, 0.1);
+            color: var(--primary);
+            padding: 0.25rem 0.5rem;
+            border-radius: 8px;
+            font-size: 0.75rem;
+            font-weight: 500;
+        }
+
+        .price-section {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding-top: 1rem;
+            border-top: 1px solid #e9ecef;
+        }
+
+        .price {
+            font-size: 1.5rem;
+            font-weight: 800;
+            color: var(--plant-green);
+        }
+
+        .btn-add-cart {
+            background: linear-gradient(45deg, var(--plant-green), #20c997);
+            border: none;
+            color: white;
+            padding: 0.75rem 1.5rem;
+            border-radius: 25px;
+            font-weight: 600;
+            transition: all 0.3s ease;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .btn-add-cart:hover {
+            color: white;
+            transform: translateY(-2px);
+            box-shadow: 0 10px 25px rgba(50, 205, 50, 0.3);
+        }
+
+        .btn-add-cart::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: -100%;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.3), transparent);
+            transition: left 0.5s ease;
+        }
+
+        .btn-add-cart:hover::before {
+            left: 100%;
+        }
+
+        /* Корзина */
+        .cart-widget {
+            position: fixed;
+            top: 50%;
+            right: -300px;
+            transform: translateY(-50%);
+            width: 280px;
+            background: white;
+            border-radius: 20px 0 0 20px;
+            box-shadow: -10px 0 30px rgba(0,0,0,0.1);
+            transition: right 0.3s ease;
+            z-index: 1000;
+            padding: 1.5rem;
+        }
+
+        .cart-widget.show {
+            right: 0;
+        }
+
+        .cart-toggle {
+            position: absolute;
+            left: -50px;
+            top: 50%;
+            transform: translateY(-50%);
+            background: var(--plant-green);
+            color: white;
+            border: none;
+            border-radius: 25px 0 0 25px;
+            padding: 1rem 0.75rem;
+            writing-mode: vertical-lr;
+            font-weight: 600;
+        }
+
+        /* Пагинация */
+        .pagination {
+            justify-content: center;
+            margin-top: 3rem;
+        }
+
+        .page-link {
+            border: 2px solid transparent;
+            color: var(--primary);
+            padding: 0.75rem 1rem;
+            margin: 0 0.25rem;
+            border-radius: 10px;
+            transition: all 0.3s ease;
+        }
+
+        .page-link:hover,
+        .page-item.active .page-link {
+            background: var(--primary);
+            border-color: var(--primary);
+            color: white;
+            transform: translateY(-2px);
+        }
+
+        /* Детальная карточка (модальное окно) */
+        .plant-modal .modal-content {
+            border: none;
+            border-radius: 20px;
+            overflow: hidden;
+        }
+
+        .plant-modal .modal-header {
+            background: linear-gradient(45deg, var(--water-blue), var(--plant-green));
+            color: white;
+            border: none;
+            padding: 2rem;
+        }
+
+        .plant-modal .modal-body {
+            padding: 2rem;
+        }
+
+        .care-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+            margin: 1.5rem 0;
+        }
+
+        .care-card {
+            background: #f8f9fa;
+            border-radius: 10px;
+            padding: 1rem;
+            text-align: center;
+        }
+
+        .care-icon {
+            font-size: 2rem;
+            color: var(--primary);
+            margin-bottom: 0.5rem;
+        }
+
+        /* Заглушка для отсутствия товаров */
+        .empty-state {
+            text-align: center;
+            padding: 3rem 1rem;
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 5px 20px rgba(0,0,0,0.05);
+        }
+
+        .empty-state i {
+            font-size: 5rem;
+            color: #e9ecef;
+            margin-bottom: 1rem;
+        }
+
+        /* Адаптивность */
+        @media (max-width: 768px) {
+            .hero {
+                padding: 60px 0;
+            }
+
+            .stat-number {
+                font-size: 2rem;
+            }
+
+            .plant-card {
+                margin-bottom: 2rem;
+            }
+
+            .filters-section {
+                padding: 1rem;
+            }
+
+            .cart-widget {
+                width: 90%;
+                right: -90%;
+            }
+        }
+
+        /* Анимации загрузки */
+        .loading-shimmer {
+            background: linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%);
+            background-size: 200% 100%;
+            animation: shimmer 1.5s infinite;
+        }
+
+        @keyframes shimmer {
+            0% { background-position: -200% 0; }
+            100% { background-position: 200% 0; }
+        }
+    </style>
+</head>
+<body>
+    <!-- Навигация -->
+    <nav class='navbar navbar-expand-lg fixed-top'>
+        <div class='container'>
+            <a class='navbar-brand' href='#'>
+                <i class='bi bi-water'></i>АкваСбор
+            </a>
+            <button class='navbar-toggler border-0' type='button' data-bs-toggle='collapse' data-bs-target='#navbarNav'>
+                <span class='navbar-toggler-icon'></span>
+            </button>
+            <div class='collapse navbar-collapse' id='navbarNav'>
+                <ul class='navbar-nav me-auto'>
+                    <li class='nav-item'>
+                        <a class='nav-link active fw-semibold' href='#'>
+                            <i class='bi bi-house me-1'></i>Главная
+                        </a>
+                    </li>
+                    <li class='nav-item dropdown'>
+                        <a class='nav-link dropdown-toggle fw-semibold' href='#' data-bs-toggle='dropdown'>
+                            <i class='bi bi-grid me-1'></i>Каталог
+                        </a>
+                        <ul class='dropdown-menu'>
+                            <?php foreach ($categories as $cat): ?>
+                            <li><a class='dropdown-item' href='?category=<?= urlencode($cat) ?>'><?= htmlspecialchars($cat) ?></a></li>
+                            <?php endforeach; ?>
+                        </ul>
+                    </li>
+                    <li class='nav-item'>
+                        <a class='nav-link fw-semibold' href='#about'>
+                            <i class='bi bi-info-circle me-1'></i>О нас
+                        </a>
+                    </li>
+                    <li class='nav-item'>
+                        <a class='nav-link fw-semibold' href='#contacts'>
+                            <i class='bi bi-telephone me-1'></i>Контакты
+                        </a>
+                    </li>
+                    <?php if (!empty($allModules) || file_exists('admin/index.php')): ?>
+                    <li class='nav-item'>
+                        <a class='nav-link fw-semibold' href='admin/'>
+                            <i class='bi bi-gear me-1'></i>Админка
+                        </a>
+                    </li>
+                    <?php endif; ?>
+                    <?php if (file_exists('migrate.php')): ?>
+                    <li class='nav-item'>
+                        <a class='nav-link fw-semibold text-warning' href='migrate.php'>
+                            <i class='bi bi-database-gear me-1'></i>Миграция
+                        </a>
+                    </li>
+                    <?php endif; ?>
+                </ul>
+
+                <ul class='navbar-nav'>
+                    <li class='nav-item'>
+                        <button class='nav-link btn btn-link fw-semibold' onclick='toggleCart()'>
+                            <i class='bi bi-cart3 me-1'></i>Корзина
+                            <span class='badge bg-danger ms-1' id='cartBadge'><?= $cartCount ?></span>
+                        </button>
+                    </li>
+                    <li class='nav-item'>
+                        <button class='nav-link btn btn-link' onclick='toggleTheme()'>
+                            <i class='bi bi-moon' id='themeIcon'></i>
+                        </button>
+                    </li>
+                </ul>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Алерт для ошибки БД -->
+    <?php if ($dbError): ?>
+    <div class='container mt-5 pt-5'>
+        <div class='alert db-error-alert' role='alert'>
+            <div class='d-flex align-items-center'>
+                <i class='bi bi-exclamation-triangle-fill fs-2 me-3'></i>
+                <div class='flex-grow-1'>
+                    <h4 class='alert-heading mb-2'>🔧 База данных недоступна</h4>
+                    <p class='mb-3'><?= htmlspecialchars($dbError) ?></p>
+                    <div class='d-flex gap-2 flex-wrap'>
+                        <?php if (file_exists('migrate.php')): ?>
+                        <a href='migrate.php' class='btn btn-light btn-sm'>
+                            <i class='bi bi-database-gear me-1'></i>Выполнить миграцию
+                        </a>
+                        <?php endif; ?>
+                        <a href='admin/' class='btn btn-outline-light btn-sm'>
+                            <i class='bi bi-gear me-1'></i>Настройки БД
+                        </a>
+                        <button class='btn btn-outline-light btn-sm' onclick='location.reload()'>
+                            <i class='bi bi-arrow-repeat me-1'></i>Обновить
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <?php endif; ?>
+
+    <!-- Герой секция -->
+    <section class='hero text-center'>
+        <div class='container'>
+            <div data-aos='fade-up' data-aos-duration='1000'>
+                <h1 class='display-3 fw-bold mb-4'>
+                    🌱 АкваСбор - Мир аквариумных растений
+                </h1>
+                <p class='lead fs-4 mb-5'>
+                    <?= $pdo ? count($allPlants) . '+ видов живых растений для вашего аквариума' : 'Подключите базу данных для просмотра каталога' ?><br>
+                    с профессиональными советами по содержанию
+                </p>
+                <div class='d-flex flex-wrap justify-content-center gap-3'>
+                    <a href='#catalog' class='btn btn-light btn-lg px-4 py-3'>
+                        <i class='bi bi-grid me-2'></i>Смотреть каталог
+                    </a>
+                    <a href='#about' class='btn btn-outline-light btn-lg px-4 py-3'>
+                        <i class='bi bi-info-circle me-2'></i>Узнать больше
+                    </a>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Статистика -->
+    <section class='container'>
+        <div class='stats-section' data-aos='fade-up' data-aos-delay='200'>
+            <div class='row'>
+                <div class='col-6 col-md-3'>
+                    <div class='stat-item'>
+                        <div class='stat-number'><?= count($allPlants) ?>+</div>
+                        <div class='stat-label'>Видов растений</div>
+                    </div>
+                </div>
+                <div class='col-6 col-md-3'>
+                    <div class='stat-item'>
+                        <div class='stat-number'>5</div>
+                        <div class='stat-label'>Лет опыта</div>
+                    </div>
+                </div>
+                <div class='col-6 col-md-3'>
+                    <div class='stat-item'>
+                        <div class='stat-number'>1000+</div>
+                        <div class='stat-label'>Довольных клиентов</div>
+                    </div>
+                </div>
+                <div class='col-6 col-md-3'>
+                    <div class='stat-item'>
+                        <div class='stat-number'>24/7</div>
+                        <div class='stat-label'>Поддержка</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Каталог -->
+    <section class='container mt-5' id='catalog'>
+        <!-- Фильтры -->
+        <div class='filters-section' data-aos='fade-up'>
+            <div class='row align-items-center'>
+                <div class='col-md-6'>
+                    <h3 class='fw-bold mb-3 mb-md-0'>
+                        <i class='bi bi-funnel me-2'></i>Каталог растений
+                    </h3>
+                </div>
+                <div class='col-md-6 text-md-end'>
+                    <div class='d-flex flex-wrap justify-content-md-end align-items-center gap-2'>
+                        <label class='fw-semibold me-2'>Сортировка:</label>
+                        <select class='form-select form-select-sm' style='width: auto;' onchange='updateSort(this.value)'>
+                            <option value='name' <?= $sortBy === 'name' ? 'selected' : '' ?>>По названию</option>
+                            <option value='price_asc' <?= $sortBy === 'price_asc' ? 'selected' : '' ?>>Цена ↑</option>
+                            <option value='price_desc' <?= $sortBy === 'price_desc' ? 'selected' : '' ?>>Цена ↓</option>
+                            <option value='difficulty' <?= $sortBy === 'difficulty' ? 'selected' : '' ?>>По сложности</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Поиск -->
+            <div class='row mt-3'>
+                <div class='col-md-6'>
+                    <div class='input-group'>
+                        <input type='text' class='form-control' placeholder='Поиск растений...' value='<?= htmlspecialchars($searchQuery) ?>' id='searchInput'>
+                        <button class='btn btn-outline-secondary' type='button' onclick='updateSearch()'>
+                            <i class='bi bi-search'></i>
+                        </button>
+                    </div>
+                </div>
+                <div class='col-md-6 mt-2 mt-md-0 text-md-end'>
+                    <small class='text-muted'>Найдено растений: <?= count($filteredPlants) ?></small>
+                </div>
+            </div>
+
+            <!-- Фильтры по категориям -->
+            <?php if (!empty($categories)): ?>
+            <div class='mt-3'>
+                <label class='fw-semibold mb-2'>Категории:</label><br>
+                <a href='?' class='filter-btn <?= !$selectedCategory ? 'active' : '' ?>'>Все</a>
+                <?php foreach ($categories as $cat): ?>
+                <a href='?category=<?= urlencode($cat) ?>' class='filter-btn <?= $selectedCategory === $cat ? 'active' : '' ?>'><?= htmlspecialchars($cat) ?></a>
+                <?php endforeach; ?>
+            </div>
+            <?php endif; ?>
+
+            <!-- Фильтры по сложности -->
+            <div class='mt-3'>
+                <label class='fw-semibold mb-2'>Сложность содержания:</label><br>
+                <a href='?' class='filter-btn <?= !$selectedDifficulty ? 'active' : '' ?>'>Любая</a>
+                <?php foreach ($difficulties as $diff): ?>
+                <a href='?difficulty=<?= urlencode($diff) ?>' class='filter-btn <?= $selectedDifficulty === $diff ? 'active' : '' ?>'><?= htmlspecialchars($diff) ?></a>
+                <?php endforeach; ?>
+            </div>
+        </div>
+
+        <!-- Растения -->
+        <?php if (empty($currentPlants)): ?>
+        <div class='empty-state' data-aos='fade-up'>
+            <i class='bi bi-search'></i>
+            <h4 class='text-muted'>Растения не найдены</h4>
+            <p class='text-muted mb-4'>
+                <?php if (!$pdo): ?>
+                    Для просмотра каталога необходимо настроить подключение к базе данных
+                <?php elseif ($searchQuery || $selectedCategory || $selectedDifficulty): ?>
+                    По вашим критериям поиска растений не найдено. Попробуйте изменить фильтры
+                <?php else: ?>
+                    В каталоге пока нет растений. Выполните миграцию данных
+                <?php endif; ?>
+            </p>
+            <div class='d-flex gap-2 justify-content-center flex-wrap'>
+                <?php if ($searchQuery || $selectedCategory || $selectedDifficulty): ?>
+                <a href='?' class='btn btn-primary'>
+                    <i class='bi bi-arrow-counterclockwise me-1'></i>Сбросить фильтры
+                </a>
+                <?php endif; ?>
+                <?php if (file_exists('migrate.php') && !$pdo): ?>
+                <a href='migrate.php' class='btn btn-success'>
+                    <i class='bi bi-database-gear me-1'></i>Выполнить миграцию
+                </a>
+                <?php endif; ?>
+            </div>
+        </div>
+        <?php else: ?>
+        <div class='row g-4' id='plantsGrid'>
+            <?php foreach ($currentPlants as $index => $plant): ?>
+            <div class='col-lg-4 col-md-6' data-aos='fade-up' data-aos-delay='<?= $index * 100 ?>'>
+                <div class='plant-card' data-plant-id='<?= $plant['id'] ?>'>
+                    <div class='plant-image' style='background-image: url("<?= htmlspecialchars($plant['image'] ?? $plant['main_image']) ?>")'>
+                        <?php
+                        $diffClass = 'difficulty-' . strtolower(str_replace([' ', 'ё'], ['', 'е'], $plant['difficulty']));
+                        ?>
+                        <div class='difficulty-badge <?= $diffClass ?>'><?= htmlspecialchars($plant['difficulty'] ?? 'Н/Д') ?></div>
+                    </div>
+
+                    <div class='plant-info'>
+                        <h5 class='plant-title'><?= htmlspecialchars($plant['name']) ?></h5>
+                        <p class='plant-latin'><?= htmlspecialchars($plant['latin'] ?? $plant['latin_name'] ?? '') ?></p>
+                        <span class='plant-category'><?= htmlspecialchars($plant['category'] ?? 'Без категории') ?></span>
+
+                        <p class='plant-description'><?= htmlspecialchars($plant['description'] ?? '') ?></p>
+
+                        <!-- Краткая информация по уходу -->
+                        <?php if (!empty($plant['care'])): ?>
+                        <div class='care-info'>
+                            <?php if (isset($plant['care']['lighting'])): ?>
+                            <div class='care-item'>
+                                <span class='care-label'>
+                                    <i class='bi bi-lightbulb'></i> Освещение:
+                                </span>
+                                <span class='care-value'><?= htmlspecialchars($plant['care']['lighting']) ?></span>
+                            </div>
+                            <?php endif; ?>
+                            <?php if (isset($plant['care']['temperature'])): ?>
+                            <div class='care-item'>
+                                <span class='care-label'>
+                                    <i class='bi bi-thermometer-half'></i> Температура:
+                                </span>
+                                <span class='care-value'><?= htmlspecialchars($plant['care']['temperature']) ?></span>
+                            </div>
+                            <?php endif; ?>
+                            <?php if (isset($plant['care']['ph'])): ?>
+                            <div class='care-item'>
+                                <span class='care-label'>
+                                    <i class='bi bi-droplet'></i> pH:
+                                </span>
+                                <span class='care-value'><?= htmlspecialchars($plant['care']['ph']) ?></span>
+                            </div>
+                            <?php endif; ?>
+                        </div>
+                        <?php endif; ?>
+
+                        <!-- Особенности -->
+                        <?php if (!empty($plant['features'])): ?>
+                        <div class='features-list'>
+                            <?php foreach (array_slice($plant['features'], 0, 3) as $feature): ?>
+                            <span class='feature-tag'><?= htmlspecialchars($feature) ?></span>
+                            <?php endforeach; ?>
+                        </div>
+                        <?php endif; ?>
+
+                        <!-- Цена и корзина -->
+                        <div class='price-section'>
+                            <div class='price'><?= number_format($plant['price'], 0, '.', ' ') ?> ₽</div>
+                            <button class='btn btn-add-cart' onclick='addToCart(<?= $plant['id'] ?>)'>
+                                <i class='bi bi-cart-plus me-1'></i>В корзину
+                            </button>
+                        </div>
+
+                        <!-- Кнопка подробнее -->
+                        <div class='text-center mt-3'>
+                            <button class='btn btn-outline-primary btn-sm' onclick='showPlantDetails(<?= $plant['id'] ?>)'>
+                                <i class='bi bi-info-circle me-1'></i>Подробнее
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <?php endforeach; ?>
+        </div>
+        <?php endif; ?>
+
+        <!-- Пагинация -->
+        <?php if ($totalPages > 1): ?>
+        <nav>
+            <ul class='pagination'>
+                <?php if ($currentPage > 1): ?>
+                <li class='page-item'>
+                    <a class='page-link' href='?page=<?= $currentPage - 1 ?>&category=<?= urlencode($selectedCategory) ?>&difficulty=<?= urlencode($selectedDifficulty) ?>&search=<?= urlencode($searchQuery) ?>&sort=<?= $sortBy ?>'>
+                        <i class='bi bi-chevron-left'></i>
+                    </a>
+                </li>
+                <?php endif; ?>
+
+                <?php for ($i = max(1, $currentPage - 2); $i <= min($totalPages, $currentPage + 2); $i++): ?>
+                <li class='page-item <?= $i === $currentPage ? 'active' : '' ?>'>
+                    <a class='page-link' href='?page=<?= $i ?>&category=<?= urlencode($selectedCategory) ?>&difficulty=<?= urlencode($selectedDifficulty) ?>&search=<?= urlencode($searchQuery) ?>&sort=<?= $sortBy ?>'><?= $i ?></a>
+                </li>
+                <?php endfor; ?>
+
+                <?php if ($currentPage < $totalPages): ?>
+                <li class='page-item'>
+                    <a class='page-link' href='?page=<?= $currentPage + 1 ?>&category=<?= urlencode($selectedCategory) ?>&difficulty=<?= urlencode($selectedDifficulty) ?>&search=<?= urlencode($searchQuery) ?>&sort=<?= $sortBy ?>'>
+                        <i class='bi bi-chevron-right'></i>
+                    </a>
+                </li>
+                <?php endif; ?>
+            </ul>
+        </nav>
+        <?php endif; ?>
+    </section>
+
+    <!-- Корзина -->
+    <div class='cart-widget' id='cartWidget'>
+        <button class='cart-toggle' onclick='toggleCart()'>
+            <i class='bi bi-cart3'></i> Корзина
+        </button>
+        <div class='cart-content'>
+            <h5 class='fw-bold mb-3'>
+               <li class='nav-item'>
+    <a class='nav-link fw-semibold' href='cart.php'>
+        <i class='bi bi-cart3 me-1'></i>Корзина
+        <span class='badge bg-danger ms-1' id='cartBadge'>0</span>
+    </a>
+</li>
+                </div>
+                <button class='btn btn-success w-100 mt-3' onclick='checkout()'>
+                    <i class='bi bi-credit-card me-1'></i>Оформить заказ
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Модальное окно с деталями растения -->
+    <div class='modal fade plant-modal' id='plantModal' tabindex='-1'>
+        <div class='modal-dialog modal-lg modal-dialog-centered'>
+            <div class='modal-content'>
+                <div class='modal-header'>
+                    <div>
+                        <h4 class='modal-title fw-bold' id='modalPlantName'></h4>
+                        <p class='mb-0 opacity-75' id='modalPlantLatin'></p>
+                    </div>
+                    <button type='button' class='btn-close btn-close-white' data-bs-dismiss='modal'></button>
+                </div>
+                <div class='modal-body'>
+                    <div class='row'>
+                        <div class='col-md-6'>
+                            <img id='modalPlantImage' class='img-fluid rounded' style='width: 100%; height: 300px; object-fit: cover;'>
+                        </div>
+                        <div class='col-md-6'>
+                            <div class='mb-3'>
+                                <span class='badge bg-primary' id='modalPlantCategory'></span>
+                                <span class='badge bg-secondary ms-2' id='modalPlantDifficulty'></span>
+                            </div>
+                            <p id='modalPlantDescription'></p>
+                            <div class='features-list' id='modalPlantFeatures'></div>
+                            <div class='d-flex justify-content-between align-items-center'>
+                                <div class='h4 text-success fw-bold' id='modalPlantPrice'></div>
+                                <button class='btn btn-success' id='modalAddToCart'>
+                                    <i class='bi bi-cart-plus me-1'></i>В корзину
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <hr class='my-4'>
+
+                    <!-- Детальная информация по уходу -->
+                    <h5 class='fw-bold mb-3'>
+                        <i class='bi bi-gear me-2'></i>Условия содержания
+                    </h5>
+                    <div class='care-grid' id='modalCareGrid'></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- О компании -->
+    <section class='py-5 mt-5' id='about' style='background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white;'>
+        <div class='container'>
+            <div class='text-center mb-5' data-aos='fade-up'>
+                <h2 class='display-5 fw-bold mb-3'>Почему выбирают АкваСбор?</h2>
+                <p class='lead'>Мы — эксперты в области аквариумных растений</p>
+            </div>
+
+            <div class='row g-4'>
+                <div class='col-md-4 text-center' data-aos='fade-up' data-aos-delay='100'>
+                    <i class='bi bi-award display-4 mb-4'></i>
+                    <h5 class='fw-bold mb-3'>Высокое качество</h5>
+                    <p class='opacity-90'>Только здоровые растения от проверенных поставщиков. Каждое растение проходит карантин.</p>
+                </div>
+                <div class='col-md-4 text-center' data-aos='fade-up' data-aos-delay='200'>
+                    <i class='bi bi-people display-4 mb-4'></i>
+                    <h5 class='fw-bold mb-3'>Экспертные консультации</h5>
+                    <p class='opacity-90'>Наши специалисты помогут подобрать растения под ваши условия и опыт.</p>
+                </div>
+                <div class='col-md-4 text-center' data-aos='fade-up' data-aos-delay='300'>
+                    <i class='bi bi-truck display-4 mb-4'></i>
+                    <h5 class='fw-bold mb-3'>Бережная доставка</h5>
+                    <p class='opacity-90'>Специальная упаковка и быстрая доставка сохранят растения в идеальном состоянии.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Контакты -->
+    <section class='py-5' id='contacts'>
+        <div class='container'>
+            <div class='row align-items-center'>
+                <div class='col-md-6' data-aos='fade-right'>
+                    <h2 class='fw-bold mb-4'>Свяжитесь с нами</h2>
+                    <div class='mb-3'>
+                        <i class='bi bi-geo-alt text-primary fs-5 me-3'></i>
+                        <span class='fs-5'>г. Москва, ул. Аквариумная, д. 15</span>
+                    </div>
+                    <div class='mb-3'>
+                        <i class='bi bi-telephone text-primary fs-5 me-3'></i>
+                        <a href='tel:+79991234567' class='fs-5 text-decoration-none'>+7 (999) 123-45-67</a>
+                    </div>
+                    <div class='mb-3'>
+                        <i class='bi bi-envelope text-primary fs-5 me-3'></i>
+                        <a href='mailto:info@akvasbor.ru' class='fs-5 text-decoration-none'>info@akvasbor.ru</a>
+                    </div>
+                    <div class='mt-4'>
+                        <h5>Мы в соцсетях:</h5>
+                        <div class='d-flex gap-3'>
+                            <a href='#' class='btn btn-outline-primary btn-lg'>
+                                <i class='bi bi-instagram'></i>
+                            </a>
+                            <a href='#' class='btn btn-outline-primary btn-lg'>
+                                <i class='bi bi-telegram'></i>
+                            </a>
+                            <a href='#' class='btn btn-outline-primary btn-lg'>
+                                <i class='bi bi-whatsapp'></i>
+                            </a>
+                        </div>
+                    </div>
+                </div>
+                <div class='col-md-6' data-aos='fade-left'>
+                    <div class='bg-light p-4 rounded'>
+                        <h5 class='fw-bold mb-3'>Есть вопросы? Напишите нам!</h5>
+                        <form>
+                            <div class='mb-3'>
+                                <input type='text' class='form-control' placeholder='Ваше имя'>
+                            </div>
+                            <div class='mb-3'>
+                                <input type='email' class='form-control' placeholder='Email'>
+                            </div>
+                            <div class='mb-3'>
+                                <textarea class='form-control' rows='4' placeholder='Ваше сообщение'></textarea>
+                            </div>
+                            <button type='submit' class='btn btn-primary'>
+                                <i class='bi bi-send me-1'></i>Отправить
+                            </button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Footer -->
+    <footer class='bg-dark text-white py-5 mt-5'>
+        <div class='container'>
+            <div class='row'>
+                <div class='col-md-4 mb-4'>
+                    <h5 class='fw-bold mb-3'>
+                        <i class='bi bi-water me-2'></i>АкваСбор
+                    </h5>
+                    <p>Ваш надежный партнер в мире аквариумных растений. Качественные растения, профессиональные консультации.</p>
+                    <div class='d-flex gap-3'>
+                        <a href='#' class='text-white fs-5'><i class='bi bi-instagram'></i></a>
+                        <a href='#' class='text-white fs-5'><i class='bi bi-telegram'></i></a>
+                        <a href='#' class='text-white fs-5'><i class='bi bi-whatsapp'></i></a>
+                    </div>
+                </div>
+                <div class='col-md-4 mb-4'>
+                    <h5 class='fw-bold mb-3'>Каталог</h5>
+                    <ul class='list-unstyled'>
+                        <?php foreach (array_slice($categories, 0, 6) as $cat): ?>
+                        <li><a href='?category=<?= urlencode($cat) ?>' class='text-white-50 text-decoration-none'><?= htmlspecialchars($cat) ?></a></li>
+                        <?php endforeach; ?>
+                    </ul>
+                </div>
+                <div class='col-md-4 mb-4'>
+                    <h5 class='fw-bold mb-3'>Информация</h5>
+                    <p><i class='bi bi-geo-alt me-2'></i>г. Москва, ул. Аквариумная, д. 15</p>
+                    <p><i class='bi bi-telephone me-2'></i>+7 (999) 123-45-67</p>
+                    <p><i class='bi bi-envelope me-2'></i>info@akvasbor.ru</p>
+                    <p><i class='bi bi-clock me-2'></i>Пн-Вс: 9:00-21:00</p>
+                </div>
+            </div>
+            <hr class='my-4'>
+            <div class='row align-items-center'>
+                <div class='col-md-6'>
+                    <p class='mb-0'>&copy; <?= date('Y') ?> АкваСбор. Все права защищены.</p>
+                </div>
+                <div class='col-md-6 text-md-end'>
+                    <small class='text-white-50'>
+                        <?php if ($pdo): ?>
+                            Растений в каталоге: <?= count($allPlants) ?>
+                        <?php else: ?>
+                            Статус БД: <span class='text-danger'>Недоступна</span>
+                        <?php endif; ?>
+                    </small>
+                </div>
+            </div>
+        </div>
+    </footer>
+
+    <script src='https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js'></script>
+    <script src='https://cdn.jsdelivr.net/npm/aos@2.3.4/dist/aos.js'></script>
+
+    <script>
+        // Данные растений для JS
+        const plantsData = <?= json_encode($allPlants) ?>;
+        const dbConnected = <?= $pdo ? 'true' : 'false' ?>;
+        let cart = JSON.parse(localStorage.getItem('aqua_cart')) || [];
+
+        // Инициализация
+        document.addEventListener('DOMContentLoaded', function() {
+            AOS.init({
+                duration: 800,
+                easing: 'ease-out',
+                once: true
+            });
+
+            updateCartDisplay();
+
+            // Восстанавливаем тему
+            const savedTheme = localStorage.getItem('theme');
+            if (savedTheme) {
+                document.documentElement.setAttribute('data-bs-theme', savedTheme);
+                document.getElementById('themeIcon').className = savedTheme === 'dark' ? 'bi bi-sun' : 'bi bi-moon';
+            }
+
+            // Показываем статус БД в консоли
+            console.log(`
+🌱 АкваСбор - Магазин аквариумных растений
+📊 База данных: ${dbConnected ? 'Подключена' : 'Недоступна'}
+📦 В каталоге: ${plantsData.length} растений
+🛒 В корзине: ${cart.length} товаров
+            `);
+        });
+
+        // Переключение темы
+        function toggleTheme() {
+            const html = document.documentElement;
+            const themeIcon = document.getElementById('themeIcon');
+            const currentTheme = html.getAttribute('data-bs-theme');
+
+            if (currentTheme === 'dark') {
+                html.setAttribute('data-bs-theme', 'light');
+                themeIcon.className = 'bi bi-moon';
+                localStorage.setItem('theme', 'light');
+            } else {
+                html.setAttribute('data-bs-theme', 'dark');
+                themeIcon.className = 'bi bi-sun';
+                localStorage.setItem('theme', 'dark');
+            }
+        }
+
+        // Корзина
+        function toggleCart() {
+            const cartWidget = document.getElementById('cartWidget');
+            cartWidget.classList.toggle('show');
+        }
+
+        function addToCart(plantId) {
+            const plant = plantsData.find(p => p.id == plantId);
+            if (!plant) {
+                showNotification('Растение не найдено!', 'error');
+                return;
+            }
+
+            const existingItem = cart.find(item => item.id == plantId);
+            if (existingItem) {
+                existingItem.quantity += 1;
+            } else {
+                cart.push({
+                    id: plantId,
+                    name: plant.name,
+                    price: plant.price,
+                    image: plant.image || plant.main_image,
+                    quantity: 1
+                });
+            }
+
+            localStorage.setItem('aqua_cart', JSON.stringify(cart));
+            updateCartDisplay();
+            showNotification(`${plant.name} добавлено в корзину!`, 'success');
+        }
+
+        function updateCartDisplay() {
+            const cartBadge = document.getElementById('cartBadge');
+            const cartItems = document.getElementById('cartItems');
+            const cartTotal = document.getElementById('cartTotal');
+
+            const totalItems = cart.reduce((sum, item) => sum + item.quantity, 0);
+            const totalPrice = cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+
+            cartBadge.textContent = totalItems;
+            cartTotal.textContent = totalPrice.toLocaleString() + ' ₽';
+
+            if (cart.length === 0) {
+                cartItems.innerHTML = '<p class="text-muted text-center">Корзина пуста</p>';
+            } else {
+                cartItems.innerHTML = cart.map(item => `
+                    <div class="cart-item mb-3 p-2 border rounded">
+                        <div class="d-flex align-items-center">
+                            <img src="${item.image}" alt="${item.name}" class="rounded me-2" style="width: 50px; height: 50px; object-fit: cover;">
+                            <div class="flex-grow-1">
+                                <h6 class="mb-1">${item.name}</h6>
+                                <small class="text-muted">${item.price.toLocaleString()} ₽ × ${item.quantity}</small>
+                            </div>
+                            <button class="btn btn-outline-danger btn-sm" onclick="removeFromCart(${item.id})">
+                                <i class="bi bi-trash"></i>
+                            </button>
+                        </div>
+                    </div>
+                `).join('');
+            }
+        }
+
+        function removeFromCart(plantId) {
+            cart = cart.filter(item => item.id != plantId);
+            localStorage.setItem('aqua_cart', JSON.stringify(cart));
+            updateCartDisplay();
+        }
+
+        function checkout() {
+            if (cart.length === 0) {
+                showNotification('Корзина пуста!', 'warning');
+                return;
+            }
+
+            showNotification('Функция оформления заказа в разработке', 'info');
+        }
+
+        // Показ деталей растения
+        function showPlantDetails(plantId) {
+            const plant = plantsData.find(p => p.id == plantId);
+            if (!plant) return;
+
+            document.getElementById('modalPlantName').textContent = plant.name;
+            document.getElementById('modalPlantLatin').textContent = plant.latin || plant.latin_name || '';
+            document.getElementById('modalPlantImage').src = plant.image || plant.main_image || '';
+            document.getElementById('modalPlantCategory').textContent = plant.category || '';
+            document.getElementById('modalPlantDifficulty').textContent = plant.difficulty || '';
+            document.getElementById('modalPlantDescription').textContent = plant.description || '';
+            document.getElementById('modalPlantPrice').textContent = plant.price.toLocaleString() + ' ₽';
+
+            // Особенности
+            const features = plant.features || [];
+            const featuresHtml = features.map(feature =>
+                `<span class="feature-tag">${feature}</span>`
+            ).join('');
+            document.getElementById('modalPlantFeatures').innerHTML = featuresHtml;
+
+            // Уход
+            const care = plant.care || {};
+            const careGrid = document.getElementById('modalCareGrid');
+            careGrid.innerHTML = `
+                <div class="care-card">
+                    <div class="care-icon"><i class="bi bi-lightbulb"></i></div>
+                    <h6>Освещение</h6>
+                    <p>${care.lighting || 'Н/Д'}</p>
+                </div>
+                <div class="care-card">
+                    <div class="care-icon"><i class="bi bi-thermometer-half"></i></div>
+                    <h6>Температура</h6>
+                    <p>${care.temperature || 'Н/Д'}</p>
+                </div>
+                <div class="care-card">
+                    <div class="care-icon"><i class="bi bi-droplet"></i></div>
+                    <h6>pH</h6>
+                    <p>${care.ph || 'Н/Д'}</p>
+                </div>
+                <div class="care-card">
+                    <div class="care-icon"><i class="bi bi-water"></i></div>
+                    <h6>Жесткость</h6>
+                    <p>${care.hardness || 'Н/Д'}</p>
+                </div>
+                <div class="care-card">
+                    <div class="care-icon"><i class="bi bi-cloud"></i></div>
+                    <h6>CO₂</h6>
+                    <p>${care.co2 || 'Н/Д'}</p>
+                </div>
+                <div class="care-card">
+                    <div class="care-icon"><i class="bi bi-egg-fried"></i></div>
+                    <h6>Удобрения</h6>
+                    <p>${care.fertilizer || 'Н/Д'}</p>
+                </div>
+            `;
+
+            // Кнопка добавления в корзину
+            document.getElementById('modalAddToCart').onclick = () => addToCart(plantId);
+
+            new bootstrap.Modal(document.getElementById('plantModal')).show();
+        }
+
+        // Фильтры и сортировка
+        function updateSort(sortBy) {
+            const url = new URL(window.location);
+            url.searchParams.set('sort', sortBy);
+            window.location.href = url.toString();
+        }
+
+        function updateSearch() {
+            const query = document.getElementById('searchInput').value;
+            const url = new URL(window.location);
+            if (query) {
+                url.searchParams.set('search', query);
+            } else {
+                url.searchParams.delete('search');
+            }
+            url.searchParams.delete('page'); // Сбрасываем пагинацию
+            window.location.href = url.toString();
+        }
+
+        // Поиск на Enter
+        document.getElementById('searchInput')?.addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                updateSearch();
+            }
+        });
+
+        // Уведомления
+        function showNotification(message, type = 'success') {
+            const notification = document.createElement('div');
+            notification.className = `alert alert-${type} alert-dismissible fade show position-fixed`;
+            notification.style.cssText = 'top: 90px; right: 20px; z-index: 9999; max-width: 400px;';
+
+            const icons = {
+                'success': 'bi-check-circle',
+                'error': 'bi-exclamation-triangle', 
+                'warning': 'bi-exclamation-triangle',
+                'info': 'bi-info-circle'
+            };
+
+            notification.innerHTML = `
+                <div class="d-flex align-items-center">
+                    <i class="${icons[type] || 'bi-info-circle'} me-2"></i>
+                    ${message}
+                </div>
+                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+            `;
+
+            document.body.appendChild(notification);
+
+            setTimeout(() => {
+                if (notification.parentNode) {
+                    notification.remove();
+                }
+            }, 5000);
+        }
+
+        // Плавная прокрутка к якорям
+        document.querySelectorAll('a[href^="#"]').forEach(anchor => {
+            anchor.addEventListener('click', function (e) {
+                e.preventDefault();
+                const target = document.querySelector(this.getAttribute('href'));
+                if (target) {
+                    target.scrollIntoView({
+                        behavior: 'smooth',
+                        block: 'start'
+                    });
+                }
+            });
+        });
+    </script>
+    <!-- Интеграция МЕГА корзины -->
+<script src="cart-integration.js"></script>
+</body>
+</html>
