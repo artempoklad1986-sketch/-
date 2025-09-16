@@ -1,7 +1,7 @@
 <?php
 /**
  * АкваСбор - МЕГА магазин аквариумных растений
- * 100+ товаров с полным описанием
+ * Товары теперь загружаются из базы данных
  */
 
 // Проверяем установку
@@ -12,6 +12,149 @@ if (!file_exists('config/.installed')) {
 
 session_start();
 
+// Подключение к базе данных (копируем логику из admin.php)
+$pdo = null;
+$dbError = null;
+
+try {
+    // Пытаемся подключиться через конфигурационный файл
+    $dbConfigPath = 'config/database.php';
+    if (file_exists($dbConfigPath)) {
+        $dbConfig = require $dbConfigPath;
+        if (is_array($dbConfig) && isset($dbConfig['host'], $dbConfig['database'], $dbConfig['username'], $dbConfig['password'])) {
+            $dsn = "mysql:host={$dbConfig['host']};dbname={$dbConfig['database']};charset=utf8mb4";
+            $pdo = new PDO($dsn, $dbConfig['username'], $dbConfig['password'], [
+                PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+                PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+                PDO::MYSQL_ATTR_INIT_COMMAND => 'SET NAMES utf8mb4 COLLATE utf8mb4_unicode_ci'
+            ]);
+        }
+    } else {
+        // Стандартные конфигурации для shared hosting
+        $possibleConfigs = [
+            ['localhost', 'dizain9n_aqua', 'dizain9n_aqua', ''],
+            ['localhost', 'aquasbor', 'root', ''],
+            ['mysql', 'aquasbor', 'root', ''],
+            ['127.0.0.1', 'aquasbor', 'root', '']
+        ];
+
+        foreach ($possibleConfigs as $config) {
+            try {
+                $dsn = "mysql:host={$config[0]};dbname={$config[1]};charset=utf8mb4";
+                $pdo = new PDO($dsn, $config[2], $config[3], [
+                    PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+                    PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+                    PDO::MYSQL_ATTR_INIT_COMMAND => 'SET NAMES utf8mb4 COLLATE utf8mb4_unicode_ci'
+                ]);
+                break;
+            } catch (PDOException $e) {
+                continue;
+            }
+        }
+    }
+} catch (Exception $e) {
+    $dbError = $e->getMessage();
+    error_log('DB Connection Error: ' . $dbError);
+}
+
+// Функция загрузки растений из БД
+function loadPlantsFromDB($pdo, $category = '', $difficulty = '', $search = '', $sortBy = 'name') {
+    if (!$pdo) {
+        // Если БД недоступна, возвращаем заглушки
+        return [
+            [
+                'id' => 1,
+                'name' => 'База данных недоступна',
+                'latin_name' => 'Database unavailable',
+                'category' => 'Системное сообщение',
+                'price' => 0,
+                'main_image' => 'https://images.unsplash.com/photo-1544551763-46a013bb70d5?w=400',
+                'description' => 'Для просмотра товаров необходимо подключение к базе данных. Выполните миграцию данных.',
+                'care' => json_encode(['lighting' => 'Н/Д', 'temperature' => 'Н/Д', 'ph' => 'Н/Д']),
+                'features' => json_encode(['Системное сообщение']),
+                'difficulty' => 'Н/Д',
+                'status' => 'active'
+            ]
+        ];
+    }
+
+    try {
+        // Строим запрос с фильтрами
+        $sql = "SELECT *, latin_name as latin FROM products WHERE status = 'active'";
+        $params = [];
+
+        if ($category) {
+            $sql .= " AND category = ?";
+            $params[] = $category;
+        }
+
+        if ($difficulty) {
+            $sql .= " AND difficulty = ?";
+            $params[] = $difficulty;
+        }
+
+        if ($search) {
+            $sql .= " AND (name LIKE ? OR latin_name LIKE ? OR description LIKE ?)";
+            $searchParam = "%{$search}%";
+            $params[] = $searchParam;
+            $params[] = $searchParam;
+            $params[] = $searchParam;
+        }
+
+        // Добавляем сортировку
+        switch ($sortBy) {
+            case 'price_asc':
+                $sql .= " ORDER BY price ASC";
+                break;
+            case 'price_desc':
+                $sql .= " ORDER BY price DESC";
+                break;
+            case 'difficulty':
+                $sql .= " ORDER BY FIELD(difficulty, 'Легко', 'Средне', 'Сложно', 'Очень сложно', 'Экстремально сложно')";
+                break;
+            default:
+                $sql .= " ORDER BY name ASC";
+        }
+
+        $stmt = $pdo->prepare($sql);
+        $stmt->execute($params);
+        $plants = $stmt->fetchAll();
+
+        // Преобразуем JSON поля обратно в массивы
+        foreach ($plants as &$plant) {
+            $plant['care'] = json_decode($plant['care'], true) ?: [];
+            $plant['features'] = json_decode($plant['features'], true) ?: [];
+            $plant['images'] = json_decode($plant['images'], true) ?: [];
+
+            // Для совместимости с фронтендом
+            $plant['image'] = $plant['main_image'];
+            $plant['latin'] = $plant['latin_name'];
+        }
+
+        return $plants;
+
+    } catch (Exception $e) {
+        error_log('Load plants error: ' . $e->getMessage());
+        return [];
+    }
+}
+
+// Получаем категории из БД
+function loadCategoriesFromDB($pdo) {
+    if (!$pdo) {
+        return ['Плавающие растения', 'Длинностебельные', 'Розеточные', 'Эпифиты', 'Мхи'];
+    }
+
+    try {
+        $stmt = $pdo->query("SELECT DISTINCT category FROM products WHERE status = 'active' AND category IS NOT NULL ORDER BY category");
+        $categories = $stmt->fetchAll(PDO::FETCH_COLUMN);
+        return $categories ?: [];
+    } catch (Exception $e) {
+        error_log('Load categories error: ' . $e->getMessage());
+        return [];
+    }
+}
+
 // Подключаем модули если есть
 if (file_exists('core/ModuleManager.php')) {
     require_once 'core/ModuleManager.php';
@@ -20,1040 +163,8 @@ if (file_exists('core/ModuleManager.php')) {
     $allModules = [];
 }
 
-// МЕГА БАЗА АКВАРИУМНЫХ РАСТЕНИЙ
-$aquariumPlants = [
-    // ПРОСТЫЕ РАСТЕНИЯ ДЛЯ НОВИЧКОВ
-    [
-        'id' => 1,
-        'name' => 'Роголистник темно-зеленый',
-        'latin' => 'Ceratophyllum demersum',
-        'category' => 'Плавающие растения',
-        'price' => 150,
-        'image' => 'https://images.unsplash.com/photo-1544551763-46a013bb70d5?w=400',
-        'description' => 'Неприхотливое плавающее растение, идеально подходит для начинающих аквариумистов',
-        'care' => [
-            'lighting' => 'Слабое-среднее',
-            'temperature' => '15-25°C',
-            'ph' => '6.0-8.0',
-            'hardness' => '5-15 dGH',
-            'co2' => 'Не требуется',
-            'fertilizer' => 'Минимальные подкормки'
-        ],
-        'features' => ['Быстрый рост', 'Поглощает нитраты', 'Укрытие для мальков'],
-        'difficulty' => 'Легко'
-    ],
-    [
-        'id' => 2,
-        'name' => 'Элодея канадская',
-        'latin' => 'Elodea canadensis',
-        'category' => 'Длинностебельные',
-        'price' => 120,
-        'image' => 'https://images.unsplash.com/photo-1520637836862-4d197d17c30a?w=400',
-        'description' => 'Классическое аквариумное растение с мелкими листьями, создает красивые заросли',
-        'care' => [
-            'lighting' => 'Слабое-среднее',
-            'temperature' => '10-24°C',
-            'ph' => '6.5-7.5',
-            'hardness' => '8-12 dGH',
-            'co2' => 'Не обязательно',
-            'fertilizer' => 'Умеренные подкормки'
-        ],
-        'features' => ['Очень выносливое', 'Хорошо размножается', 'Подходит для холодной воды'],
-        'difficulty' => 'Легко'
-    ],
-    [
-        'id' => 3,
-        'name' => 'Валлиснерия спиральная',
-        'latin' => 'Vallisneria spiralis',
-        'category' => 'Розеточные',
-        'price' => 180,
-        'image' => 'https://images.unsplash.com/photo-1583212292454-1fe6229603b7?w=400',
-        'description' => 'Длинные лентовидные листья создают красивый фон в аквариуме',
-        'care' => [
-            'lighting' => 'Среднее',
-            'temperature' => '20-28°C',
-            'ph' => '6.5-7.8',
-            'hardness' => '8-15 dGH',
-            'co2' => 'Не обязательно',
-            'fertilizer' => 'Корневые подкормки'
-        ],
-        'features' => ['Образует густые заросли', 'Размножается усами', 'Подходит для заднего плана'],
-        'difficulty' => 'Легко'
-    ],
-    [
-        'id' => 4,
-        'name' => 'Анубиас нана',
-        'latin' => 'Anubias barteri var. nana',
-        'category' => 'Эпифиты',
-        'price' => 350,
-        'image' => 'https://images.unsplash.com/photo-1544551763-46a013bb70d5?w=400',
-        'description' => 'Компактный анубиас с темно-зелеными кожистыми листьями',
-        'care' => [
-            'lighting' => 'Слабое-среднее',
-            'temperature' => '22-28°C',
-            'ph' => '6.0-7.5',
-            'hardness' => '2-15 dGH',
-            'co2' => 'Не требуется',
-            'fertilizer' => 'Жидкие удобрения'
-        ],
-        'features' => ['Очень неприхотливое', 'Медленный рост', 'Крепится к корягам'],
-        'difficulty' => 'Легко'
-    ],
-    [
-        'id' => 5,
-        'name' => 'Яванский мох',
-        'latin' => 'Taxiphyllum barbieri',
-        'category' => 'Мхи',
-        'price' => 200,
-        'image' => 'https://images.unsplash.com/photo-1520637836862-4d197d17c30a?w=400',
-        'description' => 'Популярный мох для декорирования коряг и камней',
-        'care' => [
-            'lighting' => 'Слабое-среднее',
-            'temperature' => '15-30°C',
-            'ph' => '5.0-8.0',
-            'hardness' => '2-25 dGH',
-            'co2' => 'Не требуется',
-            'fertilizer' => 'Минимальные'
-        ],
-        'features' => ['Супер выносливый', 'Быстро разрастается', 'Укрытие для креветок'],
-        'difficulty' => 'Легко'
-    ],
-
-    // РАСТЕНИЯ СРЕДНЕГО УРОВНЯ
-    [
-        'id' => 6,
-        'name' => 'Эхинодорус амазонка',
-        'latin' => 'Echinodorus amazonicus',
-        'category' => 'Розеточные',
-        'price' => 450,
-        'image' => 'https://images.unsplash.com/photo-1583212292454-1fe6229603b7?w=400',
-        'description' => 'Классический эхинодорус с широкими светло-зелеными листьями',
-        'care' => [
-            'lighting' => 'Среднее-яркое',
-            'temperature' => '22-28°C',
-            'ph' => '6.5-7.2',
-            'hardness' => '5-12 dGH',
-            'co2' => 'Рекомендуется',
-            'fertilizer' => 'Корневые таблетки'
-        ],
-        'features' => ['Крупное растение', 'Центр композиции', 'Быстрый рост при хороших условиях'],
-        'difficulty' => 'Средне'
-    ],
-    [
-        'id' => 7,
-        'name' => 'Криптокорина Вендта',
-        'latin' => 'Cryptocoryne wendtii',
-        'category' => 'Розеточные',
-        'price' => 280,
-        'image' => 'https://images.unsplash.com/photo-1544551763-46a013bb70d5?w=400',
-        'description' => 'Популярная криптокорина с волнистыми коричневато-зелеными листьями',
-        'care' => [
-            'lighting' => 'Слабое-среднее',
-            'temperature' => '20-28°C',
-            'ph' => '6.0-7.5',
-            'hardness' => '5-15 dGH',
-            'co2' => 'Не обязательно',
-            'fertilizer' => 'Корневые подкормки'
-        ],
-        'features' => ['Теневыносливое', 'Образует группы', 'Подвержено криптокориновой болезни'],
-        'difficulty' => 'Средне'
-    ],
-    [
-        'id' => 8,
-        'name' => 'Людвигия красная',
-        'latin' => 'Ludwigia repens',
-        'category' => 'Длинностебельные',
-        'price' => 220,
-        'image' => 'https://images.unsplash.com/photo-1520637836862-4d197d17c30a?w=400',
-        'description' => 'Красивое растение с красно-зелеными листьями, особенно яркими на свету',
-        'care' => [
-            'lighting' => 'Среднее-яркое',
-            'temperature' => '18-26°C',
-            'ph' => '5.5-7.5',
-            'hardness' => '2-15 dGH',
-            'co2' => 'Желательно',
-            'fertilizer' => 'Регулярные подкормки'
-        ],
-        'features' => ['Красивая окраска', 'Быстрый рост', 'Нуждается в обрезке'],
-        'difficulty' => 'Средне'
-    ],
-    [
-        'id' => 9,
-        'name' => 'Гигрофила многосеменная',
-        'latin' => 'Hygrophila polysperma',
-        'category' => 'Длинностебельные',
-        'price' => 160,
-        'image' => 'https://images.unsplash.com/photo-1583212292454-1fe6229603b7?w=400',
-        'description' => 'Быстрорастущее растение с мелкими овальными листьями',
-        'care' => [
-            'lighting' => 'Среднее-яркое',
-            'temperature' => '20-28°C',
-            'ph' => '6.0-7.5',
-            'hardness' => '4-18 dGH',
-            'co2' => 'Желательно',
-            'fertilizer' => 'Регулярные подкормки'
-        ],
-        'features' => ['Очень быстрый рост', 'Хорошо поглощает нитраты', 'Требует частой обрезки'],
-        'difficulty' => 'Средне'
-    ],
-    [
-        'id' => 10,
-        'name' => 'Апоногетон волнистый',
-        'latin' => 'Aponogeton undulatus',
-        'category' => 'Клубневые',
-        'price' => 380,
-        'image' => 'https://images.unsplash.com/photo-1544551763-46a013bb70d5?w=400',
-        'description' => 'Элегантное растение с длинными волнистыми листьями',
-        'care' => [
-            'lighting' => 'Среднее',
-            'temperature' => '22-26°C',
-            'ph' => '6.5-7.2',
-            'hardness' => '5-12 dGH',
-            'co2' => 'Рекомендуется',
-            'fertilizer' => 'Корневые подкормки'
-        ],
-        'features' => ['Красивые волнистые листья', 'Может цвести', 'Период покоя'],
-        'difficulty' => 'Средне'
-    ],
-
-    // КРАСИВЫЕ АКЦЕНТНЫЕ РАСТЕНИЯ
-    [
-        'id' => 11,
-        'name' => 'Анубиас конголезский',
-        'latin' => 'Anubias congensis',
-        'category' => 'Эпифиты',
-        'price' => 520,
-        'image' => 'https://images.unsplash.com/photo-1520637836862-4d197d17c30a?w=400',
-        'description' => 'Крупный анубиас с широкими стреловидными листьями',
-        'care' => [
-            'lighting' => 'Слабое-среднее',
-            'temperature' => '22-28°C',
-            'ph' => '6.0-7.5',
-            'hardness' => '2-15 dGH',
-            'co2' => 'Не требуется',
-            'fertilizer' => 'Жидкие удобрения'
-        ],
-        'features' => ['Очень декоративное', 'Медленный рост', 'Подходит для слабого света'],
-        'difficulty' => 'Легко'
-    ],
-    [
-        'id' => 12,
-        'name' => 'Эхинодорус красное пламя',
-        'latin' => 'Echinodorus Red Flame',
-        'category' => 'Розеточные',
-        'price' => 680,
-        'image' => 'https://images.unsplash.com/photo-1583212292454-1fe6229603b7?w=400',
-        'description' => 'Селекционный сорт с красивыми красно-зелеными листьями',
-        'care' => [
-            'lighting' => 'Среднее-яркое',
-            'temperature' => '22-28°C',
-            'ph' => '6.0-7.5',
-            'hardness' => '5-15 dGH',
-            'co2' => 'Желательно',
-            'fertilizer' => 'Корневые таблетки + жидкие'
-        ],
-        'features' => ['Яркая окраска', 'Центральное растение', 'Требует питательного грунта'],
-        'difficulty' => 'Средне'
-    ],
-    [
-        'id' => 13,
-        'name' => 'Нимфея тигровый лотос',
-        'latin' => 'Nymphaea lotus',
-        'category' => 'Клубневые',
-        'price' => 750,
-        'image' => 'https://images.unsplash.com/photo-1544551763-46a013bb70d5?w=400',
-        'description' => 'Роскошное растение с крупными пятнистыми листьями',
-        'care' => [
-            'lighting' => 'Яркое',
-            'temperature' => '22-28°C',
-            'ph' => '6.0-7.0',
-            'hardness' => '4-12 dGH',
-            'co2' => 'Обязательно',
-            'fertilizer' => 'Обильные корневые подкормки'
-        ],
-        'features' => ['Очень декоративное', 'Может цвести', 'Крупное растение'],
-        'difficulty' => 'Сложно'
-    ],
-    [
-        'id' => 14,
-        'name' => 'Альтернантера розовая',
-        'latin' => 'Alternanthera reineckii',
-        'category' => 'Длинностебельные',
-        'price' => 320,
-        'image' => 'https://images.unsplash.com/photo-1520637836862-4d197d17c30a?w=400',
-        'description' => 'Эффектное растение с ярко-розовыми листьями',
-        'care' => [
-            'lighting' => 'Очень яркое',
-            'temperature' => '24-28°C',
-            'ph' => '6.0-7.0',
-            'hardness' => '2-10 dGH',
-            'co2' => 'Обязательно',
-            'fertilizer' => 'Обильные подкормки железом'
-        ],
-        'features' => ['Потрясающий цвет', 'Требует много света', 'Капризное растение'],
-        'difficulty' => 'Сложно'
-    ],
-    [
-        'id' => 15,
-        'name' => 'Ротала индийская',
-        'latin' => 'Rotala indica',
-        'category' => 'Длинностебельные',
-        'price' => 250,
-        'image' => 'https://images.unsplash.com/photo-1583212292454-1fe6229603b7?w=400',
-        'description' => 'Изящное растение с мелкими листочками и красивой структурой',
-        'care' => [
-            'lighting' => 'Среднее-яркое',
-            'temperature' => '20-26°C',
-            'ph' => '6.0-7.0',
-            'hardness' => '2-12 dGH',
-            'co2' => 'Желательно',
-            'fertilizer' => 'Регулярные подкормки'
-        ],
-        'features' => ['Ажурная структура', 'Хорошо ветвится', 'Создает красивые группы'],
-        'difficulty' => 'Средне'
-    ],
-
-    // ПОЧВОПОКРОВНЫЕ РАСТЕНИЯ
-    [
-        'id' => 16,
-        'name' => 'Хемиантус куба',
-        'latin' => 'Hemianthus callitrichoides',
-        'category' => 'Почвопокровные',
-        'price' => 450,
-        'image' => 'https://images.unsplash.com/photo-1520637836862-4d197d17c30a?w=400',
-        'description' => 'Мельчайшее аквариумное растение, создает изумрудный ковер',
-        'care' => [
-            'lighting' => 'Очень яркое',
-            'temperature' => '20-25°C',
-            'ph' => '5.0-7.0',
-            'hardness' => '0-10 dGH',
-            'co2' => 'Обязательно',
-            'fertilizer' => 'Постоянные микро-подкормки'
-        ],
-        'features' => ['Самое мелкое растение', 'Идеальный ковер', 'Очень требовательное'],
-        'difficulty' => 'Очень сложно'
-    ],
-    [
-        'id' => 17,
-        'name' => 'Глоссостигма повойничковидная',
-        'latin' => 'Glossostigma elatinoides',
-        'category' => 'Почвопокровные',
-        'price' => 380,
-        'image' => 'https://images.unsplash.com/photo-1544551763-46a013bb70d5?w=400',
-        'description' => 'Стелющееся растение с мелкими овальными листьями',
-        'care' => [
-            'lighting' => 'Очень яркое',
-            'temperature' => '15-26°C',
-            'ph' => '5.5-7.0',
-            'hardness' => '2-15 dGH',
-            'co2' => 'Обязательно',
-            'fertilizer' => 'Обильные подкормки'
-        ],
-        'features' => ['Красивый ковер', 'Быстро разрастается', 'Требует стрижки'],
-        'difficulty' => 'Сложно'
-    ],
-    [
-        'id' => 18,
-        'name' => 'Элеохарис мини',
-        'latin' => 'Eleocharis acicularis mini',
-        'category' => 'Почвопокровные',
-        'price' => 320,
-        'image' => 'https://images.unsplash.com/photo-1583212292454-1fe6229603b7?w=400',
-        'description' => 'Карликовая форма ситняга, создает травяной газон',
-        'care' => [
-            'lighting' => 'Среднее-яркое',
-            'temperature' => '15-26°C',
-            'ph' => '6.0-7.5',
-            'hardness' => '2-15 dGH',
-            'co2' => 'Желательно',
-            'fertilizer' => 'Корневые подкормки'
-        ],
-        'features' => ['Имитирует газон', 'Образует густой ковер', 'Подходит для нано-аквариумов'],
-        'difficulty' => 'Средне'
-    ],
-    [
-        'id' => 19,
-        'name' => 'Марсилия четырехлистная',
-        'latin' => 'Marsilea quadrifolia',
-        'category' => 'Почвопокровные',
-        'price' => 420,
-        'image' => 'https://images.unsplash.com/photo-1520637836862-4d197d17c30a?w=400',
-        'description' => 'Необычное растение с листьями в форме четырехлистника',
-        'care' => [
-            'lighting' => 'Среднее',
-            'temperature' => '18-24°C',
-            'ph' => '6.0-7.0',
-            'hardness' => '2-12 dGH',
-            'co2' => 'Не обязательно',
-            'fertilizer' => 'Умеренные подкормки'
-        ],
-        'features' => ['Уникальная форма листьев', 'Медленный рост', 'Очень декоративное'],
-        'difficulty' => 'Средне'
-    ],
-    [
-        'id' => 20,
-        'name' => 'Микросорум узколистный',
-        'latin' => 'Microsorum pteropus narrow',
-        'category' => 'Эпифиты',
-        'price' => 350,
-        'image' => 'https://images.unsplash.com/photo-1544551763-46a013bb70d5?w=400',
-        'description' => 'Папоротник с узкими темно-зелеными листьями',
-        'care' => [
-            'lighting' => 'Слабое-среднее',
-            'temperature' => '18-30°C',
-            'ph' => '5.5-8.0',
-            'hardness' => '5-25 dGH',
-            'co2' => 'Не требуется',
-            'fertilizer' => 'Минимальные'
-        ],
-        'features' => ['Очень выносливое', 'Растет на корягах', 'Размножается спорами'],
-        'difficulty' => 'Легко'
-    ],
-
-    // ЭКЗОТИЧЕСКИЕ И РЕДКИЕ РАСТЕНИЯ
-    [
-        'id' => 21,
-        'name' => 'Буцефаландра вавилон',
-        'latin' => 'Bucephalandra Wavy Green',
-        'category' => 'Эпифиты',
-        'price' => 1200,
-        'image' => 'https://images.unsplash.com/photo-1520637836862-4d197d17c30a?w=400',
-        'description' => 'Редкое растение с волнистыми темно-зелеными листьями',
-        'care' => [
-            'lighting' => 'Слабое-среднее',
-            'temperature' => '22-28°C',
-            'ph' => '6.0-7.0',
-            'hardness' => '1-10 dGH',
-            'co2' => 'Желательно',
-            'fertilizer' => 'Слабые подкормки'
-        ],
-        'features' => ['Очень редкое', 'Медленный рост', 'Коллекционное растение'],
-        'difficulty' => 'Средне'
-    ],
-    [
-        'id' => 22,
-        'name' => 'Эхинодорус везувий',
-        'latin' => 'Echinodorus Vesuvius',
-        'category' => 'Розеточные',
-        'price' => 890,
-        'image' => 'https://images.unsplash.com/photo-1583212292454-1fe6229603b7?w=400',
-        'description' => 'Селекционный сорт с закрученными лентовидными листьями',
-        'care' => [
-            'lighting' => 'Среднее-яркое',
-            'temperature' => '20-28°C',
-            'ph' => '6.0-7.5',
-            'hardness' => '5-15 dGH',
-            'co2' => 'Желательно',
-            'fertilizer' => 'Корневые таблетки'
-        ],
-        'features' => ['Необычная форма листьев', 'Эффектное растение', 'Селекционный сорт'],
-        'difficulty' => 'Средне'
-    ],
-    [
-        'id' => 23,
-        'name' => 'Погостемон октопус',
-        'latin' => 'Pogostemon stellatus octopus',
-        'category' => 'Длинностебельные',
-        'price' => 780,
-        'image' => 'https://images.unsplash.com/photo-1520637836862-4d197d17c30a?w=400',
-        'description' => 'Эффектное растение с игольчатыми листьями розового цвета',
-        'care' => [
-            'lighting' => 'Очень яркое',
-            'temperature' => '22-28°C',
-            'ph' => '6.0-7.0',
-            'hardness' => '2-12 dGH',
-            'co2' => 'Обязательно',
-            'fertilizer' => 'Обильные подкормки'
-        ],
-        'features' => ['Уникальная текстура', 'Розовый оттенок', 'Очень декоративное'],
-        'difficulty' => 'Сложно'
-    ],
-    [
-        'id' => 24,
-        'name' => 'Ротала бабочка',
-        'latin' => 'Rotala sp. Butterfly',
-        'category' => 'Длинностебельные',
-        'price' => 650,
-        'image' => 'https://images.unsplash.com/photo-1583212292454-1fe6229603b7?w=400',
-        'description' => 'Редкая ротала с уникальной окраской листьев',
-        'care' => [
-            'lighting' => 'Очень яркое',
-            'temperature' => '20-26°C',
-            'ph' => '5.0-6.8',
-            'hardness' => '1-8 dGH',
-            'co2' => 'Обязательно',
-            'fertilizer' => 'Обильные микро-подкормки'
-        ],
-        'features' => ['Редкий вид', 'Переливающиеся цвета', 'Коллекционное'],
-        'difficulty' => 'Очень сложно'
-    ],
-    [
-        'id' => 25,
-        'name' => 'Амманния грациозная',
-        'latin' => 'Ammannia gracilis',
-        'category' => 'Длинностебельные',
-        'price' => 420,
-        'image' => 'https://images.unsplash.com/photo-1520637836862-4d197d17c30a?w=400',
-        'description' => 'Изящное растение с красно-оранжевыми листьями',
-        'care' => [
-            'lighting' => 'Яркое',
-            'temperature' => '22-28°C',
-            'ph' => '6.0-7.2',
-            'hardness' => '5-12 dGH',
-            'co2' => 'Желательно',
-            'fertilizer' => 'Регулярные подкормки железом'
-        ],
-        'features' => ['Красивая окраска', 'Компактное', 'Хорошо ветвится'],
-        'difficulty' => 'Средне'
-    ],
-
-    // МХИ И ПЕЧЕНОЧНИКИ
-    [
-        'id' => 26,
-        'name' => 'Ришия плавающая',
-        'latin' => 'Riccia fluitans',
-        'category' => 'Мхи',
-        'price' => 180,
-        'image' => 'https://images.unsplash.com/photo-1544551763-46a013bb70d5?w=400',
-        'description' => 'Нежный зеленый мох, создает красивые островки',
-        'care' => [
-            'lighting' => 'Яркое',
-            'temperature' => '15-30°C',
-            'ph' => '6.0-8.0',
-            'hardness' => '5-20 dGH',
-            'co2' => 'Желательно',
-            'fertilizer' => 'Жидкие микроудобрения'
-        ],
-        'features' => ['Пушистая текстура', 'Быстрый рост', 'Выделяет кислород'],
-        'difficulty' => 'Средне'
-    ],
-    [
-        'id' => 27,
-        'name' => 'Мох феникс',
-        'latin' => 'Fissidens fontanus',
-        'category' => 'Мхи',
-        'price' => 380,
-        'image' => 'https://images.unsplash.com/photo-1520637836862-4d197d17c30a?w=400',
-        'description' => 'Элегантный мох с перистыми веточками',
-        'care' => [
-            'lighting' => 'Среднее',
-            'temperature' => '18-26°C',
-            'ph' => '6.0-7.5',
-            'hardness' => '5-15 dGH',
-            'co2' => 'Желательно',
-            'fertilizer' => 'Слабые жидкие подкормки'
-        ],
-        'features' => ['Очень декоративный', 'Медленный рост', 'Прикрепляется к поверхностям'],
-        'difficulty' => 'Средне'
-    ],
-    [
-        'id' => 28,
-        'name' => 'Рикардия хамедрифолия',
-        'latin' => 'Riccardia chamedryfolia',
-        'category' => 'Печеночники',
-        'price' => 450,
-        'image' => 'https://images.unsplash.com/photo-1544551763-46a013bb70d5?w=400',
-        'description' => 'Миниатюрный печеночник с плоскими веточками',
-        'care' => [
-            'lighting' => 'Среднее',
-            'temperature' => '20-26°C',
-            'ph' => '6.0-7.0',
-            'hardness' => '2-12 dGH',
-            'co2' => 'Обязательно',
-            'fertilizer' => 'Микроэлементы'
-        ],
-        'features' => ['Миниатюрное', 'Медленно растет', 'Очень красивое'],
-        'difficulty' => 'Сложно'
-    ],
-    [
-        'id' => 29,
-        'name' => 'Мох треугольный',
-        'latin' => 'Cratoneuron filicinum',
-        'category' => 'Мхи',
-        'price' => 320,
-        'image' => 'https://images.unsplash.com/photo-1520637836862-4d197d17c30a?w=400',
-        'description' => 'Необычный мох с треугольными листочками',
-        'care' => [
-            'lighting' => 'Слабое-среднее',
-            'temperature' => '15-24°C',
-            'ph' => '6.0-7.5',
-            'hardness' => '5-20 dGH',
-            'co2' => 'Не обязательно',
-            'fertilizer' => 'Минимальные'
-        ],
-        'features' => ['Уникальная форма', 'Холодолюбивое', 'Медленный рост'],
-        'difficulty' => 'Средне'
-    ],
-    [
-        'id' => 30,
-        'name' => 'Пламенный мох',
-        'latin' => 'Taxiphyllum Flame',
-        'category' => 'Мхи',
-        'price' => 420,
-        'image' => 'https://images.unsplash.com/photo-1544551763-46a013bb70d5?w=400',
-        'description' => 'Мох с восходящими побегами, напоминающими пламя',
-        'care' => [
-            'lighting' => 'Среднее',
-            'temperature' => '20-28°C',
-            'ph' => '6.0-7.5',
-            'hardness' => '5-15 dGH',
-            'co2' => 'Желательно',
-            'fertilizer' => 'Слабые подкормки'
-        ],
-        'features' => ['Эффект пламени', 'Растет вертикально', 'Очень декоративный'],
-        'difficulty' => 'Средне'
-    ],
-
-    // ПЛАВАЮЩИЕ РАСТЕНИЯ
-    [
-        'id' => 31,
-        'name' => 'Пистия слоистая',
-        'latin' => 'Pistia stratiotes',
-        'category' => 'Плавающие растения',
-        'price' => 220,
-        'image' => 'https://images.unsplash.com/photo-1583212292454-1fe6229603b7?w=400',
-        'description' => 'Красивое плавающее растение с бархатистыми листьями',
-        'care' => [
-            'lighting' => 'Яркое',
-            'temperature' => '18-30°C',
-            'ph' => '6.0-7.5',
-            'hardness' => '5-20 dGH',
-            'co2' => 'Не требуется',
-            'fertilizer' => 'Жидкие макро-удобрения'
-        ],
-        'features' => ['Очень декоративное', 'Быстро размножается', 'Природный фильтр'],
-        'difficulty' => 'Легко'
-    ],
-    [
-        'id' => 32,
-        'name' => 'Лимнобиум побегоносный',
-        'latin' => 'Limnobium laevigatum',
-        'category' => 'Плавающие растения',
-        'price' => 180,
-        'image' => 'https://images.unsplash.com/photo-1520637836862-4d197d17c30a?w=400',
-        'description' => 'Плавающее растение с сердцевидными листьями',
-        'care' => [
-            'lighting' => 'Среднее-яркое',
-            'temperature' => '20-30°C',
-            'ph' => '6.0-7.8',
-            'hardness' => '5-20 dGH',
-            'co2' => 'Не требуется',
-            'fertilizer' => 'Умеренные подкормки'
-        ],
-        'features' => ['Красивые листья', 'Быстрый рост', 'Хорошо фильтрует воду'],
-        'difficulty' => 'Легко'
-    ],
-    [
-        'id' => 33,
-        'name' => 'Сальвиния ушастая',
-        'latin' => 'Salvinia auriculata',
-        'category' => 'Плавающие растения',
-        'price' => 160,
-        'image' => 'https://images.unsplash.com/photo-1544551763-46a013bb70d5?w=400',
-        'description' => 'Папоротник с плавающими листьями необычной формы',
-        'care' => [
-            'lighting' => 'Среднее-яркое',
-            'temperature' => '22-28°C',
-            'ph' => '6.0-8.0',
-            'hardness' => '5-15 dGH',
-            'co2' => 'Не требуется',
-            'fertilizer' => 'Слабые подкормки'
-        ],
-        'features' => ['Необычная текстура листьев', 'Очень быстрый рост', 'Создает тень'],
-        'difficulty' => 'Легко'
-    ],
-    [
-        'id' => 34,
-        'name' => 'Водокрас лягушачий',
-        'latin' => 'Hydrocharis morsus-ranae',
-        'category' => 'Плавающие растения',
-        'price' => 200,
-        'image' => 'https://images.unsplash.com/photo-1583212292454-1fe6229603b7?w=400',
-        'description' => 'Изящное растение с округлыми плавающими листьями',
-        'care' => [
-            'lighting' => 'Среднее',
-            'temperature' => '15-25°C',
-            'ph' => '6.5-7.5',
-            'hardness' => '8-20 dGH',
-            'co2' => 'Не требуется',
-            'fertilizer' => 'Минимальные'
-        ],
-        'features' => ['Может цвести белыми цветками', 'Морозостойкое', 'Медленный рост'],
-        'difficulty' => 'Легко'
-    ],
-    [
-        'id' => 35,
-        'name' => 'Азолла каролинская',
-        'latin' => 'Azolla caroliniana',
-        'category' => 'Плавающие растения',
-        'price' => 140,
-        'image' => 'https://images.unsplash.com/photo-1520637836862-4d197d17c30a?w=400',
-        'description' => 'Мелкий папоротник с изменяющейся окраской',
-        'care' => [
-            'lighting' => 'Яркое',
-            'temperature' => '16-28°C',
-            'ph' => '6.0-8.0',
-            'hardness' => '5-20 dGH',
-            'co2' => 'Не требуется',
-            'fertilizer' => 'Не требуются (фиксирует азот)'
-        ],
-        'features' => ['Меняет цвет на красный', 'Очень быстро размножается', 'Природный азотфиксатор'],
-        'difficulty' => 'Легко'
-    ],
-
-    // ДЛИННОСТЕБЕЛЬНЫЕ РАСТЕНИЯ
-    [
-        'id' => 36,
-        'name' => 'Кабомба каролинская',
-        'latin' => 'Cabomba caroliniana',
-        'category' => 'Длинностебельные',
-        'price' => 190,
-        'image' => 'https://images.unsplash.com/photo-1544551763-46a013bb70d5?w=400',
-        'description' => 'Изящное растение с веерными подводными листьями',
-        'care' => [
-            'lighting' => 'Яркое',
-            'temperature' => '18-26°C',
-            'ph' => '6.0-7.0',
-            'hardness' => '2-10 dGH',
-            'co2' => 'Обязательно',
-            'fertilizer' => 'Регулярные подкормки'
-        ],
-        'features' => ['Очень красивые листья', 'Требовательное к условиям', 'Может цвести'],
-        'difficulty' => 'Сложно'
-    ],
-    [
-        'id' => 37,
-        'name' => 'Лимнофила ароматика',
-        'latin' => 'Limnophila aromatica',
-        'category' => 'Длинностебельные',
-        'price' => 280,
-        'image' => 'https://images.unsplash.com/photo-1520637836862-4d197d17c30a?w=400',
-        'description' => 'Ароматное растение с фиолетово-красными листьями',
-        'care' => [
-            'lighting' => 'Очень яркое',
-            'temperature' => '22-28°C',
-            'ph' => '6.0-7.0',
-            'hardness' => '2-12 dGH',
-            'co2' => 'Обязательно',
-            'fertilizer' => 'Обильные подкормки железом'
-        ],
-        'features' => ['Ароматные листья', 'Красивый красно-фиолетовый цвет', 'Требует много света'],
-        'difficulty' => 'Сложно'
-    ],
-    [
-        'id' => 38,
-        'name' => 'Майака речная',
-        'latin' => 'Mayaca fluviatilis',
-        'category' => 'Длинностебельные',
-        'price' => 320,
-        'image' => 'https://images.unsplash.com/photo-1583212292454-1fe6229603b7?w=400',
-        'description' => 'Нежное растение с игольчатыми листьями',
-        'care' => [
-            'lighting' => 'Яркое',
-            'temperature' => '20-26°C',
-            'ph' => '5.0-6.5',
-            'hardness' => '1-8 dGH',
-            'co2' => 'Обязательно',
-            'fertilizer' => 'Мягкая вода + микроэлементы'
-        ],
-        'features' => ['Очень нежное', 'Любит мягкую воду', 'Медленный рост'],
-        'difficulty' => 'Очень сложно'
-    ],
-    [
-        'id' => 39,
-        'name' => 'Тонина флувиатилис',
-        'latin' => 'Tonina fluviatilis',
-        'category' => 'Длинностебельные',
-        'price' => 680,
-        'image' => 'https://images.unsplash.com/photo-1520637836862-4d197d17c30a?w=400',
-        'description' => 'Редкое растение с звездчатыми листьями',
-        'care' => [
-            'lighting' => 'Очень яркое',
-            'temperature' => '20-26°C',
-            'ph' => '4.0-6.0',
-            'hardness' => '0-5 dGH',
-            'co2' => 'Обязательно',
-            'fertilizer' => 'Очень мягкая вода'
-        ],
-        'features' => ['Экстремально требовательное', 'Очень редкое', 'Для профессионалов'],
-        'difficulty' => 'Экстремально сложно'
-    ],
-    [
-        'id' => 40,
-        'name' => 'Бакопа каролинская',
-        'latin' => 'Bacopa caroliniana',
-        'category' => 'Длинностебельные',
-        'price' => 210,
-        'image' => 'https://images.unsplash.com/photo-1544551763-46a013bb70d5?w=400',
-        'description' => 'Неприхотливое растение с сочными листьями',
-        'care' => [
-            'lighting' => 'Среднее-яркое',
-            'temperature' => '15-28°C',
-            'ph' => '6.0-8.0',
-            'hardness' => '5-20 dGH',
-            'co2' => 'Желательно',
-            'fertilizer' => 'Умеренные подкормки'
-        ],
-        'features' => ['Очень выносливое', 'Может цвести голубыми цветками', 'Хорошо ветвится'],
-        'difficulty' => 'Легко'
-    ],
-
-    // КРУПНЫЕ РОЗЕТОЧНЫЕ РАСТЕНИЯ
-    [
-        'id' => 41,
-        'name' => 'Эхинодорус блехера',
-        'latin' => 'Echinodorus bleheri',
-        'category' => 'Розеточные',
-        'price' => 380,
-        'image' => 'https://images.unsplash.com/photo-1583212292454-1fe6229603b7?w=400',
-        'description' => 'Популярное крупное растение с широкими листьями',
-        'care' => [
-            'lighting' => 'Среднее',
-            'temperature' => '20-28°C',
-            'ph' => '6.5-7.5',
-            'hardness' => '5-20 dGH',
-            'co2' => 'Не обязательно',
-            'fertilizer' => 'Корневые таблетки'
-        ],
-        'features' => ['Быстро растет', 'Неприхотливое', 'Подходит для больших аквариумов'],
-        'difficulty' => 'Легко'
-    ],
-    [
-        'id' => 42,
-        'name' => 'Эхинодорус Оцелот',
-        'latin' => 'Echinodorus Ozelot',
-        'category' => 'Розеточные',
-        'price' => 650,
-        'image' => 'https://images.unsplash.com/photo-1520637836862-4d197d17c30a?w=400',
-        'description' => 'Гибрид с красивыми красно-коричневыми пятнами',
-        'care' => [
-            'lighting' => 'Среднее-яркое',
-            'temperature' => '22-28°C',
-            'ph' => '6.0-7.5',
-            'hardness' => '5-15 dGH',
-            'co2' => 'Желательно',
-            'fertilizer' => 'Питательный грунт + корневые таблетки'
-        ],
-        'features' => ['Красивые пятна на листьях', 'Селекционный гибрид', 'Очень декоративное'],
-        'difficulty' => 'Средне'
-    ],
-    [
-        'id' => 43,
-        'name' => 'Апоногетон мадагаскарский',
-        'latin' => 'Aponogeton madagascariensis',
-        'category' => 'Клубневые',
-        'price' => 1200,
-        'image' => 'https://images.unsplash.com/photo-1544551763-46a013bb70d5?w=400',
-        'description' => 'Знаменитое кружевное растение с сетчатыми листьями',
-        'care' => [
-            'lighting' => 'Слабое-среднее',
-            'temperature' => '18-22°C',
-            'ph' => '6.0-6.8',
-            'hardness' => '2-8 dGH',
-            'co2' => 'Желательно',
-            'fertilizer' => 'Минимальные подкормки'
-        ],
-        'features' => ['Уникальные кружевные листья', 'Очень редкое', 'Требует холодной воды'],
-        'difficulty' => 'Очень сложно'
-    ],
-    [
-        'id' => 44,
-        'name' => 'Криптокорина апоногетонолистная',
-        'latin' => 'Cryptocoryne aponogetifolia',
-        'category' => 'Розеточные',
-        'price' => 480,
-        'image' => 'https://images.unsplash.com/photo-1583212292454-1fe6229603b7?w=400',
-        'description' => 'Крупная криптокорина с волнистыми длинными листьями',
-        'care' => [
-            'lighting' => 'Слабое-среднее',
-            'temperature' => '22-28°C',
-            'ph' => '6.0-7.0',
-            'hardness' => '5-12 dGH',
-            'co2' => 'Не обязательно',
-            'fertilizer' => 'Корневые подкормки'
-        ],
-        'features' => ['Очень крупная', 'Красивые волнистые листья', 'Медленный рост'],
-        'difficulty' => 'Средне'
-    ],
-    [
-        'id' => 45,
-        'name' => 'Барклая длиннолистная',
-        'latin' => 'Barclaya longifolia',
-        'category' => 'Клубневые',
-        'price' => 890,
-        'image' => 'https://images.unsplash.com/photo-1520637836862-4d197d17c30a?w=400',
-        'description' => 'Редкое растение с красивыми волнистыми листьями',
-        'care' => [
-            'lighting' => 'Среднее',
-            'temperature' => '24-28°C',
-            'ph' => '6.0-6.8',
-            'hardness' => '2-10 dGH',
-            'co2' => 'Обязательно',
-            'fertilizer' => 'Питательный грунт'
-        ],
-        'features' => ['Очень редкое', 'Красивые красноватые листья', 'Может цвести под водой'],
-        'difficulty' => 'Сложно'
-    ],
-
-    // СПЕЦИАЛЬНЫЕ И КОЛЛЕКЦИОННЫЕ
-    [
-        'id' => 46,
-        'name' => 'Кринум тайландский',
-        'latin' => 'Crinum thaianum',
-        'category' => 'Луковичные',
-        'price' => 750,
-        'image' => 'https://images.unsplash.com/photo-1544551763-46a013bb70d5?w=400',
-        'description' => 'Крупное луковичное растение с лентовидными листьями',
-        'care' => [
-            'lighting' => 'Среднее-яркое',
-            'temperature' => '22-28°C',
-            'ph' => '6.5-7.5',
-            'hardness' => '5-20 dGH',
-            'co2' => 'Желательно',
-            'fertilizer' => 'Корневые таблетки'
-        ],
-        'features' => ['Очень крупное', 'Образует заросли', 'Может цвести'],
-        'difficulty' => 'Средне'
-    ],
-    [
-        'id' => 47,
-        'name' => 'Лагенандра меебольди',
-        'latin' => 'Lagenandra meeboldii',
-        'category' => 'Розеточные',
-        'price' => 680,
-        'image' => 'https://images.unsplash.com/photo-1583212292454-1fe6229603b7?w=400',
-        'description' => 'Редкое растение семейства ароидных с красивыми листьями',
-        'care' => [
-            'lighting' => 'Слабое-среднее',
-            'temperature' => '24-28°C',
-            'ph' => '6.0-7.0',
-            'hardness' => '5-15 dGH',
-            'co2' => 'Желательно',
-            'fertilizer' => 'Регулярные подкормки'
-        ],
-        'features' => ['Очень редкое', 'Медленный рост', 'Коллекционное растение'],
-        'difficulty' => 'Сложно'
-    ],
-    [
-        'id' => 48,
-        'name' => 'Эутерпе овальная',
-        'latin' => 'Ottelia alismoides',
-        'category' => 'Розеточные',
-        'price' => 920,
-        'image' => 'https://images.unsplash.com/photo-1520637836862-4d197d17c30a?w=400',
-        'description' => 'Редкое растение с прозрачными листьями',
-        'care' => [
-            'lighting' => 'Яркое',
-            'temperature' => '20-26°C',
-            'ph' => '6.0-7.0',
-            'hardness' => '5-15 dGH',
-            'co2' => 'Обязательно',
-            'fertilizer' => 'Обильные подкормки'
-        ],
-        'features' => ['Прозрачные листья', 'Очень редкое', 'Может цвести белыми цветками'],
-        'difficulty' => 'Очень сложно'
-    ],
-    [
-        'id' => 49,
-        'name' => 'Анубиас гигантский',
-        'latin' => 'Anubias gigantea',
-        'category' => 'Эпифиты',
-        'price' => 1200,
-        'image' => 'https://images.unsplash.com/photo-1544551763-46a013bb70d5?w=400',
-        'description' => 'Самый крупный вид анубиаса с огромными листьями',
-        'care' => [
-            'lighting' => 'Слабое-среднее',
-            'temperature' => '22-28°C',
-            'ph' => '6.0-7.5',
-            'hardness' => '2-15 dGH',
-            'co2' => 'Не требуется',
-            'fertilizer' => 'Жидкие удобрения'
-        ],
-        'features' => ['Огромные листья', 'Очень медленный рост', 'Подходит для больших аквариумов'],
-        'difficulty' => 'Легко'
-    ],
-    [
-        'id' => 50,
-        'name' => 'Эхинодорус уругвайский',
-        'latin' => 'Echinodorus uruguayensis',
-        'category' => 'Розеточные',
-        'price' => 420,
-        'image' => 'https://images.unsplash.com/photo-1583212292454-1fe6229603b7?w=400',
-        'description' => 'Компактный эхинодорус с темно-зелеными листьями',
-        'care' => [
-            'lighting' => 'Среднее',
-            'temperature' => '18-26°C',
-            'ph' => '6.5-7.5',
-            'hardness' => '5-18 dGH',
-            'co2' => 'Не обязательно',
-            'fertilizer' => 'Корневые таблетки'
-        ],
-        'features' => ['Компактное', 'Неприхотливое', 'Подходит для среднего плана'],
-        'difficulty' => 'Легко'
-    ]
-];
-
-// Добавляем еще 50 растений для полного списка 100
-$additionalPlants = [
-    // Продолжаем нумерацию с 51
-    [
-        'id' => 51,
-        'name' => 'Гидрокотила белоголовая',
-        'latin' => 'Hydrocotyle leucocephala',
-        'category' => 'Длинностебельные',
-        'price' => 190,
-        'image' => 'https://images.unsplash.com/photo-1520637836862-4d197d17c30a?w=400',
-        'description' => 'Растение с округлыми листьями на длинных стеблях',
-        'care' => [
-            'lighting' => 'Среднее-яркое',
-            'temperature' => '15-28°C',
-            'ph' => '6.0-8.0',
-            'hardness' => '5-20 dGH',
-            'co2' => 'Не обязательно',
-            'fertilizer' => 'Умеренные подкормки'
-        ],
-        'features' => ['Быстрый рост', 'Неприхотливое', 'Можно выращивать как эмерсно'],
-        'difficulty' => 'Легко'
-    ],
-    [
-        'id' => 52,
-        'name' => 'Стрелолист широколистный',
-        'latin' => 'Sagittaria platyphylla',
-        'category' => 'Розеточные',
-        'price' => 280,
-        'image' => 'https://images.unsplash.com/photo-1583212292454-1fe6229603b7?w=400',
-        'description' => 'Стрелолист с широкими стреловидными листьями',
-        'care' => [
-            'lighting' => 'Среднее-яркое',
-            'temperature' => '20-26°C',
-            'ph' => '6.5-7.5',
-            'hardness' => '8-20 dGH',
-            'co2' => 'Желательно',
-            'fertilizer' => 'Корневые подкормки'
-        ],
-        'features' => ['Красивые стреловидные листья', 'Размножается столонами', 'Может расти над водой'],
-        'difficulty' => 'Средне'
-    ],
-    // ... (добавляем оставшиеся 48 растений для достижения 100)
-];
-
-// Объединяем массивы
-$allPlants = array_merge($aquariumPlants, $additionalPlants);
-
-// Категории растений
-$categories = [
-    'Плавающие растения',
-    'Длинностебельные', 
-    'Розеточные',
-    'Эпифиты',
-    'Мхи',
-    'Почвопокровные',
-    'Клубневые',
-    'Печеночники',
-    'Луковичные'
-];
-
-// Уровни сложности
+// Получаем данные из БД
+$categories = loadCategoriesFromDB($pdo);
 $difficulties = ['Легко', 'Средне', 'Сложно', 'Очень сложно', 'Экстремально сложно'];
 
 // Фильтрация
@@ -1062,43 +173,9 @@ $selectedDifficulty = $_GET['difficulty'] ?? '';
 $searchQuery = $_GET['search'] ?? '';
 $sortBy = $_GET['sort'] ?? 'name';
 
-// Применяем фильтры
-$filteredPlants = $allPlants;
-
-if ($selectedCategory) {
-    $filteredPlants = array_filter($filteredPlants, function($plant) use ($selectedCategory) {
-        return $plant['category'] === $selectedCategory;
-    });
-}
-
-if ($selectedDifficulty) {
-    $filteredPlants = array_filter($filteredPlants, function($plant) use ($selectedDifficulty) {
-        return $plant['difficulty'] === $selectedDifficulty;
-    });
-}
-
-if ($searchQuery) {
-    $filteredPlants = array_filter($filteredPlants, function($plant) use ($searchQuery) {
-        return stripos($plant['name'], $searchQuery) !== false || 
-               stripos($plant['latin'], $searchQuery) !== false ||
-               stripos($plant['description'], $searchQuery) !== false;
-    });
-}
-
-// Сортировка
-usort($filteredPlants, function($a, $b) use ($sortBy) {
-    switch ($sortBy) {
-        case 'price_asc':
-            return $a['price'] <=> $b['price'];
-        case 'price_desc':
-            return $b['price'] <=> $a['price'];
-        case 'difficulty':
-            $diffOrder = ['Легко' => 1, 'Средне' => 2, 'Сложно' => 3, 'Очень сложно' => 4, 'Экстремально сложно' => 5];
-            return ($diffOrder[$a['difficulty']] ?? 0) <=> ($diffOrder[$b['difficulty']] ?? 0);
-        default:
-            return strcmp($a['name'], $b['name']);
-    }
-});
+// Загружаем отфильтрованные растения
+$filteredPlants = loadPlantsFromDB($pdo, $selectedCategory, $selectedDifficulty, $searchQuery, $sortBy);
+$allPlants = loadPlantsFromDB($pdo); // Для общей статистики
 
 // Пагинация
 $itemsPerPage = 12;
@@ -1114,23 +191,23 @@ $cartTotal = $_SESSION['cart_total'] ?? 0;
 
 ?>
 <!DOCTYPE html>
-<html lang='ru' data-bs-theme="auto">
+<html lang='ru' data-bs-theme='auto'>
 <head>
     <meta charset='UTF-8'>
     <meta name='viewport' content='width=device-width, initial-scale=1.0'>
     <title>АкваСбор - Магазин аквариумных растений №1 в России</title>
-    <meta name='description' content='Купить аквариумные растения с доставкой. Более 100 видов живых растений для аквариума. Профессиональные консультации по содержанию.'>
+    <meta name='description' content='Купить аквариумные растения с доставкой. Более <?= count($allPlants) ?> видов живых растений для аквариума. Профессиональные консультации по содержанию.'>
     <meta name='keywords' content='аквариумные растения, купить растения для аквариума, живые растения, аквариум, растения'>
 
     <!-- Open Graph -->
     <meta property='og:title' content='АкваСбор - Магазин аквариумных растений'>
-    <meta property='og:description' content='100+ видов аквариумных растений с профессиональными советами по содержанию'>
+    <meta property='og:description' content='<?= count($allPlants) ?>+ видов аквариумных растений с профессиональными советами по содержанию'>
     <meta property='og:type' content='website'>
 
     <link href='https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css' rel='stylesheet'>
     <link href='https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.2/font/bootstrap-icons.css' rel='stylesheet'>
     <link href='https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap' rel='stylesheet'>
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/aos@2.3.4/dist/aos.css">
+    <link rel='stylesheet' href='https://cdn.jsdelivr.net/npm/aos@2.3.4/dist/aos.css'>
 
     <style>
         :root {
@@ -1145,7 +222,7 @@ $cartTotal = $_SESSION['cart_total'] ?? 0;
 
         * { font-family: 'Inter', sans-serif; }
 
-        body { 
+        body {
             background: linear-gradient(135deg, #e3f2fd 0%, #f1f8e9 100%);
             line-height: 1.6;
         }
@@ -1170,6 +247,16 @@ $cartTotal = $_SESSION['cart_total'] ?? 0;
             margin-right: 10px;
         }
 
+        /* Алерт для БД */
+        .db-error-alert {
+            background: linear-gradient(45deg, #ff6b6b, #feca57);
+            color: white;
+            border: none;
+            border-radius: 15px;
+            margin-bottom: 2rem;
+            box-shadow: 0 10px 30px rgba(255, 107, 107, 0.3);
+        }
+
         /* Герой секция */
         .hero {
             background: linear-gradient(135deg, var(--water-blue) 0%, var(--plant-green) 100%);
@@ -1184,7 +271,7 @@ $cartTotal = $_SESSION['cart_total'] ?? 0;
             position: absolute;
             width: 200%;
             height: 200%;
-            background: url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%23ffffff' fill-opacity='0.1'%3E%3Cpath d='M30 30c0-11.046-8.954-20-20-20s-20 8.954-20 20 8.954 20 20 20 20-8.954 20-20zM10 30a20 20 0 1 1 40 0 20 20 0 0 1-40 0z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E") repeat;
+            background: url('data:image/svg+xml,%3Csvg width="60" height="60" viewBox="0 0 60 60" xmlns="http://www.w3.org/2000/svg"%3E%3Cg fill="none" fill-rule="evenodd"%3E%3Cg fill="%23ffffff" fill-opacity="0.1"%3E%3Cpath d="M30 30c0-11.046-8.954-20-20-20s-20 8.954-20 20 8.954 20 20 20 20-8.954 20-20zM10 30a20 20 0 1 1 40 0 20 20 0 0 1-40 0z"/%3E%3C/g%3E%3C/g%3E%3C/svg%3E') repeat;
             animation: float 30s linear infinite;
             opacity: 0.3;
         }
@@ -1302,11 +389,11 @@ $cartTotal = $_SESSION['cart_total'] ?? 0;
             text-shadow: none;
         }
 
-        .difficulty-easy { background: rgba(40, 167, 69, 0.9); color: white; }
-        .difficulty-medium { background: rgba(255, 193, 7, 0.9); color: #212529; }
-        .difficulty-hard { background: rgba(220, 53, 69, 0.9); color: white; }
-        .difficulty-very-hard { background: rgba(108, 117, 125, 0.9); color: white; }
-        .difficulty-extreme { background: rgba(52, 58, 64, 0.9); color: white; }
+        .difficulty-easy, .difficulty-легко { background: rgba(40, 167, 69, 0.9); color: white; }
+        .difficulty-medium, .difficulty-средне { background: rgba(255, 193, 7, 0.9); color: #212529; }
+        .difficulty-hard, .difficulty-сложно { background: rgba(220, 53, 69, 0.9); color: white; }
+        .difficulty-very-hard, .difficulty-очень { background: rgba(108, 117, 125, 0.9); color: white; }
+        .difficulty-extreme, .difficulty-экстремально { background: rgba(52, 58, 64, 0.9); color: white; }
 
         .plant-info {
             padding: 1.5rem;
@@ -1533,6 +620,21 @@ $cartTotal = $_SESSION['cart_total'] ?? 0;
             margin-bottom: 0.5rem;
         }
 
+        /* Заглушка для отсутствия товаров */
+        .empty-state {
+            text-align: center;
+            padding: 3rem 1rem;
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 5px 20px rgba(0,0,0,0.05);
+        }
+
+        .empty-state i {
+            font-size: 5rem;
+            color: #e9ecef;
+            margin-bottom: 1rem;
+        }
+
         /* Адаптивность */
         @media (max-width: 768px) {
             .hero {
@@ -1568,28 +670,6 @@ $cartTotal = $_SESSION['cart_total'] ?? 0;
             0% { background-position: -200% 0; }
             100% { background-position: 200% 0; }
         }
-
-        /* Индикаторы качества воды */
-        .water-indicator {
-            display: inline-flex;
-            align-items: center;
-            gap: 0.25rem;
-            font-size: 0.8rem;
-        }
-
-        .water-dot {
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-        }
-
-        .ph-acid { background: #ff6b6b; }
-        .ph-neutral { background: #4ecdc4; }
-        .ph-base { background: #45b7d1; }
-
-        .temp-cold { background: #74b9ff; }
-        .temp-warm { background: #fd79a8; }
-        .temp-hot { background: #e84393; }
     </style>
 </head>
 <body>
@@ -1615,7 +695,7 @@ $cartTotal = $_SESSION['cart_total'] ?? 0;
                         </a>
                         <ul class='dropdown-menu'>
                             <?php foreach ($categories as $cat): ?>
-                            <li><a class='dropdown-item' href='?category=<?= urlencode($cat) ?>'><?= $cat ?></a></li>
+                            <li><a class='dropdown-item' href='?category=<?= urlencode($cat) ?>'><?= htmlspecialchars($cat) ?></a></li>
                             <?php endforeach; ?>
                         </ul>
                     </li>
@@ -1629,10 +709,17 @@ $cartTotal = $_SESSION['cart_total'] ?? 0;
                             <i class='bi bi-telephone me-1'></i>Контакты
                         </a>
                     </li>
-                    <?php if (!empty($allModules)): ?>
+                    <?php if (!empty($allModules) || file_exists('admin/index.php')): ?>
                     <li class='nav-item'>
                         <a class='nav-link fw-semibold' href='admin/'>
                             <i class='bi bi-gear me-1'></i>Админка
+                        </a>
+                    </li>
+                    <?php endif; ?>
+                    <?php if (file_exists('migrate.php')): ?>
+                    <li class='nav-item'>
+                        <a class='nav-link fw-semibold text-warning' href='migrate.php'>
+                            <i class='bi bi-database-gear me-1'></i>Миграция
                         </a>
                     </li>
                     <?php endif; ?>
@@ -1655,15 +742,43 @@ $cartTotal = $_SESSION['cart_total'] ?? 0;
         </div>
     </nav>
 
+    <!-- Алерт для ошибки БД -->
+    <?php if ($dbError): ?>
+    <div class='container mt-5 pt-5'>
+        <div class='alert db-error-alert' role='alert'>
+            <div class='d-flex align-items-center'>
+                <i class='bi bi-exclamation-triangle-fill fs-2 me-3'></i>
+                <div class='flex-grow-1'>
+                    <h4 class='alert-heading mb-2'>🔧 База данных недоступна</h4>
+                    <p class='mb-3'><?= htmlspecialchars($dbError) ?></p>
+                    <div class='d-flex gap-2 flex-wrap'>
+                        <?php if (file_exists('migrate.php')): ?>
+                        <a href='migrate.php' class='btn btn-light btn-sm'>
+                            <i class='bi bi-database-gear me-1'></i>Выполнить миграцию
+                        </a>
+                        <?php endif; ?>
+                        <a href='admin/' class='btn btn-outline-light btn-sm'>
+                            <i class='bi bi-gear me-1'></i>Настройки БД
+                        </a>
+                        <button class='btn btn-outline-light btn-sm' onclick='location.reload()'>
+                            <i class='bi bi-arrow-repeat me-1'></i>Обновить
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <?php endif; ?>
+
     <!-- Герой секция -->
     <section class='hero text-center'>
         <div class='container'>
-            <div data-aos="fade-up" data-aos-duration="1000">
+            <div data-aos='fade-up' data-aos-duration='1000'>
                 <h1 class='display-3 fw-bold mb-4'>
                     🌱 АкваСбор - Мир аквариумных растений
                 </h1>
                 <p class='lead fs-4 mb-5'>
-                    Более 100 видов живых растений для вашего аквариума<br>
+                    <?= $pdo ? count($allPlants) . '+ видов живых растений для вашего аквариума' : 'Подключите базу данных для просмотра каталога' ?><br>
                     с профессиональными советами по содержанию
                 </p>
                 <div class='d-flex flex-wrap justify-content-center gap-3'>
@@ -1680,7 +795,7 @@ $cartTotal = $_SESSION['cart_total'] ?? 0;
 
     <!-- Статистика -->
     <section class='container'>
-        <div class='stats-section' data-aos="fade-up" data-aos-delay="200">
+        <div class='stats-section' data-aos='fade-up' data-aos-delay='200'>
             <div class='row'>
                 <div class='col-6 col-md-3'>
                     <div class='stat-item'>
@@ -1713,7 +828,7 @@ $cartTotal = $_SESSION['cart_total'] ?? 0;
     <!-- Каталог -->
     <section class='container mt-5' id='catalog'>
         <!-- Фильтры -->
-        <div class='filters-section' data-aos="fade-up">
+        <div class='filters-section' data-aos='fade-up'>
             <div class='row align-items-center'>
                 <div class='col-md-6'>
                     <h3 class='fw-bold mb-3 mb-md-0'>
@@ -1749,78 +864,110 @@ $cartTotal = $_SESSION['cart_total'] ?? 0;
             </div>
 
             <!-- Фильтры по категориям -->
+            <?php if (!empty($categories)): ?>
             <div class='mt-3'>
                 <label class='fw-semibold mb-2'>Категории:</label><br>
                 <a href='?' class='filter-btn <?= !$selectedCategory ? 'active' : '' ?>'>Все</a>
                 <?php foreach ($categories as $cat): ?>
-                <a href='?category=<?= urlencode($cat) ?>' class='filter-btn <?= $selectedCategory === $cat ? 'active' : '' ?>'><?= $cat ?></a>
+                <a href='?category=<?= urlencode($cat) ?>' class='filter-btn <?= $selectedCategory === $cat ? 'active' : '' ?>'><?= htmlspecialchars($cat) ?></a>
                 <?php endforeach; ?>
             </div>
+            <?php endif; ?>
 
             <!-- Фильтры по сложности -->
             <div class='mt-3'>
                 <label class='fw-semibold mb-2'>Сложность содержания:</label><br>
                 <a href='?' class='filter-btn <?= !$selectedDifficulty ? 'active' : '' ?>'>Любая</a>
                 <?php foreach ($difficulties as $diff): ?>
-                <a href='?difficulty=<?= urlencode($diff) ?>' class='filter-btn <?= $selectedDifficulty === $diff ? 'active' : '' ?>'><?= $diff ?></a>
+                <a href='?difficulty=<?= urlencode($diff) ?>' class='filter-btn <?= $selectedDifficulty === $diff ? 'active' : '' ?>'><?= htmlspecialchars($diff) ?></a>
                 <?php endforeach; ?>
             </div>
         </div>
 
         <!-- Растения -->
+        <?php if (empty($currentPlants)): ?>
+        <div class='empty-state' data-aos='fade-up'>
+            <i class='bi bi-search'></i>
+            <h4 class='text-muted'>Растения не найдены</h4>
+            <p class='text-muted mb-4'>
+                <?php if (!$pdo): ?>
+                    Для просмотра каталога необходимо настроить подключение к базе данных
+                <?php elseif ($searchQuery || $selectedCategory || $selectedDifficulty): ?>
+                    По вашим критериям поиска растений не найдено. Попробуйте изменить фильтры
+                <?php else: ?>
+                    В каталоге пока нет растений. Выполните миграцию данных
+                <?php endif; ?>
+            </p>
+            <div class='d-flex gap-2 justify-content-center flex-wrap'>
+                <?php if ($searchQuery || $selectedCategory || $selectedDifficulty): ?>
+                <a href='?' class='btn btn-primary'>
+                    <i class='bi bi-arrow-counterclockwise me-1'></i>Сбросить фильтры
+                </a>
+                <?php endif; ?>
+                <?php if (file_exists('migrate.php') && !$pdo): ?>
+                <a href='migrate.php' class='btn btn-success'>
+                    <i class='bi bi-database-gear me-1'></i>Выполнить миграцию
+                </a>
+                <?php endif; ?>
+            </div>
+        </div>
+        <?php else: ?>
         <div class='row g-4' id='plantsGrid'>
             <?php foreach ($currentPlants as $index => $plant): ?>
-            <div class='col-lg-4 col-md-6' data-aos="fade-up" data-aos-delay="<?= $index * 100 ?>">
+            <div class='col-lg-4 col-md-6' data-aos='fade-up' data-aos-delay='<?= $index * 100 ?>'>
                 <div class='plant-card' data-plant-id='<?= $plant['id'] ?>'>
-                    <div class='plant-image' style='background-image: url("<?= $plant['image'] ?>")'>
+                    <div class='plant-image' style='background-image: url("<?= htmlspecialchars($plant['image'] ?? $plant['main_image']) ?>")'>
                         <?php
-                        $diffClass = '';
-                        switch ($plant['difficulty']) {
-                            case 'Легко': $diffClass = 'difficulty-easy'; break;
-                            case 'Средне': $diffClass = 'difficulty-medium'; break;
-                            case 'Сложно': $diffClass = 'difficulty-hard'; break;
-                            case 'Очень сложно': $diffClass = 'difficulty-very-hard'; break;
-                            case 'Экстремально сложно': $diffClass = 'difficulty-extreme'; break;
-                        }
+                        $diffClass = 'difficulty-' . strtolower(str_replace([' ', 'ё'], ['', 'е'], $plant['difficulty']));
                         ?>
-                        <div class='difficulty-badge <?= $diffClass ?>'><?= $plant['difficulty'] ?></div>
+                        <div class='difficulty-badge <?= $diffClass ?>'><?= htmlspecialchars($plant['difficulty'] ?? 'Н/Д') ?></div>
                     </div>
 
                     <div class='plant-info'>
                         <h5 class='plant-title'><?= htmlspecialchars($plant['name']) ?></h5>
-                        <p class='plant-latin'><?= htmlspecialchars($plant['latin']) ?></p>
-                        <span class='plant-category'><?= $plant['category'] ?></span>
+                        <p class='plant-latin'><?= htmlspecialchars($plant['latin'] ?? $plant['latin_name'] ?? '') ?></p>
+                        <span class='plant-category'><?= htmlspecialchars($plant['category'] ?? 'Без категории') ?></span>
 
-                        <p class='plant-description'><?= htmlspecialchars($plant['description']) ?></p>
+                        <p class='plant-description'><?= htmlspecialchars($plant['description'] ?? '') ?></p>
 
                         <!-- Краткая информация по уходу -->
+                        <?php if (!empty($plant['care'])): ?>
                         <div class='care-info'>
+                            <?php if (isset($plant['care']['lighting'])): ?>
                             <div class='care-item'>
                                 <span class='care-label'>
                                     <i class='bi bi-lightbulb'></i> Освещение:
                                 </span>
-                                <span class='care-value'><?= $plant['care']['lighting'] ?></span>
+                                <span class='care-value'><?= htmlspecialchars($plant['care']['lighting']) ?></span>
                             </div>
+                            <?php endif; ?>
+                            <?php if (isset($plant['care']['temperature'])): ?>
                             <div class='care-item'>
                                 <span class='care-label'>
                                     <i class='bi bi-thermometer-half'></i> Температура:
                                 </span>
-                                <span class='care-value'><?= $plant['care']['temperature'] ?></span>
+                                <span class='care-value'><?= htmlspecialchars($plant['care']['temperature']) ?></span>
                             </div>
+                            <?php endif; ?>
+                            <?php if (isset($plant['care']['ph'])): ?>
                             <div class='care-item'>
                                 <span class='care-label'>
                                     <i class='bi bi-droplet'></i> pH:
                                 </span>
-                                <span class='care-value'><?= $plant['care']['ph'] ?></span>
+                                <span class='care-value'><?= htmlspecialchars($plant['care']['ph']) ?></span>
                             </div>
+                            <?php endif; ?>
                         </div>
+                        <?php endif; ?>
 
                         <!-- Особенности -->
+                        <?php if (!empty($plant['features'])): ?>
                         <div class='features-list'>
                             <?php foreach (array_slice($plant['features'], 0, 3) as $feature): ?>
                             <span class='feature-tag'><?= htmlspecialchars($feature) ?></span>
                             <?php endforeach; ?>
                         </div>
+                        <?php endif; ?>
 
                         <!-- Цена и корзина -->
                         <div class='price-section'>
@@ -1841,6 +988,7 @@ $cartTotal = $_SESSION['cart_total'] ?? 0;
             </div>
             <?php endforeach; ?>
         </div>
+        <?php endif; ?>
 
         <!-- Пагинация -->
         <?php if ($totalPages > 1): ?>
@@ -1879,13 +1027,12 @@ $cartTotal = $_SESSION['cart_total'] ?? 0;
         </button>
         <div class='cart-content'>
             <h5 class='fw-bold mb-3'>
-                <i class='bi bi-cart3 me-2'></i>Корзина
-            </h5>
-            <div id='cartItems'></div>
-            <div class='cart-total mt-3 pt-3 border-top'>
-                <div class='d-flex justify-content-between fw-bold'>
-                    <span>Итого:</span>
-                    <span id='cartTotal'><?= number_format($cartTotal, 0, '.', ' ') ?> ₽</span>
+               <li class='nav-item'>
+    <a class='nav-link fw-semibold' href='cart.php'>
+        <i class='bi bi-cart3 me-1'></i>Корзина
+        <span class='badge bg-danger ms-1' id='cartBadge'>0</span>
+    </a>
+</li>
                 </div>
                 <button class='btn btn-success w-100 mt-3' onclick='checkout()'>
                     <i class='bi bi-credit-card me-1'></i>Оформить заказ
@@ -1941,23 +1088,23 @@ $cartTotal = $_SESSION['cart_total'] ?? 0;
     <!-- О компании -->
     <section class='py-5 mt-5' id='about' style='background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white;'>
         <div class='container'>
-            <div class='text-center mb-5' data-aos="fade-up">
+            <div class='text-center mb-5' data-aos='fade-up'>
                 <h2 class='display-5 fw-bold mb-3'>Почему выбирают АкваСбор?</h2>
                 <p class='lead'>Мы — эксперты в области аквариумных растений</p>
             </div>
 
             <div class='row g-4'>
-                <div class='col-md-4 text-center' data-aos="fade-up" data-aos-delay="100">
+                <div class='col-md-4 text-center' data-aos='fade-up' data-aos-delay='100'>
                     <i class='bi bi-award display-4 mb-4'></i>
                     <h5 class='fw-bold mb-3'>Высокое качество</h5>
                     <p class='opacity-90'>Только здоровые растения от проверенных поставщиков. Каждое растение проходит карантин.</p>
                 </div>
-                <div class='col-md-4 text-center' data-aos="fade-up" data-aos-delay="200">
+                <div class='col-md-4 text-center' data-aos='fade-up' data-aos-delay='200'>
                     <i class='bi bi-people display-4 mb-4'></i>
                     <h5 class='fw-bold mb-3'>Экспертные консультации</h5>
                     <p class='opacity-90'>Наши специалисты помогут подобрать растения под ваши условия и опыт.</p>
                 </div>
-                <div class='col-md-4 text-center' data-aos="fade-up" data-aos-delay="300">
+                <div class='col-md-4 text-center' data-aos='fade-up' data-aos-delay='300'>
                     <i class='bi bi-truck display-4 mb-4'></i>
                     <h5 class='fw-bold mb-3'>Бережная доставка</h5>
                     <p class='opacity-90'>Специальная упаковка и быстрая доставка сохранят растения в идеальном состоянии.</p>
@@ -1970,7 +1117,7 @@ $cartTotal = $_SESSION['cart_total'] ?? 0;
     <section class='py-5' id='contacts'>
         <div class='container'>
             <div class='row align-items-center'>
-                <div class='col-md-6' data-aos="fade-right">
+                <div class='col-md-6' data-aos='fade-right'>
                     <h2 class='fw-bold mb-4'>Свяжитесь с нами</h2>
                     <div class='mb-3'>
                         <i class='bi bi-geo-alt text-primary fs-5 me-3'></i>
@@ -1999,7 +1146,7 @@ $cartTotal = $_SESSION['cart_total'] ?? 0;
                         </div>
                     </div>
                 </div>
-                <div class='col-md-6' data-aos="fade-left">
+                <div class='col-md-6' data-aos='fade-left'>
                     <div class='bg-light p-4 rounded'>
                         <h5 class='fw-bold mb-3'>Есть вопросы? Напишите нам!</h5>
                         <form>
@@ -2041,7 +1188,7 @@ $cartTotal = $_SESSION['cart_total'] ?? 0;
                     <h5 class='fw-bold mb-3'>Каталог</h5>
                     <ul class='list-unstyled'>
                         <?php foreach (array_slice($categories, 0, 6) as $cat): ?>
-                        <li><a href='?category=<?= urlencode($cat) ?>' class='text-white-50 text-decoration-none'><?= $cat ?></a></li>
+                        <li><a href='?category=<?= urlencode($cat) ?>' class='text-white-50 text-decoration-none'><?= htmlspecialchars($cat) ?></a></li>
                         <?php endforeach; ?>
                     </ul>
                 </div>
@@ -2059,18 +1206,25 @@ $cartTotal = $_SESSION['cart_total'] ?? 0;
                     <p class='mb-0'>&copy; <?= date('Y') ?> АкваСбор. Все права защищены.</p>
                 </div>
                 <div class='col-md-6 text-md-end'>
-                    <small class='text-white-50'>Растений в каталоге: <?= count($allPlants) ?></small>
+                    <small class='text-white-50'>
+                        <?php if ($pdo): ?>
+                            Растений в каталоге: <?= count($allPlants) ?>
+                        <?php else: ?>
+                            Статус БД: <span class='text-danger'>Недоступна</span>
+                        <?php endif; ?>
+                    </small>
                 </div>
             </div>
         </div>
     </footer>
 
     <script src='https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js'></script>
-    <script src="https://cdn.jsdelivr.net/npm/aos@2.3.4/dist/aos.js"></script>
+    <script src='https://cdn.jsdelivr.net/npm/aos@2.3.4/dist/aos.js'></script>
 
     <script>
         // Данные растений для JS
         const plantsData = <?= json_encode($allPlants) ?>;
+        const dbConnected = <?= $pdo ? 'true' : 'false' ?>;
         let cart = JSON.parse(localStorage.getItem('aqua_cart')) || [];
 
         // Инициализация
@@ -2089,6 +1243,14 @@ $cartTotal = $_SESSION['cart_total'] ?? 0;
                 document.documentElement.setAttribute('data-bs-theme', savedTheme);
                 document.getElementById('themeIcon').className = savedTheme === 'dark' ? 'bi bi-sun' : 'bi bi-moon';
             }
+
+            // Показываем статус БД в консоли
+            console.log(`
+🌱 АкваСбор - Магазин аквариумных растений
+📊 База данных: ${dbConnected ? 'Подключена' : 'Недоступна'}
+📦 В каталоге: ${plantsData.length} растений
+🛒 В корзине: ${cart.length} товаров
+            `);
         });
 
         // Переключение темы
@@ -2115,10 +1277,13 @@ $cartTotal = $_SESSION['cart_total'] ?? 0;
         }
 
         function addToCart(plantId) {
-            const plant = plantsData.find(p => p.id === plantId);
-            if (!plant) return;
+            const plant = plantsData.find(p => p.id == plantId);
+            if (!plant) {
+                showNotification('Растение не найдено!', 'error');
+                return;
+            }
 
-            const existingItem = cart.find(item => item.id === plantId);
+            const existingItem = cart.find(item => item.id == plantId);
             if (existingItem) {
                 existingItem.quantity += 1;
             } else {
@@ -2126,7 +1291,7 @@ $cartTotal = $_SESSION['cart_total'] ?? 0;
                     id: plantId,
                     name: plant.name,
                     price: plant.price,
-                    image: plant.image,
+                    image: plant.image || plant.main_image,
                     quantity: 1
                 });
             }
@@ -2168,7 +1333,7 @@ $cartTotal = $_SESSION['cart_total'] ?? 0;
         }
 
         function removeFromCart(plantId) {
-            cart = cart.filter(item => item.id !== plantId);
+            cart = cart.filter(item => item.id != plantId);
             localStorage.setItem('aqua_cart', JSON.stringify(cart));
             updateCartDisplay();
         }
@@ -2184,55 +1349,57 @@ $cartTotal = $_SESSION['cart_total'] ?? 0;
 
         // Показ деталей растения
         function showPlantDetails(plantId) {
-            const plant = plantsData.find(p => p.id === plantId);
+            const plant = plantsData.find(p => p.id == plantId);
             if (!plant) return;
 
             document.getElementById('modalPlantName').textContent = plant.name;
-            document.getElementById('modalPlantLatin').textContent = plant.latin;
-            document.getElementById('modalPlantImage').src = plant.image;
-            document.getElementById('modalPlantCategory').textContent = plant.category;
-            document.getElementById('modalPlantDifficulty').textContent = plant.difficulty;
-            document.getElementById('modalPlantDescription').textContent = plant.description;
+            document.getElementById('modalPlantLatin').textContent = plant.latin || plant.latin_name || '';
+            document.getElementById('modalPlantImage').src = plant.image || plant.main_image || '';
+            document.getElementById('modalPlantCategory').textContent = plant.category || '';
+            document.getElementById('modalPlantDifficulty').textContent = plant.difficulty || '';
+            document.getElementById('modalPlantDescription').textContent = plant.description || '';
             document.getElementById('modalPlantPrice').textContent = plant.price.toLocaleString() + ' ₽';
 
             // Особенности
-            const featuresHtml = plant.features.map(feature => 
+            const features = plant.features || [];
+            const featuresHtml = features.map(feature =>
                 `<span class="feature-tag">${feature}</span>`
             ).join('');
             document.getElementById('modalPlantFeatures').innerHTML = featuresHtml;
 
             // Уход
+            const care = plant.care || {};
             const careGrid = document.getElementById('modalCareGrid');
             careGrid.innerHTML = `
                 <div class="care-card">
                     <div class="care-icon"><i class="bi bi-lightbulb"></i></div>
                     <h6>Освещение</h6>
-                    <p>${plant.care.lighting}</p>
+                    <p>${care.lighting || 'Н/Д'}</p>
                 </div>
                 <div class="care-card">
                     <div class="care-icon"><i class="bi bi-thermometer-half"></i></div>
                     <h6>Температура</h6>
-                    <p>${plant.care.temperature}</p>
+                    <p>${care.temperature || 'Н/Д'}</p>
                 </div>
                 <div class="care-card">
                     <div class="care-icon"><i class="bi bi-droplet"></i></div>
                     <h6>pH</h6>
-                    <p>${plant.care.ph}</p>
+                    <p>${care.ph || 'Н/Д'}</p>
                 </div>
                 <div class="care-card">
                     <div class="care-icon"><i class="bi bi-water"></i></div>
                     <h6>Жесткость</h6>
-                    <p>${plant.care.hardness}</p>
+                    <p>${care.hardness || 'Н/Д'}</p>
                 </div>
                 <div class="care-card">
                     <div class="care-icon"><i class="bi bi-cloud"></i></div>
                     <h6>CO₂</h6>
-                    <p>${plant.care.co2}</p>
+                    <p>${care.co2 || 'Н/Д'}</p>
                 </div>
                 <div class="care-card">
                     <div class="care-icon"><i class="bi bi-egg-fried"></i></div>
                     <h6>Удобрения</h6>
-                    <p>${plant.care.fertilizer}</p>
+                    <p>${care.fertilizer || 'Н/Д'}</p>
                 </div>
             `;
 
@@ -2262,7 +1429,7 @@ $cartTotal = $_SESSION['cart_total'] ?? 0;
         }
 
         // Поиск на Enter
-        document.getElementById('searchInput').addEventListener('keypress', function(e) {
+        document.getElementById('searchInput')?.addEventListener('keypress', function(e) {
             if (e.key === 'Enter') {
                 updateSearch();
             }
@@ -2272,9 +1439,20 @@ $cartTotal = $_SESSION['cart_total'] ?? 0;
         function showNotification(message, type = 'success') {
             const notification = document.createElement('div');
             notification.className = `alert alert-${type} alert-dismissible fade show position-fixed`;
-            notification.style.cssText = 'top: 20px; right: 20px; z-index: 9999; max-width: 400px;';
+            notification.style.cssText = 'top: 90px; right: 20px; z-index: 9999; max-width: 400px;';
+
+            const icons = {
+                'success': 'bi-check-circle',
+                'error': 'bi-exclamation-triangle', 
+                'warning': 'bi-exclamation-triangle',
+                'info': 'bi-info-circle'
+            };
+
             notification.innerHTML = `
-                ${message}
+                <div class="d-flex align-items-center">
+                    <i class="${icons[type] || 'bi-info-circle'} me-2"></i>
+                    ${message}
+                </div>
                 <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
             `;
 
@@ -2300,12 +1478,8 @@ $cartTotal = $_SESSION['cart_total'] ?? 0;
                 }
             });
         });
-
-        console.log(`
-        🌱 АкваСбор - Магазин аквариумных растений
-        📊 В каталоге: ${plantsData.length} растений
-        🛒 В корзине: ${cart.length} товаров
-        `);
     </script>
+    <!-- Интеграция МЕГА корзины -->
+<script src="cart-integration.js"></script>
 </body>
 </html>
