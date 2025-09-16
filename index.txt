@@ -1,748 +1,644 @@
 <?php
-require_once 'includes/db.php';
+session_start();
+require_once 'functions.php';
 
-// Получаем популярные товары (случайные активные)
-$stmt = $pdo->query("
-    SELECT p.*, c.name as category_name 
-    FROM products p 
-    LEFT JOIN categories c ON p.category_id = c.id 
-    WHERE p.status = 1 
-    ORDER BY RAND() 
-    LIMIT 8
-");
-$featured_products = $stmt->fetchAll();
+error_log('=== НАЧАЛО РАБОТЫ INDEX.PHP ===');
 
-// Получаем категории с количеством товаров
-$stmt = $pdo->query("
-    SELECT c.*, COUNT(p.id) as products_count 
-    FROM categories c 
-    LEFT JOIN products p ON c.id = p.category_id AND p.status = 1 
-    GROUP BY c.id, c.name 
-    ORDER BY products_count DESC, c.name
-");
-$categories = $stmt->fetchAll();
+// Обработка AJAX запросов
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
+    header('Content-Type: application/json; charset=utf-8');
 
-// Получаем общую статистику
-$stmt = $pdo->query("SELECT COUNT(*) FROM products WHERE status = 1");
-$total_products = $stmt->fetchColumn();
+    try {
+        switch ($_POST['action']) {
+            case 'add_to_cart':
+                $productId = (int)($_POST['product_id'] ?? 0);
+                $quantity = (int)($_POST['quantity'] ?? 1);
 
-$stmt = $pdo->query("SELECT COUNT(*) FROM categories");
-$total_categories = $stmt->fetchColumn();
+                if ($productId > 0 && $quantity > 0) {
+                    $result = addToCart($productId, $quantity);
+                    if ($result) {
+                        $cartCount = getCartCount();
+                        echo json_encode([
+                            'success' => true,
+                            'cartCount' => $cartCount,
+                            'message' => 'Товар добавлен в корзину!'
+                        ]);
+                    } else {
+                        echo json_encode([
+                            'success' => false,
+                            'message' => 'Не удалось добавить товар в корзину'
+                        ]);
+                    }
+                } else {
+                    echo json_encode([
+                        'success' => false,
+                        'message' => 'Некорректные параметры товара'
+                    ]);
+                }
+                break;
+
+            case 'get_cart_content':
+                $cartData = getCartItems();
+                ob_start();
+                if (empty($cartData['items'])): ?>
+                    <div class="text-center py-4">
+                        <i class="fas fa-shopping-cart fa-3x text-muted mb-3"></i>
+                        <h5>Корзина пуста</h5>
+                        <p class="text-muted">Добавьте товары в корзину для оформления заказа</p>
+                    </div>
+                <?php else: ?>
+                    <div class="cart-items">
+                        <?php foreach ($cartData['items'] as $item): ?>
+                            <div class="cart-item d-flex align-items-center border-bottom py-3">
+                                <div class="item-image me-3">
+                                    <div class="bg-light d-flex align-items-center justify-content-center" style="width: 60px; height: 60px; border-radius: 8px;">
+                                        <i class="fas fa-fish text-muted"></i>
+                                    </div>
+                                </div>
+                                <div class="item-info flex-grow-1">
+                                    <h6 class="mb-1"><?= htmlspecialchars($item['name']) ?></h6>
+                                    <p class="text-muted small mb-0"><?= formatPrice($item['price']) ?> × <?= $item['quantity'] ?></p>
+                                </div>
+                                <div class="item-controls d-flex align-items-center">
+                                    <button class="btn btn-outline-secondary btn-sm me-2" onclick="updateCartQuantity(<?= $item['id'] ?>, <?= $item['quantity'] - 1 ?>)">
+                                        <i class="fas fa-minus"></i>
+                                    </button>
+                                    <span class="mx-2"><?= $item['quantity'] ?></span>
+                                    <button class="btn btn-outline-secondary btn-sm me-3" onclick="updateCartQuantity(<?= $item['id'] ?>, <?= $item['quantity'] + 1 ?>)">
+                                        <i class="fas fa-plus"></i>
+                                    </button>
+                                    <strong><?= formatPrice($item['subtotal']) ?></strong>
+                                </div>
+                            </div>
+                        <?php endforeach; ?>
+                        <div class="cart-total mt-3 pt-3 border-top">
+                            <div class="d-flex justify-content-between align-items-center">
+                                <h5 class="mb-0">Итого:</h5>
+                                <h4 class="mb-0 text-success"><?= formatPrice($cartData['total']) ?></h4>
+                            </div>
+                        </div>
+                    </div>
+                <?php endif;
+                $content = ob_get_clean();
+                echo json_encode(['success' => true, 'content' => $content]);
+                break;
+
+            case 'update_cart_item':
+                $productId = (int)($_POST['product_id'] ?? 0);
+                $quantity = (int)($_POST['quantity'] ?? 0);
+                $result = updateCartItem($productId, $quantity);
+                echo json_encode([
+                    'success' => $result,
+                    'cartCount' => getCartCount(),
+                    'message' => $result ? 'Корзина обновлена' : 'Ошибка обновления'
+                ]);
+                break;
+
+            case 'remove_from_cart':
+                $productId = (int)($_POST['product_id'] ?? 0);
+                $result = removeFromCart($productId);
+                echo json_encode([
+                    'success' => $result,
+                    'cartCount' => getCartCount(),
+                    'message' => $result ? 'Товар удален из корзины' : 'Ошибка удаления'
+                ]);
+                break;
+        }
+    } catch (Exception $e) {
+        echo json_encode(['success' => false, 'message' => 'Внутренняя ошибка сервера']);
+    }
+    exit;
+}
+
+if (isset($_GET['action'])) {
+    switch ($_GET['action']) {
+        case 'get_product':
+            header('Content-Type: application/json; charset=utf-8');
+            $id = (int)($_GET['id'] ?? 0);
+            $product = getProductById($id);
+            if ($product) {
+                echo json_encode($product);
+            } else {
+                echo json_encode(['error' => 'Товар не найден']);
+            }
+            exit;
+    }
+}
+
+try {
+    $featuredProducts = getFeaturedProducts(12);
+    $categories = getCategoriesWithCount();
+    $cartCount = getCartCount();
+} catch (Exception $e) {
+    $featuredProducts = [];
+    $categories = [];
+    $cartCount = 0;
+}
 ?>
-
 <!DOCTYPE html>
-<html lang="ru">
+<html lang='ru'>
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>🌱 Аквариумные растения - Лучший интернет-магазин водных растений</title>
-    <meta name="description" content="Большой выбор аквариумных растений ✅ <?= $total_products ?> видов ✅ 9 категорий ✅ Доставка по всей России">
+    <meta charset='UTF-8'>
+    <meta name='viewport' content='width=device-width, initial-scale=1.0'>
+    <title>АкваСбор - Аквариумы и их обитатели</title>
+
+    <link href='https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css' rel='stylesheet'>
+    <link href='https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css' rel='stylesheet'>
+    <link href='https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap' rel='stylesheet'>
 
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-
-        body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            line-height: 1.6;
-            color: #333;
-            background: #f8f9fa;
-        }
-
-        .container {
-            max-width: 1200px;
-            margin: 0 auto;
-            padding: 0 20px;
-        }
-
-        /* HEADER */
-        .header {
-            background: linear-gradient(135deg, #2c5530 0%, #4a7c59 100%);
-            color: white;
-            padding: 60px 0;
-            text-align: center;
-            position: relative;
-            overflow: hidden;
-        }
-
-        .header::before {
-            content: '';
-            position: absolute;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><defs><pattern id="plant" patternUnits="userSpaceOnUse" width="20" height="20"><circle cx="10" cy="10" r="2" fill="rgba(255,255,255,0.1)"/></pattern></defs><rect width="100" height="100" fill="url(%23plant)"/></svg>');
-            opacity: 0.3;
-        }
-
-        .header-content {
-            position: relative;
-            z-index: 2;
-        }
-
-        .header h1 {
-            font-size: 3.5em;
-            margin-bottom: 15px;
-            font-weight: 700;
-            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
-        }
-
-        .header .subtitle {
-            font-size: 1.4em;
-            margin-bottom: 30px;
-            opacity: 0.9;
-        }
-
-        .header .stats {
-            display: flex;
-            justify-content: center;
-            gap: 40px;
-            margin-top: 30px;
-        }
-
-        .header .stat {
-            text-align: center;
-        }
-
-        .header .stat-number {
-            font-size: 2.5em;
-            font-weight: bold;
-            display: block;
-        }
-
-        .header .stat-label {
-            opacity: 0.8;
-            font-size: 0.9em;
-        }
-
-        /* NAVIGATION */
-        .nav {
-            background: white;
-            padding: 20px 0;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-            position: sticky;
-            top: 0;
-            z-index: 100;
-        }
-
-        .nav-container {
-            display: flex;
-            justify-content: center;
-            gap: 30px;
-            flex-wrap: wrap;
-        }
-
-        .nav a {
-            color: #2c5530;
-            text-decoration: none;
-            font-weight: 600;
-            padding: 12px 24px;
-            border: 2px solid #2c5530;
-            border-radius: 30px;
-            transition: all 0.3s ease;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-
-        .nav a:hover {
-            background: #2c5530;
-            color: white;
-            transform: translateY(-2px);
-            box-shadow: 0 4px 15px rgba(44, 85, 48, 0.3);
-        }
-
-        /* CATEGORIES SECTION */
-        .categories {
-            padding: 80px 0;
-        }
-
-        .section-title {
-            text-align: center;
-            font-size: 2.5em;
-            color: #2c5530;
-            margin-bottom: 20px;
-            font-weight: 700;
-        }
-
-        .section-subtitle {
-            text-align: center;
-            color: #666;
-            margin-bottom: 50px;
-            font-size: 1.1em;
-        }
-
-        .categories-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-            gap: 30px;
-        }
-
-        .category-card {
-            background: white;
-            border-radius: 15px;
-            padding: 30px 20px;
-            text-align: center;
-            transition: all 0.3s ease;
-            box-shadow: 0 5px 15px rgba(0,0,0,0.08);
-            position: relative;
-            overflow: hidden;
-        }
-
-        .category-card::before {
-            content: '';
-            position: absolute;
-            top: 0;
-            left: 0;
-            right: 0;
-            height: 4px;
-            background: linear-gradient(90deg, #27ae60, #2c5530);
-            transform: scaleX(0);
-            transition: transform 0.3s ease;
-        }
-
-        .category-card:hover {
-            transform: translateY(-8px);
-            box-shadow: 0 15px 30px rgba(0,0,0,0.15);
-        }
-
-        .category-card:hover::before {
-            transform: scaleX(1);
-        }
-
-        .category-card .icon {
-            font-size: 3em;
-            margin-bottom: 15px;
-            display: block;
-        }
-
-        .category-card a {
-            color: #2c5530;
-            text-decoration: none;
-            font-weight: 600;
-            font-size: 1.1em;
-        }
-
-        .category-card .count {
-            color: #27ae60;
-            font-weight: bold;
-            margin-top: 10px;
-            font-size: 0.9em;
-        }
-
-        /* FEATURED PRODUCTS */
-        .featured {
-            padding: 80px 0;
-            background: white;
-        }
-
-        .products-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-            gap: 30px;
-        }
-
-        .product-card {
-            background: white;
-            border-radius: 15px;
-            overflow: hidden;
-            transition: all 0.3s ease;
-            box-shadow: 0 5px 15px rgba(0,0,0,0.08);
-            position: relative;
-        }
-
-        .product-card:hover {
-            transform: translateY(-8px);
-            box-shadow: 0 15px 35px rgba(0,0,0,0.15);
-        }
-
-        .product-image {
-            width: 100%;
-            height: 220px;
-            object-fit: cover;
-            transition: transform 0.3s ease;
-        }
-
-        .product-card:hover .product-image {
-            transform: scale(1.05);
-        }
-
-        .product-info {
-            padding: 25px;
-        }
-
-        .product-name {
-            font-size: 1.3em;
-            font-weight: 600;
-            margin-bottom: 8px;
-            color: #2c5530;
-            line-height: 1.3;
-        }
-
-        .product-latin {
-            font-style: italic;
-            color: #777;
-            margin-bottom: 12px;
-            font-size: 0.95em;
-        }
-
-        .product-category {
-            background: linear-gradient(45deg, #e8f5e8, #d4f1d4);
-            color: #2c5530;
-            padding: 6px 12px;
-            border-radius: 20px;
-            font-size: 0.85em;
-            font-weight: 500;
-            display: inline-block;
-            margin-bottom: 15px;
-        }
-
-        .product-price {
-            font-size: 1.6em;
-            font-weight: 700;
-            color: #27ae60;
-            margin-bottom: 15px;
-        }
-
-        .product-difficulty {
-            padding: 4px 12px;
-            border-radius: 15px;
-            font-size: 0.8em;
-            font-weight: 500;
-            color: white;
-            display: inline-block;
-            margin-bottom: 15px;
-        }
-
-        .difficulty-easy { background: #27ae60; }
-        .difficulty-medium { background: #f39c12; }
-        .difficulty-hard { background: #e74c3c; }
-
-        .btn {
-            display: inline-block;
-            padding: 12px 25px;
-            background: linear-gradient(45deg, #27ae60, #2c5530);
-            color: white;
-            text-decoration: none;
-            border-radius: 25px;
-            font-weight: 600;
-            transition: all 0.3s ease;
-            text-align: center;
-        }
-
-        .btn:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 5px 15px rgba(39, 174, 96, 0.4);
-        }
-
-        /* STATS SECTION */
-        .stats-section {
-            background: linear-gradient(135deg, #2c5530 0%, #4a7c59 100%);
-            color: white;
-            padding: 80px 0;
-            text-align: center;
-            position: relative;
-            overflow: hidden;
-        }
-
-        .stats-section::before {
-            content: '';
-            position: absolute;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><defs><pattern id="plants" patternUnits="userSpaceOnUse" width="40" height="40"><circle cx="20" cy="20" r="3" fill="rgba(255,255,255,0.1)"/><circle cx="10" cy="30" r="2" fill="rgba(255,255,255,0.05)"/><circle cx="30" cy="10" r="2" fill="rgba(255,255,255,0.05)"/></pattern></defs><rect width="100" height="100" fill="url(%23plants)"/></svg>');
-        }
-
-        .stats-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 40px;
-            position: relative;
-            z-index: 2;
-        }
-
-        .stat-item {
-            text-align: center;
-        }
-
-        .stat-item .number {
-            font-size: 3.5em;
-            font-weight: 700;
-            margin-bottom: 10px;
-            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
-        }
-
-        .stat-item .label {
-            font-size: 1.1em;
-            opacity: 0.9;
-        }
-
-        /* CTA SECTION */
-        .cta-section {
-            padding: 80px 0;
-            text-align: center;
-            background: #f8f9fa;
-        }
-
-        .cta-content {
-            max-width: 600px;
-            margin: 0 auto;
-        }
-
-        .cta-title {
-            font-size: 2.5em;
-            color: #2c5530;
-            margin-bottom: 20px;
-            font-weight: 700;
-        }
-
-        .cta-text {
-            font-size: 1.2em;
-            color: #666;
-            margin-bottom: 30px;
-        }
-
-        .cta-buttons {
-            display: flex;
-            gap: 20px;
-            justify-content: center;
-            flex-wrap: wrap;
-        }
-
-        .btn-large {
-            padding: 15px 35px;
-            font-size: 1.1em;
-            border-radius: 30px;
-        }
-
-        .btn-outline {
-            background: transparent;
-            border: 2px solid #2c5530;
-            color: #2c5530;
-        }
-
-        .btn-outline:hover {
-            background: #2c5530;
-            color: white;
-        }
-
-        /* FOOTER */
-        .footer {
-            background: #2c5530;
-            color: white;
-            padding: 40px 0;
-            text-align: center;
-        }
-
-        .footer-content {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-            gap: 40px;
-            margin-bottom: 30px;
-        }
-
-        .footer-section h3 {
-            margin-bottom: 15px;
-            color: #a8d5aa;
-        }
-
-        .footer-section a {
-            color: #ccc;
-            text-decoration: none;
-            display: block;
-            margin-bottom: 5px;
-        }
-
-        .footer-section a:hover {
-            color: white;
-        }
-
-        .footer-bottom {
-            border-top: 1px solid #4a7c59;
-            padding-top: 20px;
-            opacity: 0.8;
-        }
-
-        /* RESPONSIVE */
-        @media (max-width: 768px) {
-            .header h1 {
-                font-size: 2.5em;
-            }
-
-            .header .stats {
-                flex-direction: column;
-                gap: 20px;
-            }
-
-            .nav-container {
-                flex-direction: column;
-                align-items: center;
-                gap: 15px;
-            }
-
-            .section-title {
-                font-size: 2em;
-            }
-
-            .products-grid {
-                grid-template-columns: 1fr;
-            }
-
-            .categories-grid {
-                grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            }
-
-            .cta-buttons {
-                flex-direction: column;
-                align-items: center;
-            }
-        }
+        * { font-family: 'Inter', sans-serif; }
+        body { background: #FAFBFC; color: #334155; }
+        .header { background: white; border-bottom: 1px solid #E2E8F0; box-shadow: 0 1px 3px rgba(0,0,0,0.05); position: sticky; top: 0; z-index: 1000; }
+        .navbar-brand { font-weight: 700; font-size: 1.5rem; color: #0EA5E9 !important; }
+        .nav-link { font-weight: 500; color: #334155 !important; padding: 0.75rem 1rem !important; border-radius: 8px; transition: all 0.2s; }
+        .nav-link:hover { color: #0EA5E9 !important; background: rgba(14,165,233,0.1); }
+        .btn { font-weight: 500; border-radius: 8px; padding: 0.6rem 1.2rem; transition: all 0.2s; }
+        .btn-primary { background: #0EA5E9; border: 1px solid #0EA5E9; }
+        .btn-primary:hover { background: #0284C7; border-color: #0284C7; transform: translateY(-1px); }
+        .btn-success { background: #10B981; border: 1px solid #10B981; }
+        .btn-success:hover { background: #059669; border-color: #059669; transform: translateY(-1px); }
+        .cart-badge { background: #EF4444; color: white; border-radius: 50%; padding: 0.2rem 0.4rem; font-size: 0.7rem; font-weight: 600; position: absolute; top: -5px; right: -5px; min-width: 18px; text-align: center; }
+        .hero { background: linear-gradient(135deg, rgba(14,165,233,0.1) 0%, rgba(16,185,129,0.1) 100%); padding: 3rem 0; }
+        .hero h1 { font-weight: 700; color: #1E293B; margin-bottom: 1rem; }
+        .hero .lead { color: #64748B; font-size: 1.1rem; }
+        .delivery-info { background: white; border-radius: 12px; padding: 1.5rem; box-shadow: 0 2px 8px rgba(0,0,0,0.08); border: 1px solid #E2E8F0; }
+        .section-title { font-weight: 600; color: #1E293B; margin-bottom: 1.5rem; }
+        .category-card { background: white; border: 1px solid #E2E8F0; border-radius: 12px; padding: 1.5rem; text-align: center; transition: all 0.2s; cursor: pointer; height: 100%; }
+        .category-card:hover { transform: translateY(-2px); box-shadow: 0 8px 25px rgba(0,0,0,0.1); border-color: #0EA5E9; }
+        .category-icon { width: 60px; height: 60px; background: linear-gradient(135deg, #0EA5E9, #10B981); border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; margin-bottom: 1rem; color: white; font-size: 1.5rem; }
+        .product-card { background: white; border: 1px solid #E2E8F0; border-radius: 12px; overflow: hidden; transition: all 0.2s; cursor: pointer; height: 100%; }
+        .product-card:hover { transform: translateY(-3px); box-shadow: 0 10px 30px rgba(0,0,0,0.12); border-color: #0EA5E9; }
+        .product-image { height: 200px; background: #F1F5F9; position: relative; overflow: hidden; }
+        .product-image img { width: 100%; height: 100%; object-fit: cover; }
+        .product-badge { position: absolute; top: 10px; right: 10px; background: rgba(255,255,255,0.9); color: #0EA5E9; padding: 0.25rem 0.5rem; border-radius: 6px; font-size: 0.75rem; font-weight: 500; }
+        .product-info { padding: 1rem; }
+        .product-name { font-weight: 600; color: #1E293B; margin-bottom: 0.5rem; font-size: 0.95rem; line-height: 1.4; }
+        .product-description { color: #64748B; font-size: 0.85rem; margin-bottom: 0.75rem; line-height: 1.4; }
+        .product-price { font-weight: 600; color: #1E293B; font-size: 1.1rem; margin-bottom: 0.75rem; }
+        .product-actions { display: flex; gap: 0.5rem; }
+        .btn-sm { padding: 0.4rem 0.8rem; font-size: 0.85rem; }
+        .modal-content { border-radius: 12px; border: none; }
+        .modal-header { background: linear-gradient(135deg, #0EA5E9, #10B981); color: white; border-radius: 12px 12px 0 0; }
+        .footer { background: #1E293B; color: #94A3B8; padding: 2rem 0 1rem; margin-top: 3rem; }
+        .footer h6 { color: white; font-weight: 600; margin-bottom: 1rem; }
+        .footer a { color: #94A3B8; text-decoration: none; transition: color 0.2s; }
+        .footer a:hover { color: #0EA5E9; }
+        .toast-container { position: fixed; top: 100px; right: 20px; z-index: 9999; }
+        .cart-item { border-bottom: 1px solid #E2E8F0; }
+        .cart-item:last-child { border-bottom: none; }
+        @media (max-width: 768px) { .hero { padding: 2rem 0; } .hero h1 { font-size: 2rem; } .product-card { margin-bottom: 1rem; } }
     </style>
 </head>
 <body>
-    <!-- HEADER -->
-    <header class="header">
-        <div class="container">
-            <div class="header-content">
-                <h1>🌱 Аквариумные растения</h1>
-                <p class="subtitle">Превратите свой аквариум в подводный сад мечты</p>
-                <div class="stats">
-                    <div class="stat">
-                        <span class="stat-number"><?= $total_products ?>+</span>
-                        <span class="stat-label">растений</span>
-                    </div>
-                    <div class="stat">
-                        <span class="stat-number"><?= $total_categories ?></span>
-                        <span class="stat-label">категорий</span>
-                    </div>
-                    <div class="stat">
-                        <span class="stat-number">⭐⭐⭐⭐⭐</span>
-                        <span class="stat-label">качество</span>
+    <!-- Toast Container -->
+    <div class='toast-container'></div>
+
+    <!-- Header -->
+    <header class='header'>
+        <nav class='navbar navbar-expand-lg'>
+            <div class='container'>
+                <a class='navbar-brand' href='index.php'>
+                    <i class='fas fa-fish me-2'></i>АкваСбор
+                </a>
+
+                <button class='navbar-toggler' type='button' data-bs-toggle='collapse' data-bs-target='#navbarNav'>
+                    <span class='navbar-toggler-icon'></span>
+                </button>
+
+                <div class='collapse navbar-collapse' id='navbarNav'>
+                    <ul class='navbar-nav me-auto'>
+                        <li class='nav-item'><a class='nav-link' href='#products'>Товары</a></li>
+                        <li class='nav-item'><a class='nav-link' href='#categories'>Категории</a></li>
+                        <li class='nav-item'><a class='nav-link' href='#about'>О магазине</a></li>
+                    </ul>
+
+                    <div class='d-flex align-items-center gap-3'>
+                        <button class='btn btn-outline-primary position-relative' data-bs-toggle='modal' data-bs-target='#cartModal'>
+                            <i class='fas fa-shopping-cart me-1'></i>Корзина
+                            <span class='cart-badge' id='cartCount' style='display: <?= $cartCount > 0 ? 'inline' : 'none' ?>'><?= $cartCount ?></span>
+                        </button>
+                        <a href='admin/' class='btn btn-primary'><i class='fas fa-cog me-1'></i>Админ</a>
                     </div>
                 </div>
             </div>
-        </div>
+        </nav>
     </header>
 
-    <!-- NAVIGATION -->
-    <nav class="nav">
-        <div class="container">
-            <div class="nav-container">
-                <a href="index.php">🏠 Главная</a>
-                <a href="products.php">🌿 Все растения (<?= $total_products ?>)</a>
-                <a href="#categories">📂 Категории</a>
-                <a href="#featured">✨ Рекомендуемые</a>
-                <a href="admin/">⚙️ Админка</a>
-            </div>
-        </div>
-    </nav>
-
-    <!-- CATEGORIES SECTION -->
-    <section class="categories" id="categories">
-        <div class="container">
-            <h2 class="section-title">🗂️ Категории растений</h2>
-            <p class="section-subtitle">Выберите подходящую категорию для вашего аквариума</p>
-
-            <div class="categories-grid">
-                <?php 
-                $categoryIcons = [
-                    'Плавающие растения' => '🌊',
-                    'Эпифиты' => '🪨',
-                    'Мхи' => '🍃',
-                    'Длинностебельные' => '🌿',
-                    'Розеточные' => '🌹',
-                    'Почвопокровные' => '🌱',
-                    'Клубневые' => '🥔',
-                    'Печеночники' => '🍀',
-                    'Луковичные' => '🧅'
-                ];
-                ?>
-
-                <?php foreach ($categories as $category): ?>
-                    <div class="category-card">
-                        <span class="icon"><?= $categoryIcons[$category['name']] ?? '🌱' ?></span>
-                        <a href="category.php?id=<?= $category['id'] ?>">
-                            <?= htmlspecialchars($category['name']) ?>
-                        </a>
-                        <div class="count"><?= $category['products_count'] ?> растений</div>
+    <!-- Hero Section -->
+    <section class='hero'>
+        <div class='container'>
+            <div class='row align-items-center'>
+                <div class='col-lg-8'>
+                    <h1>АкваСбор</h1>
+                    <p class='lead'>Аквариумы и их обитатели</p>
+                    <p class='mb-4'>Общение об аквариумах, аквариумных рыбках, растениях и оборудовании. Делитесь фотографиями питомцев, уникальным оформлением и заводите новые аквариумные знакомства!</p>
+                    <div class='d-flex gap-3 mb-4'>
+                        <a href='#products' class='btn btn-primary'><i class='fas fa-eye me-2'></i>Смотреть товары</a>
+                        <a href='#categories' class='btn btn-outline-primary'><i class='fas fa-th-large me-2'></i>Категории</a>
                     </div>
-                <?php endforeach; ?>
+                </div>
+                <div class='col-lg-4'>
+                    <div class='delivery-info'>
+                        <h5 class='mb-3'><i class='fas fa-shipping-fast text-primary me-2'></i>Доставка</h5>
+                        <div class='row g-2'>
+                            <div class='col-6'>🇷🇺 Россия</div>
+                            <div class='col-6'>🇧🇾 Беларусь</div>
+                            <div class='col-6'>🇰🇿 Казахстан</div>
+                            <div class='col-6'>🇰🇬 Киргизия</div>
+                            <div class='col-12'>🇦🇲 Армения</div>
+                        </div>
+                    </div>
+                </div>
             </div>
         </div>
     </section>
 
-    <!-- FEATURED PRODUCTS -->
-    <section class="featured" id="featured">
-        <div class="container">
-            <h2 class="section-title">✨ Рекомендуемые растения</h2>
-            <p class="section-subtitle">Лучшие растения для начинающих и опытных аквариумистов</p>
-
-            <?php if ($featured_products): ?>
-                <div class="products-grid">
-                    <?php foreach ($featured_products as $product): ?>
-                        <div class="product-card">
-                            <img src="<?= htmlspecialchars($product['main_image']) ?>" 
-                                 alt="<?= htmlspecialchars($product['name']) ?>" 
-                                 class="product-image"
-                                 loading="lazy">
-                            <div class="product-info">
-                                <h3 class="product-name"><?= htmlspecialchars($product['name']) ?></h3>
-                                <p class="product-latin"><?= htmlspecialchars($product['latin_name']) ?></p>
-                                <span class="product-category"><?= htmlspecialchars($product['category_name']) ?></span>
-                                <div class="product-price"><?= number_format($product['price'], 0, ',', ' ') ?> ₽</div>
-
-                                <?php
-                                $difficultyClass = 'easy';
-                                if (strtolower($product['difficulty']) == 'средне') $difficultyClass = 'medium';
-                                elseif (strtolower($product['difficulty']) == 'сложно') $difficultyClass = 'hard';
-                                ?>
-                                <span class="product-difficulty difficulty-<?= $difficultyClass ?>">
-                                    <?= htmlspecialchars($product['difficulty']) ?>
-                                </span>
-
-                                <br><br>
-                                <a href="product.php?slug=<?= $product['slug'] ?>" class="btn">
-                                    📖 Подробнее
-                                </a>
+    <!-- Categories -->
+    <section id='categories' class='py-5'>
+        <div class='container'>
+            <h2 class='section-title'>Категории товаров</h2>
+            <?php if (empty($categories)): ?>
+                <div class='alert alert-info'><i class='fas fa-info-circle me-2'></i>Категории не найдены. <a href='admin/'>Добавьте категории в админ панели</a>.</div>
+            <?php else: ?>
+                <div class='row g-4'>
+                    <?php foreach ($categories as $category): ?>
+                        <div class='col-lg-3 col-md-6'>
+                            <div class='category-card'>
+                                <div class='category-icon'><i class='fas fa-fish'></i></div>
+                                <h6><?= htmlspecialchars($category['name'] ?? 'Без названия') ?></h6>
+                                <p class='text-muted small mb-2'><?= htmlspecialchars(mb_substr($category['description'] ?? '', 0, 50)) ?></p>
+                                <span class='badge bg-primary'><?= $category['products_count'] ?? 0 ?> товаров</span>
                             </div>
                         </div>
                     <?php endforeach; ?>
-                </div>
-            <?php else: ?>
-                <div style="text-align: center; padding: 40px; color: #666;">
-                    <h3>Товары временно недоступны</h3>
-                    <p>Мы работаем над пополнением каталога</p>
                 </div>
             <?php endif; ?>
         </div>
     </section>
 
-    <!-- STATS SECTION -->
-    <section class="stats-section">
-        <div class="container">
-            <div class="stats-grid">
-                <div class="stat-item">
-                    <div class="number"><?= $total_products ?>+</div>
-                    <div class="label">Видов растений в каталоге</div>
-                </div>
-                <div class="stat-item">
-                    <div class="number"><?= $total_categories ?></div>
-                    <div class="label">Категорий для выбора</div>
-                </div>
-                <div class="stat-item">
-                    <div class="number">100%</div>
-                    <div class="label">Гарантия качества</div>
-                </div>
-                <div class="stat-item">
-                    <div class="number">24/7</div>
-                    <div class="label">Поддержка клиентов</div>
-                </div>
+    <!-- Products -->
+    <section id='products' class='py-5 bg-white'>
+        <div class='container'>
+            <div class='d-flex justify-content-between align-items-center mb-4'>
+                <h2 class='section-title mb-0'>Рекомендуемые товары</h2>
+                <a href='products.php' class='btn btn-outline-primary'><i class='fas fa-th me-2'></i>Все товары</a>
             </div>
-        </div>
-    </section>
 
-    <!-- CTA SECTION -->
-    <section class="cta-section">
-        <div class="container">
-            <div class="cta-content">
-                <h2 class="cta-title">Готовы создать аквариум мечты?</h2>
-                <p class="cta-text">Откройте для себя мир подводного садоводства с нашими качественными растениями</p>
-                <div class="cta-buttons">
-                    <a href="products.php" class="btn btn-large">🌿 Смотреть все растения</a>
-                    <a href="#categories" class="btn btn-outline btn-large">📂 Выбрать категорию</a>
+            <?php if (empty($featuredProducts)): ?>
+                <div class='alert alert-info text-center'>
+                    <i class='fas fa-fish fa-3x mb-3 d-block'></i>
+                    <h4>Товары не найдены</h4>
+                    <p>Пока нет товаров для отображения. <a href='admin/'>Добавьте товары в админ панели</a>.</p>
                 </div>
-            </div>
-        </div>
-    </section>
-
-    <!-- FOOTER -->
-    <footer class="footer">
-        <div class="container">
-            <div class="footer-content">
-                <div class="footer-section">
-                    <h3>🌱 Аквариумные растения</h3>
-                    <p>Лучший выбор водных растений для вашего аквариума. Качество, красота, здоровье ваших рыбок.</p>
-                </div>
-
-                <div class="footer-section">
-                    <h3>📂 Категории</h3>
-                    <?php foreach (array_slice($categories, 0, 5) as $category): ?>
-                        <a href="category.php?id=<?= $category['id'] ?>"><?= htmlspecialchars($category['name']) ?></a>
+            <?php else: ?>
+                <div class='row g-4'>
+                    <?php foreach ($featuredProducts as $product): ?>
+                        <?php
+                        $category = getCategoryById($product['category_id'] ?? 0);
+                        $categoryName = $category ? $category['name'] : 'Без категории';
+                        ?>
+                        <div class='col-xl-3 col-lg-4 col-md-6'>
+                            <div class='product-card' onclick='showProductModal(<?= $product['id'] ?>)'>
+                                <div class='product-image'>
+                                    <div class='d-flex align-items-center justify-content-center h-100'>
+                                        <i class='fas fa-fish fa-3x text-muted'></i>
+                                    </div>
+                                    <div class='product-badge'><?= htmlspecialchars($categoryName) ?></div>
+                                </div>
+                                <div class='product-info'>
+                                    <h6 class='product-name'><?= htmlspecialchars($product['name'] ?? 'Без названия') ?></h6>
+                                    <p class='product-description'><?= htmlspecialchars(mb_substr($product['description'] ?? '', 0, 80)) ?>...</p>
+                                    <div class='product-price'><?= formatPrice($product['price'] ?? 0) ?></div>
+                                    <div class='product-actions'>
+                                        <button class='btn btn-success btn-sm flex-fill' onclick='event.stopPropagation(); addToCart(<?= $product['id'] ?>)'>
+                                            <i class='fas fa-cart-plus me-1'></i>В корзину
+                                        </button>
+                                        <button class='btn btn-outline-primary btn-sm' onclick='event.stopPropagation(); showProductModal(<?= $product['id'] ?>)'>
+                                            <i class='fas fa-eye'></i>
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
                     <?php endforeach; ?>
                 </div>
+            <?php endif; ?>
+        </div>
+    </section>
 
-                <div class="footer-section">
-                    <h3>🔗 Полезные ссылки</h3>
-                    <a href="products.php">Все растения</a>
-                    <a href="admin/">Админ панель</a>
-                    <a href="#categories">Категории</a>
-                    <a href="#featured">Рекомендуемые</a>
-                </div>
+    <!-- About -->
+    <section id='about' class='py-5'>
+        <div class='container'>
+            <div class='row'>
+                <div class='col-lg-8 mx-auto text-center'>
+                    <h2 class='section-title'>О нашем сообществе</h2>
+                    <p class='lead'>Наша группа полезна и интересна всем, кто занимается аквариумистикой</p>
 
-                <div class="footer-section">
-                    <h3>📞 Контакты</h3>
-                    <p>📧 info@aquaplants.ru</p>
-                    <p>📱 +7 (999) 123-45-67</p>
-                    <p>🕒 Пн-Вс: 9:00-21:00</p>
+                    <div class='row g-4 mt-4'>
+                        <div class='col-md-4'>
+                            <div class='text-center'>
+                                <div class='category-icon mx-auto mb-3'><i class='fas fa-camera'></i></div>
+                                <h6>Фотографии питомцев</h6>
+                                <p class='text-muted small'>Делитесь красивыми снимками ваших рыбок</p>
+                            </div>
+                        </div>
+                        <div class='col-md-4'>
+                            <div class='text-center'>
+                                <div class='category-icon mx-auto mb-3'><i class='fas fa-palette'></i></div>
+                                <h6>Уникальное оформление</h6>
+                                <p class='text-muted small'>Креативные решения в дизайне аквариумов</p>
+                            </div>
+                        </div>
+                        <div class='col-md-4'>
+                            <div class='text-center'>
+                                <div class='category-icon mx-auto mb-3'><i class='fas fa-users'></i></div>
+                                <h6>Аквариумные знакомства</h6>
+                                <p class='text-muted small'>Находите единомышленников</p>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
+        </div>
+    </section>
 
-            <div class="footer-bottom">
-                <p>&copy; <?= date('Y') ?> Аквариумные растения. Все права защищены.</p>
+    <!-- Footer -->
+    <footer class='footer'>
+        <div class='container'>
+            <div class='row'>
+                <div class='col-lg-4 mb-4'>
+                    <h6><i class='fas fa-fish me-2'></i>АкваСбор</h6>
+                    <p>Ваш надежный партнер в мире аквариумистики. Качественные товары и профессиональные консультации.</p>
+                </div>
+                <div class='col-lg-2 mb-4'>
+                    <h6>Каталог</h6>
+                    <div class='d-flex flex-column gap-1'>
+                        <a href='#'>Аквариумы</a>
+                        <a href='#'>Рыбки</a>
+                        <a href='#'>Растения</a>
+                        <a href='#'>Оборудование</a>
+                    </div>
+                </div>
+                <div class='col-lg-2 mb-4'>
+                    <h6>Компания</h6>
+                    <div class='d-flex flex-column gap-1'>
+                        <a href='#'>О нас</a>
+                        <a href='#'>Доставка</a>
+                        <a href='#'>Контакты</a>
+                    </div>
+                </div>
+                <div class='col-lg-4 mb-4'>
+                    <h6>Контакты</h6>
+                    <p class='mb-1'><i class='fas fa-envelope me-2'></i>info@akvasbor.ru</p>
+                    <p class='mb-1'><i class='fas fa-phone me-2'></i>+7 (999) 123-45-67</p>
+                    <p class='mb-0'><i class='fas fa-map-marker-alt me-2'></i>Доставка по России и СНГ</p>
+                </div>
+            </div>
+            <hr class='my-4' style='border-color: #475569;'>
+            <div class='text-center'>
+                <p class='mb-0'>&copy; 2024 АкваСбор. Все права защищены.</p>
             </div>
         </div>
     </footer>
 
+    <!-- Product Modal -->
+    <div class='modal fade' id='productModal' tabindex='-1'>
+        <div class='modal-dialog modal-lg'>
+            <div class='modal-content'>
+                <div class='modal-header'>
+                    <h5 class='modal-title' id='productModalTitle'>Товар</h5>
+                    <button type='button' class='btn-close btn-close-white' data-bs-dismiss='modal'></button>
+                </div>
+                <div class='modal-body'>
+                    <div class='row'>
+                        <div class='col-md-6'>
+                            <div class='bg-light d-flex align-items-center justify-content-center' style='height: 300px; border-radius: 8px;'>
+                                <i class='fas fa-fish fa-4x text-muted'></i>
+                            </div>
+                        </div>
+                        <div class='col-md-6'>
+                            <h4 id='productModalName'>Название товара</h4>
+                            <p class='text-muted' id='productModalCategory'>Категория</p>
+                            <div class='mb-3'>
+                                <span class='h4 text-success' id='productModalPrice'>0 ₽</span>
+                            </div>
+                            <p id='productModalDescription'>Описание товара</p>
+                            <div class='d-grid'>
+                                <button class='btn btn-success btn-lg' onclick='addToCartFromModal()'>
+                                    <i class='fas fa-cart-plus me-2'></i>Добавить в корзину
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Cart Modal -->
+    <div class='modal fade' id='cartModal' tabindex='-1'>
+        <div class='modal-dialog modal-lg'>
+            <div class='modal-content'>
+                <div class='modal-header'>
+                    <h5 class='modal-title'><i class='fas fa-shopping-cart me-2'></i>Корзина</h5>
+                    <button type='button' class='btn-close btn-close-white' data-bs-dismiss='modal'></button>
+                </div>
+                <div class='modal-body' id='cartContent'>
+                    <div class='text-center py-4'>
+                        <div class='spinner-border text-primary' role='status'>
+                            <span class='visually-hidden'>Загрузка...</span>
+                        </div>
+                        <p class='mt-2'>Загрузка корзины...</p>
+                    </div>
+                </div>
+                <div class='modal-footer'>
+                    <button type='button' class='btn btn-outline-secondary' data-bs-dismiss='modal'>Продолжить покупки</button>
+                    <a href='checkout.php' class='btn btn-primary'>Оформить заказ</a>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src='https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js'></script>
     <script>
-        // Плавная прокрутка к якорям
-        document.querySelectorAll('a[href^="#"]').forEach(anchor => {
-            anchor.addEventListener('click', function (e) {
-                e.preventDefault();
-                const target = document.querySelector(this.getAttribute('href'));
-                if (target) {
-                    target.scrollIntoView({
-                        behavior: 'smooth',
-                        block: 'start'
-                    });
-                }
-            });
-        });
+        let currentProductId = null;
 
-        // Анимация счетчиков при скролле
-        const animateCounters = () => {
-            const counters = document.querySelectorAll('.stat-item .number');
-            const options = {
-                threshold: 0.7
-            };
+        // Добавить товар в корзину
+        async function addToCart(productId, quantity = 1) {
+            try {
+                const formData = new FormData();
+                formData.append('action', 'add_to_cart');
+                formData.append('product_id', productId);
+                formData.append('quantity', quantity);
 
-            const observer = new IntersectionObserver((entries) => {
-                entries.forEach(entry => {
-                    if (entry.isIntersecting) {
-                        const counter = entry.target;
-                        const finalValue = counter.textContent;
-
-                        if (finalValue.includes('+') || finalValue.includes('%')) {
-                            // Для чисел с символами
-                            counter.style.transform = 'scale(1.1)';
-                            setTimeout(() => {
-                                counter.style.transform = 'scale(1)';
-                            }, 300);
-                        }
-                    }
+                const response = await fetch('index.php', {
+                    method: 'POST',
+                    body: formData,
+                    credentials: 'same-origin'
                 });
-            }, options);
 
-            counters.forEach(counter => observer.observe(counter));
-        };
+                const result = await response.json();
 
-        // Запуск анимации после загрузки страницы
-        window.addEventListener('load', animateCounters);
+                if (result.success) {
+                    updateCartBadge(result.cartCount);
+                    showNotification(result.message, 'success');
+                } else {
+                    showNotification(result.message || 'Ошибка добавления в корзину', 'error');
+                }
+
+            } catch (error) {
+                console.error('Ошибка:', error);
+                showNotification('Ошибка сети или сервера', 'error');
+            }
+        }
+
+        // Обновить счетчик корзины
+        function updateCartBadge(count) {
+            const cartBadge = document.getElementById('cartCount');
+            if (cartBadge) {
+                cartBadge.textContent = count;
+                cartBadge.style.display = count > 0 ? 'inline' : 'none';
+            }
+        }
+
+        // Показать модальное окно товара
+        async function showProductModal(productId) {
+            try {
+                const response = await fetch(`index.php?action=get_product&id=${productId}`);
+                const product = await response.json();
+
+                if (product.error) {
+                    showNotification('Товар не найден', 'error');
+                    return;
+                }
+
+                currentProductId = productId;
+
+                document.getElementById('productModalTitle').textContent = product.name || 'Товар';
+                document.getElementById('productModalName').textContent = product.name || 'Товар';
+                document.getElementById('productModalPrice').textContent = formatPrice(product.price || 0);
+                document.getElementById('productModalDescription').textContent = product.description || 'Описание отсутствует';
+
+                const modal = new bootstrap.Modal(document.getElementById('productModal'));
+                modal.show();
+
+            } catch (error) {
+                console.error('Ошибка загрузки товара:', error);
+                showNotification('Ошибка загрузки товара', 'error');
+            }
+        }
+
+        // Добавить товар из модального окна
+        function addToCartFromModal() {
+            if (currentProductId) {
+                addToCart(currentProductId);
+            } else {
+                showNotification('Ошибка: товар не выбран', 'error');
+            }
+        }
+
+        // Обновить количество в корзине
+        async function updateCartQuantity(productId, quantity) {
+            try {
+                const formData = new FormData();
+                formData.append('action', 'update_cart_item');
+                formData.append('product_id', productId);
+                formData.append('quantity', quantity);
+
+                const response = await fetch('index.php', {
+                    method: 'POST',
+                    body: formData,
+                    credentials: 'same-origin'
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    updateCartBadge(result.cartCount);
+                    updateCartModal();
+                } else {
+                    showNotification(result.message || 'Ошибка обновления корзины', 'error');
+                }
+
+            } catch (error) {
+                console.error('Ошибка обновления корзины:', error);
+                showNotification('Ошибка сети', 'error');
+            }
+        }
+
+        // Показать уведомление
+        function showNotification(message, type = 'success') {
+            const toastContainer = document.querySelector('.toast-container');
+            const alertClass = type === 'success' ? 'alert-success' : 'alert-danger';
+            const icon = type === 'success' ? 'fas fa-check-circle' : 'fas fa-exclamation-circle';
+
+            const notification = document.createElement('div');
+            notification.className = `alert ${alertClass} alert-dismissible fade show`;
+            notification.style.cssText = 'min-width: 300px; box-shadow: 0 4px 15px rgba(0,0,0,0.2);';
+            notification.innerHTML = `
+                <i class='${icon} me-2'></i>${message}
+                <button type='button' class='btn-close' data-bs-dismiss='alert'></button>
+            `;
+
+            toastContainer.appendChild(notification);
+
+            setTimeout(() => {
+                if (notification.parentNode) {
+                    notification.remove();
+                }
+            }, 5000);
+        }
+
+        // Форматирование цены
+        function formatPrice(price) {
+            const numPrice = parseFloat(price) || 0;
+            return new Intl.NumberFormat('ru-RU', {
+                style: 'currency',
+                currency: 'RUB',
+                minimumFractionDigits: 0,
+                maximumFractionDigits: 0
+            }).format(numPrice);
+        }
+
+        // Обновить корзину
+        async function updateCartModal() {
+            try {
+                const formData = new FormData();
+                formData.append('action', 'get_cart_content');
+
+                const response = await fetch('index.php', {
+                    method: 'POST',
+                    body: formData,
+                    credentials: 'same-origin'
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    document.getElementById('cartContent').innerHTML = result.content;
+                } else {
+                    throw new Error(result.message || 'Ошибка загрузки корзины');
+                }
+
+            } catch (error) {
+                console.error('Ошибка загрузки корзины:', error);
+                document.getElementById('cartContent').innerHTML = `
+                    <div class='alert alert-danger'>
+                        <i class='fas fa-exclamation-triangle me-2'></i>
+                        Ошибка загрузки корзины
+                    </div>
+                `;
+            }
+        }
+
+        // События
+        document.getElementById('cartModal').addEventListener('show.bs.modal', updateCartModal);
+
+        // Инициализация
+        document.addEventListener('DOMContentLoaded', function() {
+            console.log('АкваСбор загружен успешно!');
+        });
     </script>
 </body>
 </html>
