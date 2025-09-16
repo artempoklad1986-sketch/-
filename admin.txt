@@ -1,353 +1,462 @@
 <?php
-// Основные функции для работы с JSON файлами
+require_once '../functions.php';
+initSession();
 
-/**
- * Загрузка данных из JSON файла
- */
-function loadJsonData($filename) {
-    $filepath = __DIR__ . '/data/' . $filename;
-    if (!file_exists($filepath)) {
-        return [];
-    }
-    $content = file_get_contents($filepath);
-    return json_decode($content, true) ?: [];
-}
+// Обработка AJAX запросов админки
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
+    header('Content-Type: application/json; charset=utf-8');
 
-/**
- * Сохранение данных в JSON файл
- */
-function saveJsonData($filename, $data) {
-    $filepath = __DIR__ . '/data/' . $filename;
-    $dir = dirname($filepath);
-    if (!is_dir($dir)) {
-        mkdir($dir, 0755, true);
-    }
-    return file_put_contents($filepath, json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
-}
+    try {
+        switch ($_POST['action']) {
+            case 'delete_product':
+                $id = (int)($_POST['id'] ?? 0);
+                $result = deleteProduct($id);
+                echo json_encode([
+                    'success' => $result,
+                    'message' => $result ? 'Товар удален' : 'Ошибка удаления товара'
+                ]);
+                break;
 
-/**
- * Получение товаров с фильтрацией
- */
-function getProducts($filters = []) {
-    $products = loadJsonData('products.json');
+            case 'update_order_status':
+                $id = (int)($_POST['id'] ?? 0);
+                $status = trim($_POST['status'] ?? '');
+                $result = updateOrderStatus($id, $status);
+                echo json_encode([
+                    'success' => $result,
+                    'message' => $result ? 'Статус заказа обновлен' : 'Ошибка обновления статуса'
+                ]);
+                break;
 
-    if (!empty($filters['category_id'])) {
-        $products = array_filter($products, function($product) use ($filters) {
-            return $product['category_id'] == $filters['category_id'];
-        });
-    }
+            case 'delete_category':
+                $id = (int)($_POST['id'] ?? 0);
+                $result = deleteCategory($id);
+                echo json_encode([
+                    'success' => $result,
+                    'message' => $result ? 'Категория удалена' : 'Ошибка удаления категории'
+                ]);
+                break;
 
-    if (!empty($filters['search'])) {
-        $search = mb_strtolower($filters['search']);
-        $products = array_filter($products, function($product) use ($search) {
-            return mb_strpos(mb_strtolower($product['name']), $search) !== false ||
-                   mb_strpos(mb_strtolower($product['latin_name']), $search) !== false ||
-                   mb_strpos(mb_strtolower($product['description']), $search) !== false;
-        });
-    }
-
-    if (!empty($filters['price_min'])) {
-        $products = array_filter($products, function($product) use ($filters) {
-            return $product['price'] >= $filters['price_min'];
-        });
-    }
-
-    if (!empty($filters['price_max'])) {
-        $products = array_filter($products, function($product) use ($filters) {
-            return $product['price'] <= $filters['price_max'];
-        });
-    }
-
-    if (!empty($filters['difficulty'])) {
-        $products = array_filter($products, function($product) use ($filters) {
-            return $product['difficulty'] == $filters['difficulty'];
-        });
-    }
-
-    // Фильтр по статусу (активные товары)
-    $products = array_filter($products, function($product) {
-        return isset($product['status']) ? $product['status'] == 1 : true;
-    });
-
-    return array_values($products);
-}
-
-/**
- * Получение товара по slug
- */
-function getProductBySlug($slug) {
-    $products = loadJsonData('products.json');
-    foreach ($products as $product) {
-        if ($product['slug'] === $slug) {
-            return $product;
+            default:
+                echo json_encode(['success' => false, 'message' => 'Неизвестное действие']);
+                break;
         }
+    } catch (Exception $e) {
+        error_log("Ошибка в админ панели: " . $e->getMessage());
+        echo json_encode(['success' => false, 'message' => 'Внутренняя ошибка сервера']);
     }
-    return null;
+    exit;
 }
 
-/**
- * Получение товара по ID
- */
-function getProductById($id) {
-    $products = loadJsonData('products.json');
-    foreach ($products as $product) {
-        if ($product['id'] == $id) {
-            return $product;
-        }
+// Получаем статистику и текущую страницу
+try {
+    $stats = getDashboardStats();
+    $page = trim($_GET['page'] ?? 'dashboard');
+
+    // Безопасность: разрешенные страницы
+    $allowedPages = ['dashboard', 'products', 'add_product', 'edit_product', 'categories', 'orders', 'statistics', 'settings'];
+    if (!in_array($page, $allowedPages)) {
+        $page = 'dashboard';
     }
-    return null;
-}
-
-/**
- * Получение категорий с подсчетом товаров
- */
-function getCategoriesWithCount() {
-    $categories = loadJsonData('categories.json');
-    $products = getProducts();
-
-    foreach ($categories as &$category) {
-        $count = 0;
-        foreach ($products as $product) {
-            if ($product['category_id'] == $category['id']) {
-                $count++;
-            }
-        }
-        $category['products_count'] = $count;
-    }
-
-    return $categories;
-}
-
-/**
- * Получение категории по ID
- */
-function getCategoryById($id) {
-    $categories = loadJsonData('categories.json');
-    foreach ($categories as $category) {
-        if ($category['id'] == $id) {
-            return $category;
-        }
-    }
-    return null;
-}
-
-/**
- * Генерация уникального ID
- */
-function generateId($data) {
-    if (empty($data)) return 1;
-    $maxId = 0;
-    foreach ($data as $item) {
-        if (isset($item['id']) && $item['id'] > $maxId) {
-            $maxId = $item['id'];
-        }
-    }
-    return $maxId + 1;
-}
-
-/**
- * Создание slug из названия
- */
-function createSlug($text) {
-    $text = mb_strtolower($text);
-    $text = preg_replace('/[^a-z0-9а-я\s-]/u', '', $text);
-    $text = preg_replace('/\s+/', '-', trim($text));
-    return $text;
-}
-
-/**
- * Форматирование цены
- */
-function formatPrice($price) {
-    return number_format($price, 0, ',', ' ') . ' ₽';
-}
-
-/**
- * Получение настроек сайта
- */
-function getSettings() {
-    return loadJsonData('settings.json');
-}
-
-/**
- * Получение корзины из сессии
- */
-function getCart() {
-    if (!isset($_SESSION)) {
-        session_start();
-    }
-    return $_SESSION['cart'] ?? [];
-}
-
-/**
- * Добавление товара в корзину
- */
-function addToCart($productId, $quantity = 1) {
-    if (!isset($_SESSION)) {
-        session_start();
-    }
-
-    if (!isset($_SESSION['cart'])) {
-        $_SESSION['cart'] = [];
-    }
-
-    if (isset($_SESSION['cart'][$productId])) {
-        $_SESSION['cart'][$productId] += $quantity;
-    } else {
-        $_SESSION['cart'][$productId] = $quantity;
-    }
-}
-
-/**
- * Удаление товара из корзины
- */
-function removeFromCart($productId) {
-    if (!isset($_SESSION)) {
-        session_start();
-    }
-
-    if (isset($_SESSION['cart'][$productId])) {
-        unset($_SESSION['cart'][$productId]);
-    }
-}
-
-/**
- * Получение товаров корзины с деталями
- */
-function getCartItems() {
-    $cart = getCart();
-    $items = [];
-    $total = 0;
-
-    foreach ($cart as $productId => $quantity) {
-        $product = getProductById($productId);
-        if ($product) {
-            $item = $product;
-            $item['quantity'] = $quantity;
-            $item['subtotal'] = $product['price'] * $quantity;
-            $total += $item['subtotal'];
-            $items[] = $item;
-        }
-    }
-
-    return ['items' => $items, 'total' => $total];
-}
-
-/**
- * Очистка корзины
- */
-function clearCart() {
-    if (!isset($_SESSION)) {
-        session_start();
-    }
-    unset($_SESSION['cart']);
-}
-
-/**
- * Сохранение заказа
- */
-function saveOrder($orderData) {
-    $orders = loadJsonData('orders.json');
-
-    $order = [
-        'id' => generateId($orders),
-        'date' => date('Y-m-d H:i:s'),
-        'status' => 'new',
-        'customer' => $orderData['customer'],
-        'items' => $orderData['items'],
-        'total' => $orderData['total']
-    ];
-
-    $orders[] = $order;
-    saveJsonData('orders.json', $orders);
-
-    return $order['id'];
-}
-
-/**
- * Получение популярных товаров
- */
-function getFeaturedProducts($limit = 8) {
-    $products = getProducts();
-    shuffle($products);
-    return array_slice($products, 0, $limit);
-}
-
-/**
- * Получение статистики для дашборда
- */
-function getDashboardStats() {
-    $products = loadJsonData('products.json');
-    $orders = loadJsonData('orders.json');
-    $categories = loadJsonData('categories.json');
-
-    $activeProducts = array_filter($products, function($p) {
-        return isset($p['status']) ? $p['status'] == 1 : true;
-    });
-
-    $todayOrders = array_filter($orders, function($o) {
-        return date('Y-m-d', strtotime($o['date'])) === date('Y-m-d');
-    });
-
-    $totalRevenue = array_sum(array_column($orders, 'total'));
-
-    return [
-        'total_products' => count($activeProducts),
-        'total_categories' => count($categories),
-        'total_orders' => count($orders),
-        'today_orders' => count($todayOrders),
-        'total_revenue' => $totalRevenue
-    ];
-}
-
-/**
- * Проверка авторизации админа
- */
-function isAdminAuthenticated() {
-    if (session_status() == PHP_SESSION_NONE) {
-        session_start();
-    }
-    return isset($_SESSION['admin_authenticated']) && $_SESSION['admin_authenticated'] === true;
-}
-
-/**
- * Авторизация админа
- */
-function authenticateAdmin($username, $password) {
-    // Простая проверка (в реальном проекте лучше хешировать пароли)
-    $validUsername = 'admin';
-    $validPassword = 'admin123';
-
-    if ($username === $validUsername && $password === $validPassword) {
-        if (session_status() == PHP_SESSION_NONE) {
-            session_start();
-        }
-        $_SESSION['admin_authenticated'] = true;
-        $_SESSION['admin_username'] = $username;
-        return true;
-    }
-
-    return false;
-}
-
-/**
- * Выход из админки
- */
-function adminLogout() {
-    if (session_status() == PHP_SESSION_NONE) {
-        session_start();
-    }
-    $_SESSION = [];
-    session_destroy();
-}
-
-/**
- * Требовать авторизацию админа
- */
-function requireAdminAuth() {
-    if (!isAdminAuthenticated()) {
-        header('Location: auth.php');
-        exit;
-    }
+} catch (Exception $e) {
+    error_log("Ошибка загрузки админ данных: " . $e->getMessage());
+    $stats = ['total_products' => 0, 'total_categories' => 0, 'total_orders' => 0, 'today_orders' => 0, 'month_orders' => 0, 'total_revenue' => 0, 'month_revenue' => 0];
+    $page = 'dashboard';
 }
 ?>
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Админ панель - АкваСбор</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+    <style>
+        * { font-family: 'Inter', sans-serif; }
+
+        .sidebar {
+            height: 100vh;
+            background: linear-gradient(135deg, #0EA5E9 0%, #10B981 100%);
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 250px;
+            overflow-y: auto;
+            z-index: 1000;
+            box-shadow: 2px 0 10px rgba(0,0,0,0.1);
+        }
+
+        .sidebar .nav-link {
+            color: rgba(255, 255, 255, 0.8);
+            padding: 12px 20px;
+            margin: 2px 10px;
+            border-radius: 8px;
+            transition: all 0.3s ease;
+            font-weight: 500;
+        }
+
+        .sidebar .nav-link:hover, 
+        .sidebar .nav-link.active {
+            color: white;
+            background-color: rgba(255, 255, 255, 0.15);
+            transform: translateX(5px);
+        }
+
+        .main-content {
+            margin-left: 250px;
+            padding: 2rem;
+            min-height: 100vh;
+            background: #F8FAFC;
+        }
+
+        .logo {
+            color: white;
+            font-size: 1.25rem;
+            font-weight: 700;
+            padding: 1.5rem;
+            text-align: center;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+            margin-bottom: 1rem;
+        }
+
+        .stat-card {
+            border: none;
+            border-radius: 12px;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.08);
+            transition: all 0.3s ease;
+            overflow: hidden;
+        }
+
+        .stat-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 8px 25px rgba(0, 0, 0, 0.15);
+        }
+
+        .stat-icon {
+            width: 60px;
+            height: 60px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.5rem;
+            color: white;
+            margin-bottom: 1rem;
+        }
+
+        .bg-gradient-primary { background: linear-gradient(135deg, #0EA5E9 0%, #0284C7 100%); }
+        .bg-gradient-success { background: linear-gradient(135deg, #10B981 0%, #059669 100%); }
+        .bg-gradient-info { background: linear-gradient(135deg, #06B6D4 0%, #0891B2 100%); }
+        .bg-gradient-warning { background: linear-gradient(135deg, #F59E0B 0%, #D97706 100%); }
+        .bg-gradient-danger { background: linear-gradient(135deg, #EF4444 0%, #DC2626 100%); }
+
+        .table-hover tbody tr:hover {
+            background-color: rgba(14, 165, 233, 0.05);
+        }
+
+        .btn { border-radius: 8px; }
+        .btn-action { padding: 5px 10px; margin: 2px; }
+
+        .page-header {
+            background: white;
+            border-radius: 12px;
+            padding: 1.5rem;
+            margin-bottom: 2rem;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+        }
+
+        .content-card {
+            background: white;
+            border-radius: 12px;
+            padding: 1.5rem;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+            border: 1px solid #E2E8F0;
+        }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .sidebar {
+                transform: translateX(-100%);
+                transition: transform 0.3s ease;
+            }
+            .sidebar.show {
+                transform: translateX(0);
+            }
+            .main-content {
+                margin-left: 0;
+                padding: 1rem;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- Sidebar -->
+    <div class="sidebar" id="sidebar">
+        <div class="logo">
+            <i class="fas fa-fish"></i> АкваАдмин
+        </div>
+        <nav class="nav flex-column">
+            <a class="nav-link <?= $page == 'dashboard' ? 'active' : '' ?>" href="?page=dashboard">
+                <i class="fas fa-tachometer-alt me-2"></i> Дашборд
+            </a>
+            <a class="nav-link <?= $page == 'products' ? 'active' : '' ?>" href="?page=products">
+                <i class="fas fa-fish me-2"></i> Товары
+            </a>
+            <a class="nav-link <?= $page == 'add_product' ? 'active' : '' ?>" href="?page=add_product">
+                <i class="fas fa-plus me-2"></i> Добавить товар
+            </a>
+            <a class="nav-link <?= $page == 'categories' ? 'active' : '' ?>" href="?page=categories">
+                <i class="fas fa-tags me-2"></i> Категории
+            </a>
+            <a class="nav-link <?= $page == 'orders' ? 'active' : '' ?>" href="?page=orders">
+                <i class="fas fa-shopping-cart me-2"></i> Заказы
+            </a>
+            <a class="nav-link <?= $page == 'statistics' ? 'active' : '' ?>" href="?page=statistics">
+                <i class="fas fa-chart-bar me-2"></i> Статистика
+            </a>
+            <a class="nav-link <?= $page == 'settings' ? 'active' : '' ?>" href="?page=settings">
+                <i class="fas fa-cog me-2"></i> Настройки
+            </a>
+            <hr style="border-color: rgba(255, 255, 255, 0.2); margin: 1rem;">
+            <a class="nav-link" href="../index.php" target="_blank">
+                <i class="fas fa-external-link-alt me-2"></i> Посмотреть сайт
+            </a>
+        </nav>
+    </div>
+
+    <!-- Main Content -->
+    <div class="main-content">
+        <!-- Mobile menu toggle -->
+        <button class="btn btn-primary d-md-none mb-3" type="button" onclick="toggleSidebar()">
+            <i class="fas fa-bars"></i> Меню
+        </button>
+
+        <?php
+        // Подключаем страницы
+        $pageFile = "pages/{$page}.php";
+
+        if (file_exists($pageFile)) {
+            include $pageFile;
+        } else {
+            // Показываем базовый дашборд если файл страницы не найден
+            ?>
+            <div class="page-header">
+                <h1><i class="fas fa-tachometer-alt me-2 text-primary"></i>Панель управления АкваСбор</h1>
+                <p class="text-muted mb-0">Добро пожаловать в административную панель</p>
+            </div>
+
+            <!-- Quick Stats -->
+            <div class="row mb-4">
+                <div class="col-xl-3 col-md-6 mb-4">
+                    <div class="card stat-card h-100">
+                        <div class="card-body text-center">
+                            <div class="stat-icon bg-gradient-primary mx-auto">
+                                <i class="fas fa-fish"></i>
+                            </div>
+                            <h3 class="text-dark"><?= $stats['total_products'] ?></h3>
+                            <p class="text-muted mb-0">Товаров</p>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-xl-3 col-md-6 mb-4">
+                    <div class="card stat-card h-100">
+                        <div class="card-body text-center">
+                            <div class="stat-icon bg-gradient-success mx-auto">
+                                <i class="fas fa-tags"></i>
+                            </div>
+                            <h3 class="text-dark"><?= $stats['total_categories'] ?></h3>
+                            <p class="text-muted mb-0">Категорий</p>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-xl-3 col-md-6 mb-4">
+                    <div class="card stat-card h-100">
+                        <div class="card-body text-center">
+                            <div class="stat-icon bg-gradient-info mx-auto">
+                                <i class="fas fa-shopping-cart"></i>
+                            </div>
+                            <h3 class="text-dark"><?= $stats['total_orders'] ?></h3>
+                            <p class="text-muted mb-0">Заказов</p>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-xl-3 col-md-6 mb-4">
+                    <div class="card stat-card h-100">
+                        <div class="card-body text-center">
+                            <div class="stat-icon bg-gradient-warning mx-auto">
+                                <i class="fas fa-ruble-sign"></i>
+                            </div>
+                            <h3 class="text-dark"><?= formatPrice($stats['total_revenue']) ?></h3>
+                            <p class="text-muted mb-0">Выручка</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Actions -->
+            <div class="content-card">
+                <h4 class="mb-4">Быстрые действия</h4>
+                <div class="row">
+                    <div class="col-md-3 mb-3">
+                        <a href="?page=add_product" class="btn btn-primary w-100 py-3">
+                            <i class="fas fa-plus d-block mb-2" style="font-size: 2rem;"></i>
+                            Добавить товар
+                        </a>
+                    </div>
+                    <div class="col-md-3 mb-3">
+                        <a href="?page=categories" class="btn btn-success w-100 py-3">
+                            <i class="fas fa-tags d-block mb-2" style="font-size: 2rem;"></i>
+                            Категории
+                        </a>
+                    </div>
+                    <div class="col-md-3 mb-3">
+                        <a href="?page=orders" class="btn btn-info w-100 py-3">
+                            <i class="fas fa-list d-block mb-2" style="font-size: 2rem;"></i>
+                            Заказы
+                        </a>
+                    </div>
+                    <div class="col-md-3 mb-3">
+                        <a href="?page=products" class="btn btn-warning w-100 py-3">
+                            <i class="fas fa-fish d-block mb-2" style="font-size: 2rem;"></i>
+                            Все товары
+                        </a>
+                    </div>
+                </div>
+            </div>
+
+            <?php if ($page !== 'dashboard'): ?>
+                <div class="alert alert-warning mt-4">
+                    <i class="fas fa-exclamation-triangle me-2"></i>
+                    <strong>Страница не найдена:</strong> Файл <code><?= htmlspecialchars($pageFile) ?></code> не существует.
+                    <br>Создайте файл в папке <code>admin/pages/</code> для отображения этой страницы.
+                </div>
+            <?php endif; ?>
+            <?php
+        }
+        ?>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        // Переключение сайдбара на мобильных
+        function toggleSidebar() {
+            const sidebar = document.getElementById('sidebar');
+            sidebar.classList.toggle('show');
+        }
+
+        // Закрытие сайдбара при клике вне его на мобильных
+        document.addEventListener('click', function(event) {
+            const sidebar = document.getElementById('sidebar');
+            const toggleBtn = event.target.closest('[onclick="toggleSidebar()"]');
+
+            if (!sidebar.contains(event.target) && !toggleBtn && window.innerWidth <= 768) {
+                sidebar.classList.remove('show');
+            }
+        });
+
+        // Универсальные функции для админки
+        async function deleteItem(type, id) {
+            const messages = {
+                product: 'товар',
+                category: 'категорию',
+                order: 'заказ'
+            };
+
+            if (!confirm(`Вы уверены, что хотите удалить этот ${messages[type] || 'элемент'}?`)) {
+                return;
+            }
+
+            try {
+                const formData = new FormData();
+                formData.append('action', `delete_${type}`);
+                formData.append('id', id);
+
+                const response = await fetch('', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    showNotification(result.message, 'success');
+                    setTimeout(() => location.reload(), 1000);
+                } else {
+                    showNotification(result.message, 'error');
+                }
+
+            } catch (error) {
+                console.error('Ошибка удаления:', error);
+                showNotification('Ошибка удаления', 'error');
+            }
+        }
+
+        // Удаление товара
+        function deleteProduct(id) {
+            deleteItem('product', id);
+        }
+
+        // Удаление категории
+        function deleteCategory(id) {
+            deleteItem('category', id);
+        }
+
+        // Обновление статуса заказа
+        async function updateOrderStatus(id, status) {
+            try {
+                const formData = new FormData();
+                formData.append('action', 'update_order_status');
+                formData.append('id', id);
+                formData.append('status', status);
+
+                const response = await fetch('', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    showNotification(result.message, 'success');
+                    setTimeout(() => location.reload(), 1000);
+                } else {
+                    showNotification(result.message, 'error');
+                }
+
+            } catch (error) {
+                console.error('Ошибка обновления статуса:', error);
+                showNotification('Ошибка обновления статуса', 'error');
+            }
+        }
+
+        // Показать уведомление
+        function showNotification(message, type = 'success') {
+            const alertClass = type === 'success' ? 'alert-success' : 'alert-danger';
+            const icon = type === 'success' ? 'fas fa-check-circle' : 'fas fa-exclamation-circle';
+
+            const notification = document.createElement('div');
+            notification.className = `alert ${alertClass} alert-dismissible fade show position-fixed`;
+            notification.style.cssText = 'top: 20px; right: 20px; z-index: 9999; min-width: 300px; box-shadow: 0 4px 15px rgba(0,0,0,0.2);';
+            notification.innerHTML = `
+                <i class="${icon} me-2"></i>${message}
+                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+            `;
+
+            document.body.appendChild(notification);
+
+            setTimeout(() => {
+                if (notification.parentNode) {
+                    notification.remove();
+                }
+            }, 5000);
+        }
+
+        // Инициализация при загрузке
+        document.addEventListener('DOMContentLoaded', function() {
+            console.log('Админ панель АкваСбор загружена');
+        });
+    </script>
+</body>
+</html>
