@@ -1,644 +1,329 @@
 <?php
-session_start();
-require_once 'functions.php';
-
-error_log('=== НАЧАЛО РАБОТЫ INDEX.PHP ===');
-
-// Обработка AJAX запросов
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
-    header('Content-Type: application/json; charset=utf-8');
-
-    try {
-        switch ($_POST['action']) {
-            case 'add_to_cart':
-                $productId = (int)($_POST['product_id'] ?? 0);
-                $quantity = (int)($_POST['quantity'] ?? 1);
-
-                if ($productId > 0 && $quantity > 0) {
-                    $result = addToCart($productId, $quantity);
-                    if ($result) {
-                        $cartCount = getCartCount();
-                        echo json_encode([
-                            'success' => true,
-                            'cartCount' => $cartCount,
-                            'message' => 'Товар добавлен в корзину!'
-                        ]);
-                    } else {
-                        echo json_encode([
-                            'success' => false,
-                            'message' => 'Не удалось добавить товар в корзину'
-                        ]);
-                    }
-                } else {
-                    echo json_encode([
-                        'success' => false,
-                        'message' => 'Некорректные параметры товара'
-                    ]);
-                }
-                break;
-
-            case 'get_cart_content':
-                $cartData = getCartItems();
-                ob_start();
-                if (empty($cartData['items'])): ?>
-                    <div class="text-center py-4">
-                        <i class="fas fa-shopping-cart fa-3x text-muted mb-3"></i>
-                        <h5>Корзина пуста</h5>
-                        <p class="text-muted">Добавьте товары в корзину для оформления заказа</p>
-                    </div>
-                <?php else: ?>
-                    <div class="cart-items">
-                        <?php foreach ($cartData['items'] as $item): ?>
-                            <div class="cart-item d-flex align-items-center border-bottom py-3">
-                                <div class="item-image me-3">
-                                    <div class="bg-light d-flex align-items-center justify-content-center" style="width: 60px; height: 60px; border-radius: 8px;">
-                                        <i class="fas fa-fish text-muted"></i>
-                                    </div>
-                                </div>
-                                <div class="item-info flex-grow-1">
-                                    <h6 class="mb-1"><?= htmlspecialchars($item['name']) ?></h6>
-                                    <p class="text-muted small mb-0"><?= formatPrice($item['price']) ?> × <?= $item['quantity'] ?></p>
-                                </div>
-                                <div class="item-controls d-flex align-items-center">
-                                    <button class="btn btn-outline-secondary btn-sm me-2" onclick="updateCartQuantity(<?= $item['id'] ?>, <?= $item['quantity'] - 1 ?>)">
-                                        <i class="fas fa-minus"></i>
-                                    </button>
-                                    <span class="mx-2"><?= $item['quantity'] ?></span>
-                                    <button class="btn btn-outline-secondary btn-sm me-3" onclick="updateCartQuantity(<?= $item['id'] ?>, <?= $item['quantity'] + 1 ?>)">
-                                        <i class="fas fa-plus"></i>
-                                    </button>
-                                    <strong><?= formatPrice($item['subtotal']) ?></strong>
-                                </div>
-                            </div>
-                        <?php endforeach; ?>
-                        <div class="cart-total mt-3 pt-3 border-top">
-                            <div class="d-flex justify-content-between align-items-center">
-                                <h5 class="mb-0">Итого:</h5>
-                                <h4 class="mb-0 text-success"><?= formatPrice($cartData['total']) ?></h4>
-                            </div>
-                        </div>
-                    </div>
-                <?php endif;
-                $content = ob_get_clean();
-                echo json_encode(['success' => true, 'content' => $content]);
-                break;
-
-            case 'update_cart_item':
-                $productId = (int)($_POST['product_id'] ?? 0);
-                $quantity = (int)($_POST['quantity'] ?? 0);
-                $result = updateCartItem($productId, $quantity);
-                echo json_encode([
-                    'success' => $result,
-                    'cartCount' => getCartCount(),
-                    'message' => $result ? 'Корзина обновлена' : 'Ошибка обновления'
-                ]);
-                break;
-
-            case 'remove_from_cart':
-                $productId = (int)($_POST['product_id'] ?? 0);
-                $result = removeFromCart($productId);
-                echo json_encode([
-                    'success' => $result,
-                    'cartCount' => getCartCount(),
-                    'message' => $result ? 'Товар удален из корзины' : 'Ошибка удаления'
-                ]);
-                break;
-        }
-    } catch (Exception $e) {
-        echo json_encode(['success' => false, 'message' => 'Внутренняя ошибка сервера']);
-    }
-    exit;
-}
-
-if (isset($_GET['action'])) {
-    switch ($_GET['action']) {
-        case 'get_product':
-            header('Content-Type: application/json; charset=utf-8');
-            $id = (int)($_GET['id'] ?? 0);
-            $product = getProductById($id);
-            if ($product) {
-                echo json_encode($product);
-            } else {
-                echo json_encode(['error' => 'Товар не найден']);
-            }
-            exit;
+// Обработка удаления товара
+if (isset($_POST['delete_product'])) {
+    $result = deleteProduct($_POST['product_id']);
+    if ($result) {
+        echo '<div class="alert alert-success alert-dismissible fade show">
+            <i class="fas fa-check-circle me-2"></i>Товар успешно удален!
+            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+        </div>';
     }
 }
 
-try {
-    $featuredProducts = getFeaturedProducts(12);
-    $categories = getCategoriesWithCount();
-    $cartCount = getCartCount();
-} catch (Exception $e) {
-    $featuredProducts = [];
-    $categories = [];
-    $cartCount = 0;
+$products = getAllProducts();
+$categories = getCategories();
+$search = $_GET['search'] ?? '';
+$category_filter = $_GET['category'] ?? '';
+
+// Фильтрация товаров
+if ($search || $category_filter) {
+    $filters = [];
+    if ($search) $filters['search'] = $search;
+    if ($category_filter) $filters['category_id'] = $category_filter;
+    $products = getProducts($filters);
 }
 ?>
-<!DOCTYPE html>
-<html lang='ru'>
-<head>
-    <meta charset='UTF-8'>
-    <meta name='viewport' content='width=device-width, initial-scale=1.0'>
-    <title>АкваСбор - Аквариумы и их обитатели</title>
 
-    <link href='https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css' rel='stylesheet'>
-    <link href='https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css' rel='stylesheet'>
-    <link href='https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap' rel='stylesheet'>
+<div class="row mb-4">
+    <div class="col-12">
+        <h1 class="h3 mb-3">
+            <i class="fas fa-fish me-2"></i>Управление товарами
+            <span class="badge bg-primary ms-2"><?= count($products) ?> товаров</span>
+        </h1>
+    </div>
+</div>
 
-    <style>
-        * { font-family: 'Inter', sans-serif; }
-        body { background: #FAFBFC; color: #334155; }
-        .header { background: white; border-bottom: 1px solid #E2E8F0; box-shadow: 0 1px 3px rgba(0,0,0,0.05); position: sticky; top: 0; z-index: 1000; }
-        .navbar-brand { font-weight: 700; font-size: 1.5rem; color: #0EA5E9 !important; }
-        .nav-link { font-weight: 500; color: #334155 !important; padding: 0.75rem 1rem !important; border-radius: 8px; transition: all 0.2s; }
-        .nav-link:hover { color: #0EA5E9 !important; background: rgba(14,165,233,0.1); }
-        .btn { font-weight: 500; border-radius: 8px; padding: 0.6rem 1.2rem; transition: all 0.2s; }
-        .btn-primary { background: #0EA5E9; border: 1px solid #0EA5E9; }
-        .btn-primary:hover { background: #0284C7; border-color: #0284C7; transform: translateY(-1px); }
-        .btn-success { background: #10B981; border: 1px solid #10B981; }
-        .btn-success:hover { background: #059669; border-color: #059669; transform: translateY(-1px); }
-        .cart-badge { background: #EF4444; color: white; border-radius: 50%; padding: 0.2rem 0.4rem; font-size: 0.7rem; font-weight: 600; position: absolute; top: -5px; right: -5px; min-width: 18px; text-align: center; }
-        .hero { background: linear-gradient(135deg, rgba(14,165,233,0.1) 0%, rgba(16,185,129,0.1) 100%); padding: 3rem 0; }
-        .hero h1 { font-weight: 700; color: #1E293B; margin-bottom: 1rem; }
-        .hero .lead { color: #64748B; font-size: 1.1rem; }
-        .delivery-info { background: white; border-radius: 12px; padding: 1.5rem; box-shadow: 0 2px 8px rgba(0,0,0,0.08); border: 1px solid #E2E8F0; }
-        .section-title { font-weight: 600; color: #1E293B; margin-bottom: 1.5rem; }
-        .category-card { background: white; border: 1px solid #E2E8F0; border-radius: 12px; padding: 1.5rem; text-align: center; transition: all 0.2s; cursor: pointer; height: 100%; }
-        .category-card:hover { transform: translateY(-2px); box-shadow: 0 8px 25px rgba(0,0,0,0.1); border-color: #0EA5E9; }
-        .category-icon { width: 60px; height: 60px; background: linear-gradient(135deg, #0EA5E9, #10B981); border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; margin-bottom: 1rem; color: white; font-size: 1.5rem; }
-        .product-card { background: white; border: 1px solid #E2E8F0; border-radius: 12px; overflow: hidden; transition: all 0.2s; cursor: pointer; height: 100%; }
-        .product-card:hover { transform: translateY(-3px); box-shadow: 0 10px 30px rgba(0,0,0,0.12); border-color: #0EA5E9; }
-        .product-image { height: 200px; background: #F1F5F9; position: relative; overflow: hidden; }
-        .product-image img { width: 100%; height: 100%; object-fit: cover; }
-        .product-badge { position: absolute; top: 10px; right: 10px; background: rgba(255,255,255,0.9); color: #0EA5E9; padding: 0.25rem 0.5rem; border-radius: 6px; font-size: 0.75rem; font-weight: 500; }
-        .product-info { padding: 1rem; }
-        .product-name { font-weight: 600; color: #1E293B; margin-bottom: 0.5rem; font-size: 0.95rem; line-height: 1.4; }
-        .product-description { color: #64748B; font-size: 0.85rem; margin-bottom: 0.75rem; line-height: 1.4; }
-        .product-price { font-weight: 600; color: #1E293B; font-size: 1.1rem; margin-bottom: 0.75rem; }
-        .product-actions { display: flex; gap: 0.5rem; }
-        .btn-sm { padding: 0.4rem 0.8rem; font-size: 0.85rem; }
-        .modal-content { border-radius: 12px; border: none; }
-        .modal-header { background: linear-gradient(135deg, #0EA5E9, #10B981); color: white; border-radius: 12px 12px 0 0; }
-        .footer { background: #1E293B; color: #94A3B8; padding: 2rem 0 1rem; margin-top: 3rem; }
-        .footer h6 { color: white; font-weight: 600; margin-bottom: 1rem; }
-        .footer a { color: #94A3B8; text-decoration: none; transition: color 0.2s; }
-        .footer a:hover { color: #0EA5E9; }
-        .toast-container { position: fixed; top: 100px; right: 20px; z-index: 9999; }
-        .cart-item { border-bottom: 1px solid #E2E8F0; }
-        .cart-item:last-child { border-bottom: none; }
-        @media (max-width: 768px) { .hero { padding: 2rem 0; } .hero h1 { font-size: 2rem; } .product-card { margin-bottom: 1rem; } }
-    </style>
-</head>
-<body>
-    <!-- Toast Container -->
-    <div class='toast-container'></div>
-
-    <!-- Header -->
-    <header class='header'>
-        <nav class='navbar navbar-expand-lg'>
-            <div class='container'>
-                <a class='navbar-brand' href='index.php'>
-                    <i class='fas fa-fish me-2'></i>АкваСбор
-                </a>
-
-                <button class='navbar-toggler' type='button' data-bs-toggle='collapse' data-bs-target='#navbarNav'>
-                    <span class='navbar-toggler-icon'></span>
-                </button>
-
-                <div class='collapse navbar-collapse' id='navbarNav'>
-                    <ul class='navbar-nav me-auto'>
-                        <li class='nav-item'><a class='nav-link' href='#products'>Товары</a></li>
-                        <li class='nav-item'><a class='nav-link' href='#categories'>Категории</a></li>
-                        <li class='nav-item'><a class='nav-link' href='#about'>О магазине</a></li>
-                    </ul>
-
-                    <div class='d-flex align-items-center gap-3'>
-                        <button class='btn btn-outline-primary position-relative' data-bs-toggle='modal' data-bs-target='#cartModal'>
-                            <i class='fas fa-shopping-cart me-1'></i>Корзина
-                            <span class='cart-badge' id='cartCount' style='display: <?= $cartCount > 0 ? 'inline' : 'none' ?>'><?= $cartCount ?></span>
-                        </button>
-                        <a href='admin/' class='btn btn-primary'><i class='fas fa-cog me-1'></i>Админ</a>
-                    </div>
+<!-- Панель фильтров и поиска -->
+<div class="card mb-4">
+    <div class="card-body">
+        <form method="GET" class="row g-3">
+            <input type="hidden" name="page" value="products">
+            <div class="col-md-4">
+                <label class="form-label">Поиск товаров</label>
+                <div class="input-group">
+                    <span class="input-group-text"><i class="fas fa-search"></i></span>
+                    <input type="text" class="form-control" name="search" value="<?= htmlspecialchars($search) ?>" 
+                           placeholder="Название, описание...">
                 </div>
             </div>
-        </nav>
-    </header>
-
-    <!-- Hero Section -->
-    <section class='hero'>
-        <div class='container'>
-            <div class='row align-items-center'>
-                <div class='col-lg-8'>
-                    <h1>АкваСбор</h1>
-                    <p class='lead'>Аквариумы и их обитатели</p>
-                    <p class='mb-4'>Общение об аквариумах, аквариумных рыбках, растениях и оборудовании. Делитесь фотографиями питомцев, уникальным оформлением и заводите новые аквариумные знакомства!</p>
-                    <div class='d-flex gap-3 mb-4'>
-                        <a href='#products' class='btn btn-primary'><i class='fas fa-eye me-2'></i>Смотреть товары</a>
-                        <a href='#categories' class='btn btn-outline-primary'><i class='fas fa-th-large me-2'></i>Категории</a>
-                    </div>
-                </div>
-                <div class='col-lg-4'>
-                    <div class='delivery-info'>
-                        <h5 class='mb-3'><i class='fas fa-shipping-fast text-primary me-2'></i>Доставка</h5>
-                        <div class='row g-2'>
-                            <div class='col-6'>🇷🇺 Россия</div>
-                            <div class='col-6'>🇧🇾 Беларусь</div>
-                            <div class='col-6'>🇰🇿 Казахстан</div>
-                            <div class='col-6'>🇰🇬 Киргизия</div>
-                            <div class='col-12'>🇦🇲 Армения</div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </section>
-
-    <!-- Categories -->
-    <section id='categories' class='py-5'>
-        <div class='container'>
-            <h2 class='section-title'>Категории товаров</h2>
-            <?php if (empty($categories)): ?>
-                <div class='alert alert-info'><i class='fas fa-info-circle me-2'></i>Категории не найдены. <a href='admin/'>Добавьте категории в админ панели</a>.</div>
-            <?php else: ?>
-                <div class='row g-4'>
+            <div class="col-md-3">
+                <label class="form-label">Категория</label>
+                <select name="category" class="form-select">
+                    <option value="">Все категории</option>
                     <?php foreach ($categories as $category): ?>
-                        <div class='col-lg-3 col-md-6'>
-                            <div class='category-card'>
-                                <div class='category-icon'><i class='fas fa-fish'></i></div>
-                                <h6><?= htmlspecialchars($category['name'] ?? 'Без названия') ?></h6>
-                                <p class='text-muted small mb-2'><?= htmlspecialchars(mb_substr($category['description'] ?? '', 0, 50)) ?></p>
-                                <span class='badge bg-primary'><?= $category['products_count'] ?? 0 ?> товаров</span>
-                            </div>
-                        </div>
+                        <option value="<?= $category['id'] ?>" <?= $category_filter == $category['id'] ? 'selected' : '' ?>>
+                            <?= htmlspecialchars($category['name']) ?>
+                        </option>
                     <?php endforeach; ?>
+                </select>
+            </div>
+            <div class="col-md-3">
+                <label class="form-label">&nbsp;</label>
+                <div class="d-grid">
+                    <button type="submit" class="btn btn-primary">
+                        <i class="fas fa-search me-2"></i>Найти
+                    </button>
                 </div>
-            <?php endif; ?>
-        </div>
-    </section>
+            </div>
+            <div class="col-md-2">
+                <label class="form-label">&nbsp;</label>
+                <div class="d-grid">
+                    <a href="?page=add_product" class="btn btn-success">
+                        <i class="fas fa-plus me-2"></i>Добавить
+                    </a>
+                </div>
+            </div>
+        </form>
+    </div>
+</div>
 
-    <!-- Products -->
-    <section id='products' class='py-5 bg-white'>
-        <div class='container'>
-            <div class='d-flex justify-content-between align-items-center mb-4'>
-                <h2 class='section-title mb-0'>Рекомендуемые товары</h2>
-                <a href='products.php' class='btn btn-outline-primary'><i class='fas fa-th me-2'></i>Все товары</a>
+<!-- Таблица товаров -->
+<div class="card">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <h5 class="card-title mb-0">
+            <i class="fas fa-list me-2"></i>Список товаров
+        </h5>
+        <div class="btn-group" role="group">
+            <button type="button" class="btn btn-outline-primary btn-sm" id="gridView">
+                <i class="fas fa-th-large"></i> Плитка
+            </button>
+            <button type="button" class="btn btn-primary btn-sm" id="listView">
+                <i class="fas fa-list"></i> Список
+            </button>
+        </div>
+    </div>
+    <div class="card-body">
+        <?php if (empty($products)): ?>
+            <div class="text-center py-5">
+                <i class="fas fa-fish fa-4x text-muted mb-3"></i>
+                <h4 class="text-muted">Товары не найдены</h4>
+                <p class="text-muted">Попробуйте изменить параметры поиска</p>
+                <a href="?page=add_product" class="btn btn-primary">
+                    <i class="fas fa-plus me-2"></i>Добавить первый товар
+                </a>
+            </div>
+        <?php else: ?>
+            <!-- Табличный вид -->
+            <div id="tableView">
+                <div class="table-responsive">
+                    <table class="table table-hover">
+                        <thead>
+                            <tr>
+                                <th width="80">Фото</th>
+                                <th>Название</th>
+                                <th>Категория</th>
+                                <th>Цена</th>
+                                <th>Статус</th>
+                                <th>Дата создания</th>
+                                <th width="150">Действия</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <?php foreach ($products as $product): ?>
+                                <?php 
+                                $category = getCategoryById($product['category_id']);
+                                $categoryName = $category ? $category['name'] : 'Без категории';
+                                ?>
+                                <tr id="product-<?= $product['id'] ?>">
+                                    <td>
+                                        <?php if (!empty($product['image'])): ?>
+                                            <img src="../images/products/<?= htmlspecialchars($product['image']) ?>" 
+                                                 class="img-thumbnail" style="width: 60px; height: 60px; object-fit: cover;"
+                                                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' width=\'60\' height=\'60\'%3E%3Crect width=\'60\' height=\'60\' fill=\'%23e9ecef\'/%3E%3Ctext x=\'30\' y=\'35\' text-anchor=\'middle\' font-size=\'12\' fill=\'%236c757d\'%3ENo img%3C/text%3E%3C/svg%3E'">
+                                        <?php else: ?>
+                                            <div class="bg-light d-flex align-items-center justify-content-center" 
+                                                 style="width: 60px; height: 60px; border-radius: 5px;">
+                                                <i class="fas fa-fish text-muted"></i>
+                                            </div>
+                                        <?php endif; ?>
+                                    </td>
+                                    <td>
+                                        <div>
+                                            <strong><?= htmlspecialchars($product['name']) ?></strong>
+                                            <?php if (!empty($product['latin_name'])): ?>
+                                                <br><small class="text-muted fst-italic"><?= htmlspecialchars($product['latin_name']) ?></small>
+                                            <?php endif; ?>
+                                        </div>
+                                    </td>
+                                    <td>
+                                        <span class="badge bg-secondary"><?= htmlspecialchars($categoryName) ?></span>
+                                    </td>
+                                    <td>
+                                        <strong class="text-success"><?= formatPrice($product['price']) ?></strong>
+                                    </td>
+                                    <td>
+                                        <?php if (isset($product['status']) && $product['status'] == 0): ?>
+                                            <span class="badge bg-danger">Неактивен</span>
+                                        <?php else: ?>
+                                            <span class="badge bg-success">Активен</span>
+                                        <?php endif; ?>
+                                    </td>
+                                    <td>
+                                        <small class="text-muted">
+                                            <?= isset($product['created_at']) ? date('d.m.Y H:i', strtotime($product['created_at'])) : 'Не указано' ?>
+                                        </small>
+                                    </td>
+                                    <td>
+                                        <div class="btn-group" role="group">
+                                            <a href="?page=edit_product&id=<?= $product['id'] ?>" 
+                                               class="btn btn-sm btn-outline-primary" title="Редактировать">
+                                                <i class="fas fa-edit"></i>
+                                            </a>
+                                            <button onclick="viewProduct(<?= $product['id'] ?>)" 
+                                                    class="btn btn-sm btn-outline-info" title="Просмотр">
+                                                <i class="fas fa-eye"></i>
+                                            </button>
+                                            <button onclick="deleteProduct(<?= $product['id'] ?>)" 
+                                                    class="btn btn-sm btn-outline-danger" title="Удалить">
+                                                <i class="fas fa-trash"></i>
+                                            </button>
+                                        </div>
+                                    </td>
+                                </tr>
+                            <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                </div>
             </div>
 
-            <?php if (empty($featuredProducts)): ?>
-                <div class='alert alert-info text-center'>
-                    <i class='fas fa-fish fa-3x mb-3 d-block'></i>
-                    <h4>Товары не найдены</h4>
-                    <p>Пока нет товаров для отображения. <a href='admin/'>Добавьте товары в админ панели</a>.</p>
-                </div>
-            <?php else: ?>
-                <div class='row g-4'>
-                    <?php foreach ($featuredProducts as $product): ?>
-                        <?php
-                        $category = getCategoryById($product['category_id'] ?? 0);
+            <!-- Вид плиткой -->
+            <div id="gridView" class="d-none">
+                <div class="row">
+                    <?php foreach ($products as $product): ?>
+                        <?php 
+                        $category = getCategoryById($product['category_id']);
                         $categoryName = $category ? $category['name'] : 'Без категории';
                         ?>
-                        <div class='col-xl-3 col-lg-4 col-md-6'>
-                            <div class='product-card' onclick='showProductModal(<?= $product['id'] ?>)'>
-                                <div class='product-image'>
-                                    <div class='d-flex align-items-center justify-content-center h-100'>
-                                        <i class='fas fa-fish fa-3x text-muted'></i>
+                        <div class="col-xl-3 col-lg-4 col-md-6 mb-4">
+                            <div class="card h-100 shadow-sm">
+                                <div class="position-relative">
+                                    <?php if (!empty($product['image'])): ?>
+                                        <img src="../images/products/<?= htmlspecialchars($product['image']) ?>" 
+                                             class="card-img-top" style="height: 200px; object-fit: cover;"
+                                             onerror="this.src='data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' width=\'100%25\' height=\'200\'%3E%3Crect width=\'100%25\' height=\'200\' fill=\'%23e9ecef\'/%3E%3Ctext x=\'50%25\' y=\'50%25\' text-anchor=\'middle\' font-size=\'16\' fill=\'%236c757d\'%3ENo image%3C/text%3E%3C/svg%3E'">
+                                    <?php else: ?>
+                                        <div class="card-img-top bg-light d-flex align-items-center justify-content-center" 
+                                             style="height: 200px;">
+                                            <i class="fas fa-fish fa-3x text-muted"></i>
+                                        </div>
+                                    <?php endif; ?>
+
+                                    <div class="position-absolute top-0 end-0 m-2">
+                                        <?php if (isset($product['status']) && $product['status'] == 0): ?>
+                                            <span class="badge bg-danger">Неактивен</span>
+                                        <?php else: ?>
+                                            <span class="badge bg-success">Активен</span>
+                                        <?php endif; ?>
                                     </div>
-                                    <div class='product-badge'><?= htmlspecialchars($categoryName) ?></div>
                                 </div>
-                                <div class='product-info'>
-                                    <h6 class='product-name'><?= htmlspecialchars($product['name'] ?? 'Без названия') ?></h6>
-                                    <p class='product-description'><?= htmlspecialchars(mb_substr($product['description'] ?? '', 0, 80)) ?>...</p>
-                                    <div class='product-price'><?= formatPrice($product['price'] ?? 0) ?></div>
-                                    <div class='product-actions'>
-                                        <button class='btn btn-success btn-sm flex-fill' onclick='event.stopPropagation(); addToCart(<?= $product['id'] ?>)'>
-                                            <i class='fas fa-cart-plus me-1'></i>В корзину
-                                        </button>
-                                        <button class='btn btn-outline-primary btn-sm' onclick='event.stopPropagation(); showProductModal(<?= $product['id'] ?>)'>
-                                            <i class='fas fa-eye'></i>
-                                        </button>
+
+                                <div class="card-body d-flex flex-column">
+                                    <h6 class="card-title"><?= htmlspecialchars($product['name']) ?></h6>
+                                    <?php if (!empty($product['latin_name'])): ?>
+                                        <p class="card-text small text-muted fst-italic mb-2"><?= htmlspecialchars($product['latin_name']) ?></p>
+                                    <?php endif; ?>
+
+                                    <p class="card-text small text-truncate"><?= htmlspecialchars($product['description'] ?? '') ?></p>
+
+                                    <div class="mt-auto">
+                                        <div class="d-flex justify-content-between align-items-center mb-2">
+                                            <span class="badge bg-secondary"><?= htmlspecialchars($categoryName) ?></span>
+                                            <strong class="text-success"><?= formatPrice($product['price']) ?></strong>
+                                        </div>
+
+                                        <div class="btn-group w-100" role="group">
+                                            <a href="?page=edit_product&id=<?= $product['id'] ?>" 
+                                               class="btn btn-sm btn-outline-primary">
+                                                <i class="fas fa-edit"></i>
+                                            </a>
+                                            <button onclick="viewProduct(<?= $product['id'] ?>)" 
+                                                    class="btn btn-sm btn-outline-info">
+                                                <i class="fas fa-eye"></i>
+                                            </button>
+                                            <button onclick="deleteProduct(<?= $product['id'] ?>)" 
+                                                    class="btn btn-sm btn-outline-danger">
+                                                <i class="fas fa-trash"></i>
+                                            </button>
+                                        </div>
                                     </div>
                                 </div>
                             </div>
                         </div>
                     <?php endforeach; ?>
                 </div>
-            <?php endif; ?>
-        </div>
-    </section>
-
-    <!-- About -->
-    <section id='about' class='py-5'>
-        <div class='container'>
-            <div class='row'>
-                <div class='col-lg-8 mx-auto text-center'>
-                    <h2 class='section-title'>О нашем сообществе</h2>
-                    <p class='lead'>Наша группа полезна и интересна всем, кто занимается аквариумистикой</p>
-
-                    <div class='row g-4 mt-4'>
-                        <div class='col-md-4'>
-                            <div class='text-center'>
-                                <div class='category-icon mx-auto mb-3'><i class='fas fa-camera'></i></div>
-                                <h6>Фотографии питомцев</h6>
-                                <p class='text-muted small'>Делитесь красивыми снимками ваших рыбок</p>
-                            </div>
-                        </div>
-                        <div class='col-md-4'>
-                            <div class='text-center'>
-                                <div class='category-icon mx-auto mb-3'><i class='fas fa-palette'></i></div>
-                                <h6>Уникальное оформление</h6>
-                                <p class='text-muted small'>Креативные решения в дизайне аквариумов</p>
-                            </div>
-                        </div>
-                        <div class='col-md-4'>
-                            <div class='text-center'>
-                                <div class='category-icon mx-auto mb-3'><i class='fas fa-users'></i></div>
-                                <h6>Аквариумные знакомства</h6>
-                                <p class='text-muted small'>Находите единомышленников</p>
-                            </div>
-                        </div>
-                    </div>
-                </div>
             </div>
-        </div>
-    </section>
+        <?php endif; ?>
+    </div>
+</div>
 
-    <!-- Footer -->
-    <footer class='footer'>
-        <div class='container'>
-            <div class='row'>
-                <div class='col-lg-4 mb-4'>
-                    <h6><i class='fas fa-fish me-2'></i>АкваСбор</h6>
-                    <p>Ваш надежный партнер в мире аквариумистики. Качественные товары и профессиональные консультации.</p>
-                </div>
-                <div class='col-lg-2 mb-4'>
-                    <h6>Каталог</h6>
-                    <div class='d-flex flex-column gap-1'>
-                        <a href='#'>Аквариумы</a>
-                        <a href='#'>Рыбки</a>
-                        <a href='#'>Растения</a>
-                        <a href='#'>Оборудование</a>
-                    </div>
-                </div>
-                <div class='col-lg-2 mb-4'>
-                    <h6>Компания</h6>
-                    <div class='d-flex flex-column gap-1'>
-                        <a href='#'>О нас</a>
-                        <a href='#'>Доставка</a>
-                        <a href='#'>Контакты</a>
-                    </div>
-                </div>
-                <div class='col-lg-4 mb-4'>
-                    <h6>Контакты</h6>
-                    <p class='mb-1'><i class='fas fa-envelope me-2'></i>info@akvasbor.ru</p>
-                    <p class='mb-1'><i class='fas fa-phone me-2'></i>+7 (999) 123-45-67</p>
-                    <p class='mb-0'><i class='fas fa-map-marker-alt me-2'></i>Доставка по России и СНГ</p>
-                </div>
+<!-- Модальное окно для просмотра товара -->
+<div class="modal fade" id="viewProductModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Просмотр товара</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
-            <hr class='my-4' style='border-color: #475569;'>
-            <div class='text-center'>
-                <p class='mb-0'>&copy; 2024 АкваСбор. Все права защищены.</p>
-            </div>
-        </div>
-    </footer>
-
-    <!-- Product Modal -->
-    <div class='modal fade' id='productModal' tabindex='-1'>
-        <div class='modal-dialog modal-lg'>
-            <div class='modal-content'>
-                <div class='modal-header'>
-                    <h5 class='modal-title' id='productModalTitle'>Товар</h5>
-                    <button type='button' class='btn-close btn-close-white' data-bs-dismiss='modal'></button>
-                </div>
-                <div class='modal-body'>
-                    <div class='row'>
-                        <div class='col-md-6'>
-                            <div class='bg-light d-flex align-items-center justify-content-center' style='height: 300px; border-radius: 8px;'>
-                                <i class='fas fa-fish fa-4x text-muted'></i>
-                            </div>
-                        </div>
-                        <div class='col-md-6'>
-                            <h4 id='productModalName'>Название товара</h4>
-                            <p class='text-muted' id='productModalCategory'>Категория</p>
-                            <div class='mb-3'>
-                                <span class='h4 text-success' id='productModalPrice'>0 ₽</span>
-                            </div>
-                            <p id='productModalDescription'>Описание товара</p>
-                            <div class='d-grid'>
-                                <button class='btn btn-success btn-lg' onclick='addToCartFromModal()'>
-                                    <i class='fas fa-cart-plus me-2'></i>Добавить в корзину
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                </div>
+            <div class="modal-body" id="productViewContent">
+                <!-- Контент загружается через JavaScript -->
             </div>
         </div>
     </div>
+</div>
 
-    <!-- Cart Modal -->
-    <div class='modal fade' id='cartModal' tabindex='-1'>
-        <div class='modal-dialog modal-lg'>
-            <div class='modal-content'>
-                <div class='modal-header'>
-                    <h5 class='modal-title'><i class='fas fa-shopping-cart me-2'></i>Корзина</h5>
-                    <button type='button' class='btn-close btn-close-white' data-bs-dismiss='modal'></button>
-                </div>
-                <div class='modal-body' id='cartContent'>
-                    <div class='text-center py-4'>
-                        <div class='spinner-border text-primary' role='status'>
-                            <span class='visually-hidden'>Загрузка...</span>
-                        </div>
-                        <p class='mt-2'>Загрузка корзины...</p>
-                    </div>
-                </div>
-                <div class='modal-footer'>
-                    <button type='button' class='btn btn-outline-secondary' data-bs-dismiss='modal'>Продолжить покупки</button>
-                    <a href='checkout.php' class='btn btn-primary'>Оформить заказ</a>
-                </div>
+<script>
+// Переключение видов
+document.getElementById('gridView').addEventListener('click', function() {
+    document.getElementById('tableView').classList.add('d-none');
+    document.getElementById('gridView').classList.remove('d-none');
+    this.classList.add('btn-primary');
+    this.classList.remove('btn-outline-primary');
+    document.getElementById('listView').classList.add('btn-outline-primary');
+    document.getElementById('listView').classList.remove('btn-primary');
+});
+
+document.getElementById('listView').addEventListener('click', function() {
+    document.getElementById('gridView').classList.add('d-none');
+    document.getElementById('tableView').classList.remove('d-none');
+    this.classList.add('btn-primary');
+    this.classList.remove('btn-outline-primary');
+    document.getElementById('gridView').classList.add('btn-outline-primary');
+    document.getElementById('gridView').classList.remove('btn-primary');
+});
+
+// Просмотр товара
+function viewProduct(id) {
+    // Здесь можно добавить AJAX запрос для получения детальной информации о товаре
+    const modal = new bootstrap.Modal(document.getElementById('viewProductModal'));
+    document.getElementById('productViewContent').innerHTML = `
+        <div class="text-center">
+            <div class="spinner-border" role="status">
+                <span class="visually-hidden">Загрузка...</span>
             </div>
         </div>
-    </div>
+    `;
+    modal.show();
 
-    <script src='https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js'></script>
-    <script>
-        let currentProductId = null;
+    // Имитация загрузки данных
+    setTimeout(() => {
+        document.getElementById('productViewContent').innerHTML = `
+            <p>Детальная информация о товаре #${id}</p>
+            <p>Здесь будет полная информация о товаре...</p>
+        `;
+    }, 1000);
+}
 
-        // Добавить товар в корзину
-        async function addToCart(productId, quantity = 1) {
-            try {
-                const formData = new FormData();
-                formData.append('action', 'add_to_cart');
-                formData.append('product_id', productId);
-                formData.append('quantity', quantity);
-
-                const response = await fetch('index.php', {
-                    method: 'POST',
-                    body: formData,
-                    credentials: 'same-origin'
-                });
-
-                const result = await response.json();
-
-                if (result.success) {
-                    updateCartBadge(result.cartCount);
-                    showNotification(result.message, 'success');
-                } else {
-                    showNotification(result.message || 'Ошибка добавления в корзину', 'error');
-                }
-
-            } catch (error) {
-                console.error('Ошибка:', error);
-                showNotification('Ошибка сети или сервера', 'error');
-            }
-        }
-
-        // Обновить счетчик корзины
-        function updateCartBadge(count) {
-            const cartBadge = document.getElementById('cartCount');
-            if (cartBadge) {
-                cartBadge.textContent = count;
-                cartBadge.style.display = count > 0 ? 'inline' : 'none';
-            }
-        }
-
-        // Показать модальное окно товара
-        async function showProductModal(productId) {
-            try {
-                const response = await fetch(`index.php?action=get_product&id=${productId}`);
-                const product = await response.json();
-
-                if (product.error) {
-                    showNotification('Товар не найден', 'error');
-                    return;
-                }
-
-                currentProductId = productId;
-
-                document.getElementById('productModalTitle').textContent = product.name || 'Товар';
-                document.getElementById('productModalName').textContent = product.name || 'Товар';
-                document.getElementById('productModalPrice').textContent = formatPrice(product.price || 0);
-                document.getElementById('productModalDescription').textContent = product.description || 'Описание отсутствует';
-
-                const modal = new bootstrap.Modal(document.getElementById('productModal'));
-                modal.show();
-
-            } catch (error) {
-                console.error('Ошибка загрузки товара:', error);
-                showNotification('Ошибка загрузки товара', 'error');
-            }
-        }
-
-        // Добавить товар из модального окна
-        function addToCartFromModal() {
-            if (currentProductId) {
-                addToCart(currentProductId);
-            } else {
-                showNotification('Ошибка: товар не выбран', 'error');
-            }
-        }
-
-        // Обновить количество в корзине
-        async function updateCartQuantity(productId, quantity) {
-            try {
-                const formData = new FormData();
-                formData.append('action', 'update_cart_item');
-                formData.append('product_id', productId);
-                formData.append('quantity', quantity);
-
-                const response = await fetch('index.php', {
-                    method: 'POST',
-                    body: formData,
-                    credentials: 'same-origin'
-                });
-
-                const result = await response.json();
-
-                if (result.success) {
-                    updateCartBadge(result.cartCount);
-                    updateCartModal();
-                } else {
-                    showNotification(result.message || 'Ошибка обновления корзины', 'error');
-                }
-
-            } catch (error) {
-                console.error('Ошибка обновления корзины:', error);
-                showNotification('Ошибка сети', 'error');
-            }
-        }
-
-        // Показать уведомление
-        function showNotification(message, type = 'success') {
-            const toastContainer = document.querySelector('.toast-container');
-            const alertClass = type === 'success' ? 'alert-success' : 'alert-danger';
-            const icon = type === 'success' ? 'fas fa-check-circle' : 'fas fa-exclamation-circle';
-
-            const notification = document.createElement('div');
-            notification.className = `alert ${alertClass} alert-dismissible fade show`;
-            notification.style.cssText = 'min-width: 300px; box-shadow: 0 4px 15px rgba(0,0,0,0.2);';
-            notification.innerHTML = `
-                <i class='${icon} me-2'></i>${message}
-                <button type='button' class='btn-close' data-bs-dismiss='alert'></button>
-            `;
-
-            toastContainer.appendChild(notification);
-
-            setTimeout(() => {
-                if (notification.parentNode) {
-                    notification.remove();
-                }
-            }, 5000);
-        }
-
-        // Форматирование цены
-        function formatPrice(price) {
-            const numPrice = parseFloat(price) || 0;
-            return new Intl.NumberFormat('ru-RU', {
-                style: 'currency',
-                currency: 'RUB',
-                minimumFractionDigits: 0,
-                maximumFractionDigits: 0
-            }).format(numPrice);
-        }
-
-        // Обновить корзину
-        async function updateCartModal() {
-            try {
-                const formData = new FormData();
-                formData.append('action', 'get_cart_content');
-
-                const response = await fetch('index.php', {
-                    method: 'POST',
-                    body: formData,
-                    credentials: 'same-origin'
-                });
-
-                const result = await response.json();
-
-                if (result.success) {
-                    document.getElementById('cartContent').innerHTML = result.content;
-                } else {
-                    throw new Error(result.message || 'Ошибка загрузки корзины');
-                }
-
-            } catch (error) {
-                console.error('Ошибка загрузки корзины:', error);
-                document.getElementById('cartContent').innerHTML = `
-                    <div class='alert alert-danger'>
-                        <i class='fas fa-exclamation-triangle me-2'></i>
-                        Ошибка загрузки корзины
-                    </div>
-                `;
-            }
-        }
-
-        // События
-        document.getElementById('cartModal').addEventListener('show.bs.modal', updateCartModal);
-
-        // Инициализация
-        document.addEventListener('DOMContentLoaded', function() {
-            console.log('АкваСбор загружен успешно!');
-        });
-    </script>
-</body>
-</html>
+// Удаление товара
+function deleteProduct(id) {
+    if (confirm('Вы уверены, что хотите удалить этот товар?')) {
+        const form = document.createElement('form');
+        form.method = 'POST';
+        form.innerHTML = `
+            <input type="hidden" name="delete_product" value="1">
+            <input type="hidden" name="product_id" value="${id}">
+        `;
+        document.body.appendChild(form);
+        form.submit();
+    }
+}
+</script>
