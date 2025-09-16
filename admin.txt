@@ -1,328 +1,353 @@
 <?php
-require_once 'functions.php';
+// Основные функции для работы с JSON файлами
 
-// Получаем данные
-$featured_products = getFeaturedProducts(8);
-$categories = getCategoriesWithCount();
-$stats = getDashboardStats();
-$settings = getSettings();
-$slider = loadJsonData('slider.json');
-$news = array_slice(loadJsonData('news.json'), 0, 3);
-$reviews = array_slice(loadJsonData('reviews.json'), 0, 6);
+/**
+ * Загрузка данных из JSON файла
+ */
+function loadJsonData($filename) {
+    $filepath = __DIR__ . '/data/' . $filename;
+    if (!file_exists($filepath)) {
+        return [];
+    }
+    $content = file_get_contents($filepath);
+    return json_decode($content, true) ?: [];
+}
 
-// Иконки категорий
-$categoryIcons = [
-    'Плавающие растения' => '🌊',
-    'Эпифиты' => '🪨',
-    'Мхи' => '🍃',
-    'Длинностебельные' => '🌿',
-    'Розеточные' => '🌹',
-    'Почвопокровные' => '🌱',
-    'Клубневые' => '🥔',
-    'Печеночники' => '🍀',
-    'Луковичные' => '🧅'
-];
+/**
+ * Сохранение данных в JSON файл
+ */
+function saveJsonData($filename, $data) {
+    $filepath = __DIR__ . '/data/' . $filename;
+    $dir = dirname($filepath);
+    if (!is_dir($dir)) {
+        mkdir($dir, 0755, true);
+    }
+    return file_put_contents($filepath, json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
+}
+
+/**
+ * Получение товаров с фильтрацией
+ */
+function getProducts($filters = []) {
+    $products = loadJsonData('products.json');
+
+    if (!empty($filters['category_id'])) {
+        $products = array_filter($products, function($product) use ($filters) {
+            return $product['category_id'] == $filters['category_id'];
+        });
+    }
+
+    if (!empty($filters['search'])) {
+        $search = mb_strtolower($filters['search']);
+        $products = array_filter($products, function($product) use ($search) {
+            return mb_strpos(mb_strtolower($product['name']), $search) !== false ||
+                   mb_strpos(mb_strtolower($product['latin_name']), $search) !== false ||
+                   mb_strpos(mb_strtolower($product['description']), $search) !== false;
+        });
+    }
+
+    if (!empty($filters['price_min'])) {
+        $products = array_filter($products, function($product) use ($filters) {
+            return $product['price'] >= $filters['price_min'];
+        });
+    }
+
+    if (!empty($filters['price_max'])) {
+        $products = array_filter($products, function($product) use ($filters) {
+            return $product['price'] <= $filters['price_max'];
+        });
+    }
+
+    if (!empty($filters['difficulty'])) {
+        $products = array_filter($products, function($product) use ($filters) {
+            return $product['difficulty'] == $filters['difficulty'];
+        });
+    }
+
+    // Фильтр по статусу (активные товары)
+    $products = array_filter($products, function($product) {
+        return isset($product['status']) ? $product['status'] == 1 : true;
+    });
+
+    return array_values($products);
+}
+
+/**
+ * Получение товара по slug
+ */
+function getProductBySlug($slug) {
+    $products = loadJsonData('products.json');
+    foreach ($products as $product) {
+        if ($product['slug'] === $slug) {
+            return $product;
+        }
+    }
+    return null;
+}
+
+/**
+ * Получение товара по ID
+ */
+function getProductById($id) {
+    $products = loadJsonData('products.json');
+    foreach ($products as $product) {
+        if ($product['id'] == $id) {
+            return $product;
+        }
+    }
+    return null;
+}
+
+/**
+ * Получение категорий с подсчетом товаров
+ */
+function getCategoriesWithCount() {
+    $categories = loadJsonData('categories.json');
+    $products = getProducts();
+
+    foreach ($categories as &$category) {
+        $count = 0;
+        foreach ($products as $product) {
+            if ($product['category_id'] == $category['id']) {
+                $count++;
+            }
+        }
+        $category['products_count'] = $count;
+    }
+
+    return $categories;
+}
+
+/**
+ * Получение категории по ID
+ */
+function getCategoryById($id) {
+    $categories = loadJsonData('categories.json');
+    foreach ($categories as $category) {
+        if ($category['id'] == $id) {
+            return $category;
+        }
+    }
+    return null;
+}
+
+/**
+ * Генерация уникального ID
+ */
+function generateId($data) {
+    if (empty($data)) return 1;
+    $maxId = 0;
+    foreach ($data as $item) {
+        if (isset($item['id']) && $item['id'] > $maxId) {
+            $maxId = $item['id'];
+        }
+    }
+    return $maxId + 1;
+}
+
+/**
+ * Создание slug из названия
+ */
+function createSlug($text) {
+    $text = mb_strtolower($text);
+    $text = preg_replace('/[^a-z0-9а-я\s-]/u', '', $text);
+    $text = preg_replace('/\s+/', '-', trim($text));
+    return $text;
+}
+
+/**
+ * Форматирование цены
+ */
+function formatPrice($price) {
+    return number_format($price, 0, ',', ' ') . ' ₽';
+}
+
+/**
+ * Получение настроек сайта
+ */
+function getSettings() {
+    return loadJsonData('settings.json');
+}
+
+/**
+ * Получение корзины из сессии
+ */
+function getCart() {
+    if (!isset($_SESSION)) {
+        session_start();
+    }
+    return $_SESSION['cart'] ?? [];
+}
+
+/**
+ * Добавление товара в корзину
+ */
+function addToCart($productId, $quantity = 1) {
+    if (!isset($_SESSION)) {
+        session_start();
+    }
+
+    if (!isset($_SESSION['cart'])) {
+        $_SESSION['cart'] = [];
+    }
+
+    if (isset($_SESSION['cart'][$productId])) {
+        $_SESSION['cart'][$productId] += $quantity;
+    } else {
+        $_SESSION['cart'][$productId] = $quantity;
+    }
+}
+
+/**
+ * Удаление товара из корзины
+ */
+function removeFromCart($productId) {
+    if (!isset($_SESSION)) {
+        session_start();
+    }
+
+    if (isset($_SESSION['cart'][$productId])) {
+        unset($_SESSION['cart'][$productId]);
+    }
+}
+
+/**
+ * Получение товаров корзины с деталями
+ */
+function getCartItems() {
+    $cart = getCart();
+    $items = [];
+    $total = 0;
+
+    foreach ($cart as $productId => $quantity) {
+        $product = getProductById($productId);
+        if ($product) {
+            $item = $product;
+            $item['quantity'] = $quantity;
+            $item['subtotal'] = $product['price'] * $quantity;
+            $total += $item['subtotal'];
+            $items[] = $item;
+        }
+    }
+
+    return ['items' => $items, 'total' => $total];
+}
+
+/**
+ * Очистка корзины
+ */
+function clearCart() {
+    if (!isset($_SESSION)) {
+        session_start();
+    }
+    unset($_SESSION['cart']);
+}
+
+/**
+ * Сохранение заказа
+ */
+function saveOrder($orderData) {
+    $orders = loadJsonData('orders.json');
+
+    $order = [
+        'id' => generateId($orders),
+        'date' => date('Y-m-d H:i:s'),
+        'status' => 'new',
+        'customer' => $orderData['customer'],
+        'items' => $orderData['items'],
+        'total' => $orderData['total']
+    ];
+
+    $orders[] = $order;
+    saveJsonData('orders.json', $orders);
+
+    return $order['id'];
+}
+
+/**
+ * Получение популярных товаров
+ */
+function getFeaturedProducts($limit = 8) {
+    $products = getProducts();
+    shuffle($products);
+    return array_slice($products, 0, $limit);
+}
+
+/**
+ * Получение статистики для дашборда
+ */
+function getDashboardStats() {
+    $products = loadJsonData('products.json');
+    $orders = loadJsonData('orders.json');
+    $categories = loadJsonData('categories.json');
+
+    $activeProducts = array_filter($products, function($p) {
+        return isset($p['status']) ? $p['status'] == 1 : true;
+    });
+
+    $todayOrders = array_filter($orders, function($o) {
+        return date('Y-m-d', strtotime($o['date'])) === date('Y-m-d');
+    });
+
+    $totalRevenue = array_sum(array_column($orders, 'total'));
+
+    return [
+        'total_products' => count($activeProducts),
+        'total_categories' => count($categories),
+        'total_orders' => count($orders),
+        'today_orders' => count($todayOrders),
+        'total_revenue' => $totalRevenue
+    ];
+}
+
+/**
+ * Проверка авторизации админа
+ */
+function isAdminAuthenticated() {
+    if (session_status() == PHP_SESSION_NONE) {
+        session_start();
+    }
+    return isset($_SESSION['admin_authenticated']) && $_SESSION['admin_authenticated'] === true;
+}
+
+/**
+ * Авторизация админа
+ */
+function authenticateAdmin($username, $password) {
+    // Простая проверка (в реальном проекте лучше хешировать пароли)
+    $validUsername = 'admin';
+    $validPassword = 'admin123';
+
+    if ($username === $validUsername && $password === $validPassword) {
+        if (session_status() == PHP_SESSION_NONE) {
+            session_start();
+        }
+        $_SESSION['admin_authenticated'] = true;
+        $_SESSION['admin_username'] = $username;
+        return true;
+    }
+
+    return false;
+}
+
+/**
+ * Выход из админки
+ */
+function adminLogout() {
+    if (session_status() == PHP_SESSION_NONE) {
+        session_start();
+    }
+    $_SESSION = [];
+    session_destroy();
+}
+
+/**
+ * Требовать авторизацию админа
+ */
+function requireAdminAuth() {
+    if (!isAdminAuthenticated()) {
+        header('Location: auth.php');
+        exit;
+    }
+}
 ?>
-
-<!DOCTYPE html>
-<html lang="ru">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>🌱 Аквариумные растения - Лучший интернет-магазин водных растений</title>
-    <meta name="description" content="Большой выбор аквариумных растений ✅ <?= $stats['total_products'] ?> видов ✅ <?= $stats['total_categories'] ?> категорий ✅ Доставка по всей России">
-
-    <link rel="stylesheet" href="assets/css/style.css">
-</head>
-<body>
-    <!-- HEADER -->
-    <header class="header">
-        <div class="container">
-            <div class="header-content">
-                <h1>🌱 Аквариумные растения</h1>
-                <p class="subtitle">Превратите свой аквариум в подводный сад мечты</p>
-                <div class="stats">
-                    <div class="stat">
-                        <span class="stat-number"><?= $stats['total_products'] ?>+</span>
-                        <span class="stat-label">растений</span>
-                    </div>
-                    <div class="stat">
-                        <span class="stat-number"><?= $stats['total_categories'] ?></span>
-                        <span class="stat-label">категорий</span>
-                    </div>
-                    <div class="stat">
-                        <span class="stat-number">⭐⭐⭐⭐⭐</span>
-                        <span class="stat-label">качество</span>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </header>
-
-    <!-- NAVIGATION -->
-    <nav class="nav">
-        <div class="container">
-            <div class="nav-container">
-                <a href="index.php">🏠 Главная</a>
-                <a href="products.php">🌿 Все растения (<?= $stats['total_products'] ?>)</a>
-                <a href="#categories">📂 Категории</a>
-                <a href="#featured">✨ Рекомендуемые</a>
-                <a href="cart.php">🛒 Корзина (<span id="cart-count"><?= count(getCart()) ?></span>)</a>
-                <a href="admin/">⚙️ Админка</a>
-            </div>
-        </div>
-    </nav>
-
-    <!-- SLIDER SECTION -->
-    <?php if (!empty($slider)): ?>
-    <section class="slider-section">
-        <div class="container">
-            <div class="slider">
-                <?php foreach ($slider as $index => $slide): ?>
-                <div class="slide <?= $index === 0 ? 'active' : '' ?>">
-                    <div class="slide-content">
-                        <h2><?= htmlspecialchars($slide['title']) ?></h2>
-                        <p><?= htmlspecialchars($slide['description']) ?></p>
-                        <?php if (!empty($slide['button_text']) && !empty($slide['button_link'])): ?>
-                        <a href="<?= htmlspecialchars($slide['button_link']) ?>" class="btn btn-large">
-                            <?= htmlspecialchars($slide['button_text']) ?>
-                        </a>
-                        <?php endif; ?>
-                    </div>
-                    <?php if (!empty($slide['image'])): ?>
-                    <div class="slide-image">
-                        <img src="<?= htmlspecialchars($slide['image']) ?>" alt="<?= htmlspecialchars($slide['title']) ?>">
-                    </div>
-                    <?php endif; ?>
-                </div>
-                <?php endforeach; ?>
-
-                <!-- Навигация слайдера -->
-                <div class="slider-nav">
-                    <?php foreach ($slider as $index => $slide): ?>
-                    <button class="nav-dot <?= $index === 0 ? 'active' : '' ?>" data-slide="<?= $index ?>"></button>
-                    <?php endforeach; ?>
-                </div>
-            </div>
-        </div>
-    </section>
-    <?php endif; ?>
-
-    <!-- CATEGORIES SECTION -->
-    <section class="categories" id="categories">
-        <div class="container">
-            <h2 class="section-title">🗂️ Категории растений</h2>
-            <p class="section-subtitle">Выберите подходящую категорию для вашего аквариума</p>
-
-            <div class="categories-grid">
-                <?php foreach ($categories as $category): ?>
-                <div class="category-card">
-                    <span class="icon"><?= $categoryIcons[$category['name']] ?? '🌱' ?></span>
-                    <a href="category.php?id=<?= $category['id'] ?>">
-                        <?= htmlspecialchars($category['name']) ?>
-                    </a>
-                    <div class="count"><?= $category['products_count'] ?> растений</div>
-                </div>
-                <?php endforeach; ?>
-            </div>
-        </div>
-    </section>
-
-    <!-- FEATURED PRODUCTS -->
-    <section class="featured" id="featured">
-        <div class="container">
-            <h2 class="section-title">✨ Рекомендуемые растения</h2>
-            <p class="section-subtitle">Лучшие растения для начинающих и опытных аквариумистов</p>
-
-            <?php if ($featured_products): ?>
-                <div class="products-grid">
-                    <?php foreach ($featured_products as $product): ?>
-                        <div class="product-card">
-                            <img src="<?= htmlspecialchars($product['main_image']) ?>"
-                                 alt="<?= htmlspecialchars($product['name']) ?>"
-                                 class="product-image"
-                                 loading="lazy">
-                            <div class="product-info">
-                                <h3 class="product-name"><?= htmlspecialchars($product['name']) ?></h3>
-                                <p class="product-latin"><?= htmlspecialchars($product['latin_name']) ?></p>
-
-                                <?php 
-                                $category = getCategoryById($product['category_id']);
-                                if ($category): ?>
-                                <span class="product-category"><?= htmlspecialchars($category['name']) ?></span>
-                                <?php endif; ?>
-
-                                <div class="product-price"><?= formatPrice($product['price']) ?></div>
-
-                                <?php
-                                $difficultyClass = 'easy';
-                                if (strtolower($product['difficulty']) == 'средне') $difficultyClass = 'medium';
-                                elseif (strtolower($product['difficulty']) == 'сложно') $difficultyClass = 'hard';
-                                ?>
-                                <span class="product-difficulty difficulty-<?= $difficultyClass ?>">
-                                    <?= htmlspecialchars($product['difficulty']) ?>
-                                </span>
-
-                                <div class="product-actions">
-                                    <button class="btn btn-details" onclick="openProductModal(<?= $product['id'] ?>)">
-                                        📖 Подробнее
-                                    </button>
-                                    <button class="btn btn-cart" onclick="addToCart(<?= $product['id'] ?>)">
-                                        🛒 В корзину
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
-                    <?php endforeach; ?>
-                </div>
-            <?php else: ?>
-                <div class="no-products">
-                    <h3>Товары временно недоступны</h3>
-                    <p>Мы работаем над пополнением каталога</p>
-                </div>
-            <?php endif; ?>
-        </div>
-    </section>
-
-    <!-- NEWS SECTION -->
-    <?php if (!empty($news)): ?>
-    <section class="news-section">
-        <div class="container">
-            <h2 class="section-title">📰 Новости и статьи</h2>
-            <p class="section-subtitle">Полезная информация о содержании аквариумных растений</p>
-
-            <div class="news-grid">
-                <?php foreach ($news as $article): ?>
-                <div class="news-card">
-                    <?php if (!empty($article['image'])): ?>
-                    <img src="<?= htmlspecialchars($article['image']) ?>" alt="<?= htmlspecialchars($article['title']) ?>" class="news-image">
-                    <?php endif; ?>
-                    <div class="news-content">
-                        <div class="news-date"><?= date('d.m.Y', strtotime($article['date'])) ?></div>
-                        <h3 class="news-title"><?= htmlspecialchars($article['title']) ?></h3>
-                        <p class="news-excerpt"><?= htmlspecialchars(mb_substr($article['content'], 0, 150)) ?>...</p>
-                        <a href="news.php?id=<?= $article['id'] ?>" class="news-link">Читать далее →</a>
-                    </div>
-                </div>
-                <?php endforeach; ?>
-            </div>
-        </div>
-    </section>
-    <?php endif; ?>
-
-    <!-- REVIEWS SECTION -->
-    <?php if (!empty($reviews)): ?>
-    <section class="reviews-section">
-        <div class="container">
-            <h2 class="section-title">⭐ Отзывы покупателей</h2>
-            <p class="section-subtitle">Что говорят наши клиенты</p>
-
-            <div class="reviews-grid">
-                <?php foreach ($reviews as $review): ?>
-                <div class="review-card">
-                    <div class="review-header">
-                        <div class="review-author"><?= htmlspecialchars($review['author']) ?></div>
-                        <div class="review-rating">
-                            <?php for ($i = 1; $i <= 5; $i++): ?>
-                                <span class="star <?= $i <= $review['rating'] ? 'filled' : '' ?>">⭐</span>
-                            <?php endfor; ?>
-                        </div>
-                    </div>
-                    <p class="review-text"><?= htmlspecialchars($review['text']) ?></p>
-                    <div class="review-date"><?= date('d.m.Y', strtotime($review['date'])) ?></div>
-                </div>
-                <?php endforeach; ?>
-            </div>
-        </div>
-    </section>
-    <?php endif; ?>
-
-    <!-- STATS SECTION -->
-    <section class="stats-section">
-        <div class="container">
-            <div class="stats-grid">
-                <div class="stat-item">
-                    <div class="number"><?= $stats['total_products'] ?>+</div>
-                    <div class="label">Видов растений в каталоге</div>
-                </div>
-                <div class="stat-item">
-                    <div class="number"><?= $stats['total_categories'] ?></div>
-                    <div class="label">Категорий для выбора</div>
-                </div>
-                <div class="stat-item">
-                    <div class="number"><?= $stats['total_orders'] ?></div>
-                    <div class="label">Довольных клиентов</div>
-                </div>
-                <div class="stat-item">
-                    <div class="number">24/7</div>
-                    <div class="label">Поддержка клиентов</div>
-                </div>
-            </div>
-        </div>
-    </section>
-
-    <!-- CTA SECTION -->
-    <section class="cta-section">
-        <div class="container">
-            <div class="cta-content">
-                <h2 class="cta-title">Готовы создать аквариум мечты?</h2>
-                <p class="cta-text">Откройте для себя мир подводного садоводства с нашими качественными растениями</p>
-                <div class="cta-buttons">
-                    <a href="products.php" class="btn btn-large">🌿 Смотреть все растения</a>
-                    <a href="#categories" class="btn btn-outline btn-large">📂 Выбрать категорию</a>
-                </div>
-            </div>
-        </div>
-    </section>
-
-    <!-- FOOTER -->
-    <footer class="footer">
-        <div class="container">
-            <div class="footer-content">
-                <div class="footer-section">
-                    <h3>🌱 Аквариумные растения</h3>
-                    <p>Лучший выбор водных растений для вашего аквариума. Качество, красота, здоровье ваших рыбок.</p>
-                </div>
-
-                <div class="footer-section">
-                    <h3>📂 Категории</h3>
-                    <?php foreach (array_slice($categories, 0, 5) as $category): ?>
-                        <a href="category.php?id=<?= $category['id'] ?>"><?= htmlspecialchars($category['name']) ?></a>
-                    <?php endforeach; ?>
-                </div>
-
-                <div class="footer-section">
-                    <h3>🔗 Полезные ссылки</h3>
-                    <a href="products.php">Все растения</a>
-                    <a href="search.php">Поиск</a>
-                    <a href="cart.php">Корзина</a>
-                    <a href="admin/">Админ панель</a>
-                </div>
-
-                <div class="footer-section">
-                    <h3>📞 Контакты</h3>
-                    <p>📧 info@aquaplants.ru</p>
-                    <p>📱 +7 (999) 123-45-67</p>
-                    <p>🕒 Пн-Вс: 9:00-21:00</p>
-                </div>
-            </div>
-
-            <div class="footer-bottom">
-                <p>&copy; <?= date('Y') ?> Аквариумные растения. Все права защищены.</p>
-            </div>
-        </div>
-    </footer>
-
-    <!-- MODAL FOR PRODUCT DETAILS -->
-    <div id="productModal" class="modal">
-        <div class="modal-content">
-            <span class="modal-close">&times;</span>
-            <div id="modalContent">
-                <!-- Содержимое загружается через AJAX -->
-            </div>
-        </div>
-    </div>
-
-    <script src="assets/js/script.js"></script>
-</body>
-</html>
