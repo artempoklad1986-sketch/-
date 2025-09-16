@@ -1,19 +1,27 @@
 <?php
-session_start();
+require_once 'functions.php';
 
-// Проверяем авторизацию (используем тот же ключ что работает!)
-if (!isset($_SESSION['admin']) || $_SESSION['admin'] !== true) {
-    header("Location: auth.php");
-    exit;
-}
-
-// Подключаем функции
-require_once '../functions.php';
-
-// Получаем данные для дашборда
+// Получаем данные
+$featured_products = getFeaturedProducts(8);
+$categories = getCategoriesWithCount();
 $stats = getDashboardStats();
-$recentOrders = array_slice(loadJsonData('orders.json'), -5);
-$recentOrders = array_reverse($recentOrders);
+$settings = getSettings();
+$slider = loadJsonData('slider.json');
+$news = array_slice(loadJsonData('news.json'), 0, 3);
+$reviews = array_slice(loadJsonData('reviews.json'), 0, 6);
+
+// Иконки категорий
+$categoryIcons = [
+    'Плавающие растения' => '🌊',
+    'Эпифиты' => '🪨',
+    'Мхи' => '🍃',
+    'Длинностебельные' => '🌿',
+    'Розеточные' => '🌹',
+    'Почвопокровные' => '🌱',
+    'Клубневые' => '🥔',
+    'Печеночники' => '🍀',
+    'Луковичные' => '🧅'
+];
 ?>
 
 <!DOCTYPE html>
@@ -21,343 +29,300 @@ $recentOrders = array_reverse($recentOrders);
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>📊 Админ-панель - Аквариумные растения</title>
+    <title>🌱 Аквариумные растения - Лучший интернет-магазин водных растений</title>
+    <meta name="description" content="Большой выбор аквариумных растений ✅ <?= $stats['total_products'] ?> видов ✅ <?= $stats['total_categories'] ?> категорий ✅ Доставка по всей России">
 
-    <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-
-        body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: #f4f6f9;
-            color: #333;
-        }
-
-        /* HEADER */
-        .admin-header {
-            background: linear-gradient(135deg, #2c3e50 0%, #34495e 100%);
-            color: white;
-            padding: 20px 0;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-        }
-
-        .header-container {
-            max-width: 1200px;
-            margin: 0 auto;
-            padding: 0 20px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-
-        .admin-logo {
-            font-size: 1.5em;
-            font-weight: bold;
-        }
-
-        .header-actions a {
-            color: white;
-            text-decoration: none;
-            padding: 10px 20px;
-            background: rgba(255,255,255,0.1);
-            border-radius: 5px;
-            margin-left: 10px;
-            transition: all 0.3s;
-        }
-
-        .header-actions a:hover {
-            background: rgba(255,255,255,0.2);
-        }
-
-        /* MAIN CONTENT */
-        .main-content {
-            max-width: 1200px;
-            margin: 40px auto;
-            padding: 0 20px;
-        }
-
-        .welcome-section {
-            background: linear-gradient(135deg, #27ae60, #2c5530);
-            color: white;
-            padding: 40px;
-            border-radius: 15px;
-            text-align: center;
-            margin-bottom: 40px;
-            box-shadow: 0 10px 30px rgba(0,0,0,0.1);
-        }
-
-        .welcome-section h1 {
-            font-size: 2.5em;
-            margin-bottom: 10px;
-        }
-
-        /* KPI CARDS */
-        .kpi-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-            gap: 25px;
-            margin-bottom: 40px;
-        }
-
-        .kpi-card {
-            background: white;
-            padding: 30px;
-            border-radius: 15px;
-            box-shadow: 0 5px 15px rgba(0,0,0,0.08);
-            text-align: center;
-            transition: transform 0.3s ease;
-        }
-
-        .kpi-card:hover {
-            transform: translateY(-5px);
-        }
-
-        .kpi-icon {
-            font-size: 3em;
-            margin-bottom: 15px;
-        }
-
-        .kpi-number {
-            font-size: 2.5em;
-            font-weight: bold;
-            color: #27ae60;
-            margin-bottom: 10px;
-        }
-
-        .kpi-label {
-            color: #666;
-            font-size: 1.1em;
-        }
-
-        /* DASHBOARD GRID */
-        .dashboard-grid {
-            display: grid;
-            grid-template-columns: 2fr 1fr;
-            gap: 30px;
-            margin-bottom: 40px;
-        }
-
-        .widget {
-            background: white;
-            padding: 30px;
-            border-radius: 15px;
-            box-shadow: 0 5px 15px rgba(0,0,0,0.08);
-        }
-
-        .widget h2 {
-            color: #2c3e50;
-            margin-bottom: 20px;
-            font-size: 1.5em;
-        }
-
-        /* ORDERS LIST */
-        .order-item {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 15px;
-            margin-bottom: 10px;
-            background: #f8f9fa;
-            border-radius: 10px;
-            border-left: 4px solid #27ae60;
-        }
-
-        .order-info h4 {
-            color: #2c3e50;
-            margin-bottom: 5px;
-        }
-
-        .order-info small {
-            color: #666;
-        }
-
-        .order-amount {
-            font-weight: bold;
-            color: #27ae60;
-            font-size: 1.2em;
-        }
-
-        /* QUICK ACTIONS */
-        .action-grid {
-            display: grid;
-            gap: 15px;
-        }
-
-        .action-btn {
-            display: flex;
-            align-items: center;
-            padding: 20px;
-            background: #f8f9fa;
-            border-radius: 10px;
-            text-decoration: none;
-            color: #333;
-            transition: all 0.3s ease;
-        }
-
-        .action-btn:hover {
-            background: #e9ecef;
-            transform: translateX(5px);
-        }
-
-        .action-icon {
-            font-size: 2em;
-            margin-right: 15px;
-        }
-
-        .action-text h4 {
-            color: #2c3e50;
-            margin-bottom: 5px;
-        }
-
-        .action-text span {
-            color: #666;
-            font-size: 0.9em;
-        }
-
-        /* RESPONSIVE */
-        @media (max-width: 768px) {
-            .dashboard-grid {
-                grid-template-columns: 1fr;
-            }
-
-            .kpi-grid {
-                grid-template-columns: 1fr 1fr;
-            }
-
-            .header-container {
-                flex-direction: column;
-                gap: 15px;
-            }
-        }
-    </style>
+    <link rel="stylesheet" href="assets/css/style.css">
 </head>
 <body>
     <!-- HEADER -->
-    <header class="admin-header">
-        <div class="header-container">
-            <div class="admin-logo">🌱 Админ-панель</div>
-            <div class="header-actions">
-                <span>👋 Добро пожаловать, <?= $_SESSION['user'] ?>!</span>
-                <a href="../index.php" target="_blank">🌐 Сайт</a>
-                <a href="auth.php?logout=1">🚪 Выход</a>
+    <header class="header">
+        <div class="container">
+            <div class="header-content">
+                <h1>🌱 Аквариумные растения</h1>
+                <p class="subtitle">Превратите свой аквариум в подводный сад мечты</p>
+                <div class="stats">
+                    <div class="stat">
+                        <span class="stat-number"><?= $stats['total_products'] ?>+</span>
+                        <span class="stat-label">растений</span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-number"><?= $stats['total_categories'] ?></span>
+                        <span class="stat-label">категорий</span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-number">⭐⭐⭐⭐⭐</span>
+                        <span class="stat-label">качество</span>
+                    </div>
+                </div>
             </div>
         </div>
     </header>
 
-    <!-- MAIN CONTENT -->
-    <main class="main-content">
-        <!-- WELCOME SECTION -->
-        <section class="welcome-section">
-            <h1>🎉 Добро пожаловать в админ-панель!</h1>
-            <p>Управляйте своим интернет-магазином аквариумных растений</p>
-        </section>
-
-        <!-- KPI CARDS -->
-        <div class="kpi-grid">
-            <div class="kpi-card">
-                <div class="kpi-icon">🌱</div>
-                <div class="kpi-number"><?= $stats['total_products'] ?></div>
-                <div class="kpi-label">Товаров в каталоге</div>
-            </div>
-
-            <div class="kpi-card">
-                <div class="kpi-icon">📦</div>
-                <div class="kpi-number"><?= $stats['total_orders'] ?></div>
-                <div class="kpi-label">Всего заказов</div>
-            </div>
-
-            <div class="kpi-card">
-                <div class="kpi-icon">💰</div>
-                <div class="kpi-number"><?= formatPrice($stats['total_revenue']) ?></div>
-                <div class="kpi-label">Общая выручка</div>
-            </div>
-
-            <div class="kpi-card">
-                <div class="kpi-icon">📈</div>
-                <div class="kpi-number"><?= $stats['today_orders'] ?></div>
-                <div class="kpi-label">Заказов сегодня</div>
+    <!-- NAVIGATION -->
+    <nav class="nav">
+        <div class="container">
+            <div class="nav-container">
+                <a href="index.php">🏠 Главная</a>
+                <a href="products.php">🌿 Все растения (<?= $stats['total_products'] ?>)</a>
+                <a href="#categories">📂 Категории</a>
+                <a href="#featured">✨ Рекомендуемые</a>
+                <a href="cart.php">🛒 Корзина (<span id="cart-count"><?= count(getCart()) ?></span>)</a>
+                <a href="admin/">⚙️ Админка</a>
             </div>
         </div>
+    </nav>
 
-        <!-- DASHBOARD WIDGETS -->
-        <div class="dashboard-grid">
-            <!-- RECENT ORDERS -->
-            <div class="widget">
-                <h2>📦 Последние заказы</h2>
-                <?php if (!empty($recentOrders)): ?>
-                    <?php foreach ($recentOrders as $order): ?>
-                    <div class="order-item">
-                        <div class="order-info">
-                            <h4>Заказ #<?= $order['id'] ?></h4>
-                            <small><?= htmlspecialchars($order['customer']['name']) ?> • <?= date('d.m.Y H:i', strtotime($order['date'])) ?></small>
-                        </div>
-                        <div class="order-amount"><?= formatPrice($order['total']) ?></div>
+    <!-- SLIDER SECTION -->
+    <?php if (!empty($slider)): ?>
+    <section class="slider-section">
+        <div class="container">
+            <div class="slider">
+                <?php foreach ($slider as $index => $slide): ?>
+                <div class="slide <?= $index === 0 ? 'active' : '' ?>">
+                    <div class="slide-content">
+                        <h2><?= htmlspecialchars($slide['title']) ?></h2>
+                        <p><?= htmlspecialchars($slide['description']) ?></p>
+                        <?php if (!empty($slide['button_text']) && !empty($slide['button_link'])): ?>
+                        <a href="<?= htmlspecialchars($slide['button_link']) ?>" class="btn btn-large">
+                            <?= htmlspecialchars($slide['button_text']) ?>
+                        </a>
+                        <?php endif; ?>
                     </div>
+                    <?php if (!empty($slide['image'])): ?>
+                    <div class="slide-image">
+                        <img src="<?= htmlspecialchars($slide['image']) ?>" alt="<?= htmlspecialchars($slide['title']) ?>">
+                    </div>
+                    <?php endif; ?>
+                </div>
+                <?php endforeach; ?>
+
+                <!-- Навигация слайдера -->
+                <div class="slider-nav">
+                    <?php foreach ($slider as $index => $slide): ?>
+                    <button class="nav-dot <?= $index === 0 ? 'active' : '' ?>" data-slide="<?= $index ?>"></button>
                     <?php endforeach; ?>
-                <?php else: ?>
-                    <p style="color: #666; text-align: center; padding: 40px;">Заказов пока нет</p>
-                <?php endif; ?>
-            </div>
-
-            <!-- QUICK ACTIONS -->
-            <div class="widget">
-                <h2>⚡ Быстрые действия</h2>
-                <div class="action-grid">
-                    <a href="products.php" class="action-btn">
-                        <div class="action-icon">🌱</div>
-                        <div class="action-text">
-                            <h4>Товары</h4>
-                            <span>Управление каталогом</span>
-                        </div>
-                    </a>
-
-                    <a href="orders.php" class="action-btn">
-                        <div class="action-icon">📦</div>
-                        <div class="action-text">
-                            <h4>Заказы</h4>
-                            <span>Обработка заказов</span>
-                        </div>
-                    </a>
-
-                    <a href="categories.php" class="action-btn">
-                        <div class="action-icon">📂</div>
-                        <div class="action-text">
-                            <h4>Категории</h4>
-                            <span>Структура каталога</span>
-                        </div>
-                    </a>
-
-                    <a href="settings.php" class="action-btn">
-                        <div class="action-icon">⚙️</div>
-                        <div class="action-text">
-                            <h4>Настройки</h4>
-                            <span>Конфигурация сайта</span>
-                        </div>
-                    </a>
                 </div>
             </div>
         </div>
+    </section>
+    <?php endif; ?>
 
-        <!-- SUCCESS MESSAGE -->
-        <div style="background: linear-gradient(45deg, #d4edda, #c3e6cb); color: #155724; padding: 30px; border-radius: 15px; text-align: center; margin-bottom: 40px; border-left: 5px solid #28a745;">
-            <h2>🎊 Поздравляем!</h2>
-            <p>Авторизация настроена и работает корректно!</p>
-            <p>Теперь вы можете управлять своим интернет-магазином аквариумных растений.</p>
+    <!-- CATEGORIES SECTION -->
+    <section class="categories" id="categories">
+        <div class="container">
+            <h2 class="section-title">🗂️ Категории растений</h2>
+            <p class="section-subtitle">Выберите подходящую категорию для вашего аквариума</p>
+
+            <div class="categories-grid">
+                <?php foreach ($categories as $category): ?>
+                <div class="category-card">
+                    <span class="icon"><?= $categoryIcons[$category['name']] ?? '🌱' ?></span>
+                    <a href="category.php?id=<?= $category['id'] ?>">
+                        <?= htmlspecialchars($category['name']) ?>
+                    </a>
+                    <div class="count"><?= $category['products_count'] ?> растений</div>
+                </div>
+                <?php endforeach; ?>
+            </div>
         </div>
-    </main>
+    </section>
 
-    <script>
-        console.log('✅ Админ-панель загружена успешно!');
-        console.log('👤 Пользователь:', '<?= $_SESSION['user'] ?>');
-        console.log('🔑 Session ID:', '<?= session_id() ?>');
+    <!-- FEATURED PRODUCTS -->
+    <section class="featured" id="featured">
+        <div class="container">
+            <h2 class="section-title">✨ Рекомендуемые растения</h2>
+            <p class="section-subtitle">Лучшие растения для начинающих и опытных аквариумистов</p>
 
-        // Показать приветственное сообщение
-        setTimeout(() => {
-            alert('🎉 Добро пожаловать в админ-панель!\n\n✅ Авторизация работает\n📊 Дашборд загружен\n🌱 Система готова к работе!');
-        }, 1000);
-    </script>
+            <?php if ($featured_products): ?>
+                <div class="products-grid">
+                    <?php foreach ($featured_products as $product): ?>
+                        <div class="product-card">
+                            <img src="<?= htmlspecialchars($product['main_image']) ?>"
+                                 alt="<?= htmlspecialchars($product['name']) ?>"
+                                 class="product-image"
+                                 loading="lazy">
+                            <div class="product-info">
+                                <h3 class="product-name"><?= htmlspecialchars($product['name']) ?></h3>
+                                <p class="product-latin"><?= htmlspecialchars($product['latin_name']) ?></p>
+
+                                <?php 
+                                $category = getCategoryById($product['category_id']);
+                                if ($category): ?>
+                                <span class="product-category"><?= htmlspecialchars($category['name']) ?></span>
+                                <?php endif; ?>
+
+                                <div class="product-price"><?= formatPrice($product['price']) ?></div>
+
+                                <?php
+                                $difficultyClass = 'easy';
+                                if (strtolower($product['difficulty']) == 'средне') $difficultyClass = 'medium';
+                                elseif (strtolower($product['difficulty']) == 'сложно') $difficultyClass = 'hard';
+                                ?>
+                                <span class="product-difficulty difficulty-<?= $difficultyClass ?>">
+                                    <?= htmlspecialchars($product['difficulty']) ?>
+                                </span>
+
+                                <div class="product-actions">
+                                    <button class="btn btn-details" onclick="openProductModal(<?= $product['id'] ?>)">
+                                        📖 Подробнее
+                                    </button>
+                                    <button class="btn btn-cart" onclick="addToCart(<?= $product['id'] ?>)">
+                                        🛒 В корзину
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    <?php endforeach; ?>
+                </div>
+            <?php else: ?>
+                <div class="no-products">
+                    <h3>Товары временно недоступны</h3>
+                    <p>Мы работаем над пополнением каталога</p>
+                </div>
+            <?php endif; ?>
+        </div>
+    </section>
+
+    <!-- NEWS SECTION -->
+    <?php if (!empty($news)): ?>
+    <section class="news-section">
+        <div class="container">
+            <h2 class="section-title">📰 Новости и статьи</h2>
+            <p class="section-subtitle">Полезная информация о содержании аквариумных растений</p>
+
+            <div class="news-grid">
+                <?php foreach ($news as $article): ?>
+                <div class="news-card">
+                    <?php if (!empty($article['image'])): ?>
+                    <img src="<?= htmlspecialchars($article['image']) ?>" alt="<?= htmlspecialchars($article['title']) ?>" class="news-image">
+                    <?php endif; ?>
+                    <div class="news-content">
+                        <div class="news-date"><?= date('d.m.Y', strtotime($article['date'])) ?></div>
+                        <h3 class="news-title"><?= htmlspecialchars($article['title']) ?></h3>
+                        <p class="news-excerpt"><?= htmlspecialchars(mb_substr($article['content'], 0, 150)) ?>...</p>
+                        <a href="news.php?id=<?= $article['id'] ?>" class="news-link">Читать далее →</a>
+                    </div>
+                </div>
+                <?php endforeach; ?>
+            </div>
+        </div>
+    </section>
+    <?php endif; ?>
+
+    <!-- REVIEWS SECTION -->
+    <?php if (!empty($reviews)): ?>
+    <section class="reviews-section">
+        <div class="container">
+            <h2 class="section-title">⭐ Отзывы покупателей</h2>
+            <p class="section-subtitle">Что говорят наши клиенты</p>
+
+            <div class="reviews-grid">
+                <?php foreach ($reviews as $review): ?>
+                <div class="review-card">
+                    <div class="review-header">
+                        <div class="review-author"><?= htmlspecialchars($review['author']) ?></div>
+                        <div class="review-rating">
+                            <?php for ($i = 1; $i <= 5; $i++): ?>
+                                <span class="star <?= $i <= $review['rating'] ? 'filled' : '' ?>">⭐</span>
+                            <?php endfor; ?>
+                        </div>
+                    </div>
+                    <p class="review-text"><?= htmlspecialchars($review['text']) ?></p>
+                    <div class="review-date"><?= date('d.m.Y', strtotime($review['date'])) ?></div>
+                </div>
+                <?php endforeach; ?>
+            </div>
+        </div>
+    </section>
+    <?php endif; ?>
+
+    <!-- STATS SECTION -->
+    <section class="stats-section">
+        <div class="container">
+            <div class="stats-grid">
+                <div class="stat-item">
+                    <div class="number"><?= $stats['total_products'] ?>+</div>
+                    <div class="label">Видов растений в каталоге</div>
+                </div>
+                <div class="stat-item">
+                    <div class="number"><?= $stats['total_categories'] ?></div>
+                    <div class="label">Категорий для выбора</div>
+                </div>
+                <div class="stat-item">
+                    <div class="number"><?= $stats['total_orders'] ?></div>
+                    <div class="label">Довольных клиентов</div>
+                </div>
+                <div class="stat-item">
+                    <div class="number">24/7</div>
+                    <div class="label">Поддержка клиентов</div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- CTA SECTION -->
+    <section class="cta-section">
+        <div class="container">
+            <div class="cta-content">
+                <h2 class="cta-title">Готовы создать аквариум мечты?</h2>
+                <p class="cta-text">Откройте для себя мир подводного садоводства с нашими качественными растениями</p>
+                <div class="cta-buttons">
+                    <a href="products.php" class="btn btn-large">🌿 Смотреть все растения</a>
+                    <a href="#categories" class="btn btn-outline btn-large">📂 Выбрать категорию</a>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- FOOTER -->
+    <footer class="footer">
+        <div class="container">
+            <div class="footer-content">
+                <div class="footer-section">
+                    <h3>🌱 Аквариумные растения</h3>
+                    <p>Лучший выбор водных растений для вашего аквариума. Качество, красота, здоровье ваших рыбок.</p>
+                </div>
+
+                <div class="footer-section">
+                    <h3>📂 Категории</h3>
+                    <?php foreach (array_slice($categories, 0, 5) as $category): ?>
+                        <a href="category.php?id=<?= $category['id'] ?>"><?= htmlspecialchars($category['name']) ?></a>
+                    <?php endforeach; ?>
+                </div>
+
+                <div class="footer-section">
+                    <h3>🔗 Полезные ссылки</h3>
+                    <a href="products.php">Все растения</a>
+                    <a href="search.php">Поиск</a>
+                    <a href="cart.php">Корзина</a>
+                    <a href="admin/">Админ панель</a>
+                </div>
+
+                <div class="footer-section">
+                    <h3>📞 Контакты</h3>
+                    <p>📧 info@aquaplants.ru</p>
+                    <p>📱 +7 (999) 123-45-67</p>
+                    <p>🕒 Пн-Вс: 9:00-21:00</p>
+                </div>
+            </div>
+
+            <div class="footer-bottom">
+                <p>&copy; <?= date('Y') ?> Аквариумные растения. Все права защищены.</p>
+            </div>
+        </div>
+    </footer>
+
+    <!-- MODAL FOR PRODUCT DETAILS -->
+    <div id="productModal" class="modal">
+        <div class="modal-content">
+            <span class="modal-close">&times;</span>
+            <div id="modalContent">
+                <!-- Содержимое загружается через AJAX -->
+            </div>
+        </div>
+    </div>
+
+    <script src="assets/js/script.js"></script>
 </body>
 </html>
