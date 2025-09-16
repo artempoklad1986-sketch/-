@@ -1,491 +1,876 @@
 <?php
-/**
- * АкваСбор - Функции работы с датами v1.0
- * Совместимо с общей архитектурой
- */
-
-// Устанавливаем часовой пояс
-date_default_timezone_set('Europe/Moscow');
-
-// === ОСНОВНЫЕ ФУНКЦИИ ДАТ ===
+// functions.php - Полный файл функций для интернет-магазина (ИСПРАВЛЕННАЯ ВЕРСИЯ)
+error_reporting(E_ALL);
+ini_set('display_errors', 1);
 
 /**
- * Форматирует дату в человекочитаемый вид
+ * Функция для надежного запуска сессии
  */
-function formatDate($date, $format = 'full') {
-    if (empty($date)) return '';
+function initSession() {
+    // Настройки сессии ПЕРЕД запуском
+    if (session_status() === PHP_SESSION_NONE) {
+        ini_set('session.cookie_lifetime', 86400); // 24 часа
+        ini_set('session.gc_maxlifetime', 86400);
+        ini_set('session.cookie_httponly', 1);
+        ini_set('session.cookie_samesite', 'Lax');
 
-    $timestamp = is_numeric($date) ? $date : strtotime($date);
+        if (!session_start()) {
+            error_log('ОШИБКА: Не удалось запустить сессию');
+            return false;
+        }
+        error_log('Сессия запущена: ' . session_id());
+    } else {
+        error_log('Сессия уже активна: ' . session_id());
+    }
+    return true;
+}
 
-    switch ($format) {
-        case 'short':
-            return date('d.m.Y', $timestamp);
-        case 'medium':
-            return date('d.m.Y H:i', $timestamp);
-        case 'full':
-            return date('d F Y года в H:i', $timestamp);
-        case 'relative':
-            return getRelativeTime($timestamp);
-        case 'iso':
-            return date('c', $timestamp);
-        default:
-            return date($format, $timestamp);
+/**
+ * Загрузка данных из JSON файла
+ */
+function loadJsonData($filename) {
+    $filepath = __DIR__ . '/data/' . $filename;
+    if (!file_exists($filepath)) {
+        error_log("JSON файл не найден: $filepath");
+        return [];
+    }
+    $content = file_get_contents($filepath);
+    $data = json_decode($content, true);
+    if (json_last_error() !== JSON_ERROR_NONE) {
+        error_log("Ошибка парсинга JSON в $filename: " . json_last_error_msg());
+        return [];
+    }
+    return $data ?: [];
+}
+
+/**
+ * Сохранение данных в JSON файл
+ */
+function saveJsonData($filename, $data) {
+    $filepath = __DIR__ . '/data/' . $filename;
+    $dir = dirname($filepath);
+    if (!is_dir($dir)) {
+        if (!mkdir($dir, 0755, true)) {
+            error_log("Не удалось создать директорию: $dir");
+            return false;
+        }
+    }
+    $json = json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+    if ($json === false) {
+        error_log("Ошибка кодирования JSON для $filename: " . json_last_error_msg());
+        return false;
+    }
+    $result = file_put_contents($filepath, $json, LOCK_EX);
+    if ($result === false) {
+        error_log("Не удалось записать файл: $filepath");
+        return false;
+    }
+    return $result;
+}
+
+/**
+ * ИНТЕГРИРОВАННАЯ ФУНКЦИЯ СОХРАНЕНИЯ ТОВАРА ДЛЯ РЕДАКТОРА
+ */
+function saveProduct($productData) {
+    try {
+        $products = loadJsonData('products.json');
+
+        // Генерируем ID если его нет (новый товар)
+        if (empty($productData['id'])) {
+            $productData['id'] = generateProductId();
+            $productData['created_at'] = date('Y-m-d H:i:s');
+        }
+
+        $productData['updated_at'] = date('Y-m-d H:i:s');
+
+        // Обработка изображений
+        if (isset($productData['main_image'])) {
+            $productData['image'] = $productData['main_image']; // Для совместимости
+        }
+
+        // Обработка галереи
+        if (isset($productData['gallery']) && is_string($productData['gallery'])) {
+            $productData['gallery'] = json_decode($productData['gallery'], true) ?: [];
+        }
+
+        // Обработка ярлыков
+        if (isset($productData['badges']) && is_string($productData['badges'])) {
+            $productData['badges'] = json_decode($productData['badges'], true) ?: [];
+        }
+
+        // Создаем папку для загрузки изображений
+        createProductUploadDirs($productData['id']);
+
+        // Ищем существующий товар
+        $productExists = false;
+        foreach ($products as $key => $product) {
+            if ($product['id'] == $productData['id']) {
+                $products[$key] = $productData;
+                $productExists = true;
+                break;
+            }
+        }
+
+        // Если товар не найден, добавляем новый
+        if (!$productExists) {
+            $products[] = $productData;
+        }
+
+        if (saveJsonData('products.json', $products)) {
+            return ['success' => true, 'product_id' => $productData['id']];
+        } else {
+            return ['success' => false, 'error' => 'Не удалось сохранить в файл'];
+        }
+
+    } catch (Exception $e) {
+        error_log('Ошибка сохранения товара: ' . $e->getMessage());
+        return ['success' => false, 'error' => $e->getMessage()];
     }
 }
 
 /**
- * Возвращает относительное время (назад/вперед)
+ * Создание папок для загрузки товара
  */
-function getRelativeTime($timestamp) {
-    $now = time();
-    $diff = $now - $timestamp;
+function createProductUploadDirs($productId) {
+    $basePath = __DIR__ . "/uploads/products/$productId";
+    $dirs = ['main', 'gallery', 'thumbnails'];
 
-    if ($diff < 0) {
-        $diff = abs($diff);
-        $suffix = 'через';
-        $prefix = '';
-    } else {
-        $suffix = '';
-        $prefix = 'назад';
-    }
-
-    $units = [
-        31536000 => ['год', 'года', 'лет'],
-        2592000 => ['месяц', 'месяца', 'месяцев'], 
-        86400 => ['день', 'дня', 'дней'],
-        3600 => ['час', 'часа', 'часов'],
-        60 => ['минуту', 'минуты', 'минут'],
-        1 => ['секунду', 'секунды', 'секунд']
-    ];
-
-    foreach ($units as $unit => $names) {
-        if ($diff >= $unit) {
-            $amount = floor($diff / $unit);
-            $name = getPluralForm($amount, $names);
-
-            if ($suffix) {
-                return "$suffix $amount $name";
-            } else {
-                return "$amount $name $prefix";
+    foreach ($dirs as $dir) {
+        $fullPath = "$basePath/$dir";
+        if (!is_dir($fullPath)) {
+            if (!mkdir($fullPath, 0755, true)) {
+                throw new Exception("Не удалось создать папку: $fullPath");
             }
         }
     }
 
-    return 'только что';
+    return $basePath;
 }
 
 /**
- * Возвращает правильную форму множественного числа
+ * Генерация уникального ID для товара
  */
-function getPluralForm($number, $forms) {
-    $number = abs($number) % 100;
-    $n1 = $number % 10;
-
-    if ($number > 10 && $number < 20) return $forms[2];
-    if ($n1 > 1 && $n1 < 5) return $forms[1];
-    if ($n1 == 1) return $forms[0];
-
-    return $forms[2];
+function generateProductId() {
+    return 'prod_' . time() . '_' . uniqid();
 }
 
 /**
- * Проверяет валидность даты
+ * Обработка загрузки изображений
  */
-function isValidDate($date, $format = 'Y-m-d') {
-    $d = DateTime::createFromFormat($format, $date);
-    return $d && $d->format($format) === $date;
+function handleImageUpload($file, $productId, $type = 'main') {
+    try {
+        $uploadPath = createProductUploadDirs($productId);
+
+        $allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp'];
+        if (!in_array($file['type'], $allowedTypes)) {
+            throw new Exception('Неподдерживаемый тип файла');
+        }
+
+        $maxSize = 10 * 1024 * 1024; // 10MB
+        if ($file['size'] > $maxSize) {
+            throw new Exception('Файл слишком большой');
+        }
+
+        $extension = pathinfo($file['name'], PATHINFO_EXTENSION);
+        $fileName = $type . '_' . uniqid() . '.' . $extension;
+        $targetPath = "$uploadPath/$type/$fileName";
+
+        if (move_uploaded_file($file['tmp_name'], $targetPath)) {
+            // Создаем thumbnail для основного изображения
+            if ($type === 'main') {
+                $thumbnailPath = "$uploadPath/thumbnails/thumb_$fileName";
+                createThumbnail($targetPath, $thumbnailPath, 300, 300);
+            }
+
+            return [
+                'success' => true,
+                'path' => "/uploads/products/$productId/$type/$fileName",
+                'filename' => $fileName
+            ];
+        } else {
+            throw new Exception('Не удалось переместить загруженный файл');
+        }
+
+    } catch (Exception $e) {
+        return ['success' => false, 'error' => $e->getMessage()];
+    }
 }
 
 /**
- * Возвращает начало и конец дня
+ * Создание thumbnail изображения (ЕДИНСТВЕННАЯ ВЕРСИЯ)
  */
-function getDayBounds($date = null) {
-    $date = $date ?: date('Y-m-d');
-    return [
-        'start' => $date . ' 00:00:00',
-        'end' => $date . ' 23:59:59'
-    ];
-}
-
-/**
- * Возвращает начало и конец недели
- */
-function getWeekBounds($date = null) {
-    $timestamp = $date ? strtotime($date) : time();
-    $weekStart = strtotime('monday this week', $timestamp);
-    $weekEnd = strtotime('sunday this week', $timestamp);
-
-    return [
-        'start' => date('Y-m-d 00:00:00', $weekStart),
-        'end' => date('Y-m-d 23:59:59', $weekEnd)
-    ];
-}
-
-/**
- * Возвращает начало и конец месяца
- */
-function getMonthBounds($date = null) {
-    $timestamp = $date ? strtotime($date) : time();
-    $year = date('Y', $timestamp);
-    $month = date('n', $timestamp);
-
-    return [
-        'start' => date('Y-m-d 00:00:00', mktime(0, 0, 0, $month, 1, $year)),
-        'end' => date('Y-m-d 23:59:59', mktime(23, 59, 59, $month, date('t', $timestamp), $year))
-    ];
-}
-
-/**
- * Возвращает начало и конец года
- */
-function getYearBounds($date = null) {
-    $year = $date ? date('Y', strtotime($date)) : date('Y');
-
-    return [
-        'start' => "$year-01-01 00:00:00",
-        'end' => "$year-12-31 23:59:59"
-    ];
-}
-
-/**
- * Возвращает массив дат между двумя датами
- */
-function getDateRange($startDate, $endDate, $format = 'Y-m-d') {
-    $dates = [];
-    $start = new DateTime($startDate);
-    $end = new DateTime($endDate);
-    $interval = new DateInterval('P1D');
-
-    while ($start <= $end) {
-        $dates[] = $start->format($format);
-        $start->add($interval);
+function createThumbnail($source, $destination, $width, $height) {
+    // Проверяем наличие GD расширения
+    if (!extension_loaded('gd')) {
+        // Если GD недоступно, просто копируем файл
+        return copy($source, $destination);
     }
 
-    return $dates;
-}
+    $imageInfo = getimagesize($source);
+    if (!$imageInfo) return false;
 
-/**
- * Добавляет/вычитает время от даты
- */
-function modifyDate($date, $modification) {
-    $datetime = new DateTime($date);
-    $datetime->modify($modification);
-    return $datetime->format('Y-m-d H:i:s');
-}
-
-/**
- * Возвращает разность между двумя датами
- */
-function getDateDiff($date1, $date2, $format = 'days') {
-    $d1 = new DateTime($date1);
-    $d2 = new DateTime($date2);
-    $diff = $d1->diff($d2);
-
-    switch ($format) {
-        case 'years':
-            return $diff->y;
-        case 'months':
-            return ($diff->y * 12) + $diff->m;
-        case 'days':
-            return $diff->days;
-        case 'hours':
-            return ($diff->days * 24) + $diff->h;
-        case 'minutes':
-            return (($diff->days * 24 + $diff->h) * 60) + $diff->i;
-        case 'seconds':
-            return ((($diff->days * 24 + $diff->h) * 60) + $diff->i) * 60 + $diff->s;
+    switch ($imageInfo[2]) {
+        case IMAGETYPE_JPEG:
+            $sourceImage = imagecreatefromjpeg($source);
+            break;
+        case IMAGETYPE_PNG:
+            $sourceImage = imagecreatefrompng($source);
+            break;
+        case IMAGETYPE_GIF:
+            $sourceImage = imagecreatefromgif($source);
+            break;
+        case IMAGETYPE_WEBP:
+            $sourceImage = imagecreatefromwebp($source);
+            break;
         default:
-            return $diff;
+            return false;
+    }
+
+    if (!$sourceImage) return false;
+
+    $sourceWidth = imagesx($sourceImage);
+    $sourceHeight = imagesy($sourceImage);
+
+    $thumbnail = imagecreatetruecolor($width, $height);
+
+    // Прозрачность для PNG
+    if ($imageInfo[2] == IMAGETYPE_PNG || $imageInfo[2] == IMAGETYPE_WEBP) {
+        imagealphablending($thumbnail, false);
+        imagesavealpha($thumbnail, true);
+        $transparent = imagecolorallocatealpha($thumbnail, 255, 255, 255, 127);
+        imagefill($thumbnail, 0, 0, $transparent);
+    }
+
+    imagecopyresampled(
+        $thumbnail, $sourceImage,
+        0, 0, 0, 0,
+        $width, $height, $sourceWidth, $sourceHeight
+    );
+
+    $result = false;
+    switch ($imageInfo[2]) {
+        case IMAGETYPE_JPEG:
+            $result = imagejpeg($thumbnail, $destination, 90);
+            break;
+        case IMAGETYPE_PNG:
+            $result = imagepng($thumbnail, $destination);
+            break;
+        case IMAGETYPE_GIF:
+            $result = imagegif($thumbnail, $destination);
+            break;
+        case IMAGETYPE_WEBP:
+            $result = imagewebp($thumbnail, $destination, 90);
+            break;
+    }
+
+    imagedestroy($sourceImage);
+    imagedestroy($thumbnail);
+
+    return $result;
+}
+
+/**
+ * Копирование товара
+ */
+function copyProduct($productId) {
+    try {
+        $product = getProductById($productId);
+        if (!$product) {
+            return ['success' => false, 'error' => 'Товар не найден'];
+        }
+
+        // Очищаем ID и обновляем название
+        unset($product['id']);
+        $product['name'] = 'Копия - ' . $product['name'];
+        $product['sku'] = $product['sku'] . '_copy';
+
+        $result = saveProduct($product);
+        return $result;
+
+    } catch (Exception $e) {
+        return ['success' => false, 'error' => $e->getMessage()];
     }
 }
 
-// === СПЕЦИАЛЬНЫЕ ФУНКЦИИ ДЛЯ МАГАЗИНА ===
+/**
+ * Получение товаров с фильтрацией
+ */
+function getProducts($filters = []) {
+    $products = loadJsonData('products.json');
+
+    if (!empty($filters['category_id'])) {
+        $products = array_filter($products, function($product) use ($filters) {
+            return isset($product['category_id']) && $product['category_id'] == $filters['category_id'];
+        });
+    }
+
+    if (!empty($filters['search'])) {
+        $search = mb_strtolower($filters['search']);
+        $products = array_filter($products, function($product) use ($search) {
+            $name = mb_strtolower($product['name'] ?? '');
+            $latin = mb_strtolower($product['latin_name'] ?? '');
+            $desc = mb_strtolower($product['description'] ?? '');
+            $tags = mb_strtolower($product['tags'] ?? '');
+            return mb_strpos($name, $search) !== false ||
+                   mb_strpos($latin, $search) !== false ||
+                   mb_strpos($desc, $search) !== false ||
+                   mb_strpos($tags, $search) !== false;
+        });
+    }
+
+    if (!empty($filters['price_min'])) {
+        $products = array_filter($products, function($product) use ($filters) {
+            return isset($product['price']) && $product['price'] >= $filters['price_min'];
+        });
+    }
+
+    if (!empty($filters['price_max'])) {
+        $products = array_filter($products, function($product) use ($filters) {
+            return isset($product['price']) && $product['price'] <= $filters['price_max'];
+        });
+    }
+
+    // Фильтр по статусу (активные товары)
+    if (!isset($filters['include_inactive'])) {
+        $products = array_filter($products, function($product) {
+            return !isset($product['status']) || $product['status'] == 1;
+        });
+    }
+
+    return array_values($products);
+}
 
 /**
- * Проверяет рабочие часы магазина
+ * Получение всех товаров без фильтров (для админки)
  */
-function isStoreOpen($time = null) {
-    $settings = getSiteSettings();
-    $workingHours = $settings['working_hours'] ?? '9:00-21:00';
+function getAllProducts() {
+    return loadJsonData('products.json');
+}
 
-    if ($workingHours === '24/7') return true;
+/**
+ * Получение товара по ID
+ */
+function getProductById($id) {
+    if (empty($id)) {
+        return null;
+    }
+    $products = loadJsonData('products.json');
+    foreach ($products as $product) {
+        if (isset($product['id']) && $product['id'] == $id) {
+            return $product;
+        }
+    }
+    return null;
+}
 
-    $currentTime = $time ?: date('H:i');
-    $currentDay = date('N'); // 1-7 (пн-вс)
+/**
+ * Добавление товара (для совместимости)
+ */
+function addProduct($productData) {
+    return saveProduct($productData);
+}
 
-    // Простая проверка для демонстрации
-    if (preg_match('/(\d{1,2}):(\d{2})-(\d{1,2}):(\d{2})/', $workingHours, $matches)) {
-        $openTime = sprintf('%02d:%02d', $matches[1], $matches[2]);
-        $closeTime = sprintf('%02d:%02d', $matches[3], $matches[4]);
+/**
+ * Обновление товара (для совместимости)
+ */
+function updateProduct($id, $productData) {
+    $productData['id'] = $id;
+    return saveProduct($productData);
+}
 
-        return $currentTime >= $openTime && $currentTime <= $closeTime;
+/**
+ * Удаление товара
+ */
+function deleteProduct($id) {
+    try {
+        $products = loadJsonData('products.json');
+        $products = array_filter($products, function($product) use ($id) {
+            return $product['id'] != $id;
+        });
+
+        if (saveJsonData('products.json', array_values($products))) {
+            return ['success' => true];
+        } else {
+            return ['success' => false, 'error' => 'Не удалось сохранить изменения'];
+        }
+    } catch (Exception $e) {
+        return ['success' => false, 'error' => $e->getMessage()];
+    }
+}
+
+/**
+ * Получение категорий
+ */
+function getCategories() {
+    return loadJsonData('categories.json');
+}
+
+/**
+ * Получение категорий с подсчетом товаров
+ */
+function getCategoriesWithCount() {
+    $categories = loadJsonData('categories.json');
+    $products = getProducts();
+
+    foreach ($categories as &$category) {
+        $count = 0;
+        foreach ($products as $product) {
+            if (isset($product['category_id']) && $product['category_id'] == $category['id']) {
+                $count++;
+            }
+        }
+        $category['products_count'] = $count;
+    }
+
+    return $categories;
+}
+
+/**
+ * Получение категории по ID
+ */
+function getCategoryById($id) {
+    if (!is_numeric($id) || $id <= 0) {
+        return null;
+    }
+    $categories = loadJsonData('categories.json');
+    foreach ($categories as $category) {
+        if (isset($category['id']) && $category['id'] == $id) {
+            return $category;
+        }
+    }
+    return null;
+}
+
+/**
+ * Добавление категории
+ */
+function addCategory($categoryData) {
+    $categories = loadJsonData('categories.json');
+    $categoryData['id'] = generateId($categories);
+    $categoryData['created_at'] = date('Y-m-d H:i:s');
+    $categories[] = $categoryData;
+    return saveJsonData('categories.json', $categories);
+}
+
+/**
+ * Обновление категории
+ */
+function updateCategory($id, $categoryData) {
+    $categories = loadJsonData('categories.json');
+    foreach ($categories as &$category) {
+        if ($category['id'] == $id) {
+            $categoryData['id'] = $id;
+            $categoryData['updated_at'] = date('Y-m-d H:i:s');
+            $category = array_merge($category, $categoryData);
+            return saveJsonData('categories.json', $categories);
+        }
+    }
+    return false;
+}
+
+/**
+ * Удаление категории
+ */
+function deleteCategory($id) {
+    $categories = loadJsonData('categories.json');
+    $categories = array_filter($categories, function($category) use ($id) {
+        return $category['id'] != $id;
+    });
+    return saveJsonData('categories.json', array_values($categories));
+}
+
+/**
+ * Генерация уникального ID для старых функций
+ */
+function generateId($data) {
+    if (empty($data)) return 1;
+    $maxId = 0;
+    foreach ($data as $item) {
+        if (isset($item['id']) && is_numeric($item['id']) && $item['id'] > $maxId) {
+            $maxId = (int)$item['id'];
+        }
+    }
+    return $maxId + 1;
+}
+
+/**
+ * Создание slug из названия
+ */
+function createSlug($text) {
+    $text = mb_strtolower(trim($text));
+    $text = preg_replace('/[^a-z0-9а-я\s-]/u', '', $text);
+    $text = preg_replace('/\s+/', '-', $text);
+    $text = trim($text, '-');
+    return $text;
+}
+
+/**
+ * Форматирование цены
+ */
+function formatPrice($price) {
+    if (!is_numeric($price)) return '0 ₽';
+    return number_format((float)$price, 0, ',', ' ') . ' ₽';
+}
+
+/**
+ * Получение настроек сайта
+ */
+function getSettings() {
+    return loadJsonData('settings.json');
+}
+
+/**
+ * Получение корзины из сессии
+ */
+function getCart() {
+    // Если сессия не активна, запускаем её
+    if (session_status() === PHP_SESSION_NONE) {
+        initSession();
+    }
+
+    $cart = $_SESSION['cart'] ?? [];
+    error_log('getCart: Текущая корзина - ' . print_r($cart, true));
+    return $cart;
+}
+
+/**
+ * Добавление товара в корзину - УПРОЩЕННАЯ ВЕРСИЯ
+ */
+function addToCart($productId, $quantity = 1) {
+    // Проверяем сессию
+    if (session_status() === PHP_SESSION_NONE) {
+        if (!initSession()) {
+            error_log('addToCart: Не удалось инициализировать сессию');
+            return false;
+        }
+    }
+
+    error_log('addToCart: Статус сессии - ' . session_status());
+    error_log('addToCart: ID сессии - ' . session_id());
+
+    // Валидация
+    if (!is_numeric($productId) || !is_numeric($quantity) || $productId <= 0 || $quantity <= 0) {
+        error_log("addToCart: Некорректные параметры - productId: $productId, quantity: $quantity");
+        return false;
+    }
+
+    $productId = (int)$productId;
+    $quantity = (int)$quantity;
+
+    // Проверяем существование товара
+    $product = getProductById($productId);
+    if (!$product) {
+        error_log("addToCart: Товар с ID $productId не найден");
+        return false;
+    }
+
+    // Инициализируем корзину если её нет
+    if (!isset($_SESSION['cart'])) {
+        $_SESSION['cart'] = [];
+        error_log('addToCart: Инициализирована новая корзина');
+    }
+
+    error_log('addToCart: Корзина ДО добавления - ' . print_r($_SESSION['cart'], true));
+
+    // Добавляем товар
+    if (isset($_SESSION['cart'][$productId])) {
+        $_SESSION['cart'][$productId] += $quantity;
+        error_log("addToCart: Увеличено количество товара $productId до " . $_SESSION['cart'][$productId]);
+    } else {
+        $_SESSION['cart'][$productId] = $quantity;
+        error_log("addToCart: Добавлен новый товар $productId в количестве $quantity");
+    }
+
+    error_log('addToCart: Корзина ПОСЛЕ добавления - ' . print_r($_SESSION['cart'], true));
+    error_log('addToCart: УСПЕШНО ЗАВЕРШЕНО');
+
+    return true;
+}
+
+/**
+ * Обновление количества товара в корзине
+ */
+function updateCartItem($productId, $quantity) {
+    if (session_status() === PHP_SESSION_NONE) {
+        initSession();
+    }
+
+    if (!is_numeric($productId) || !is_numeric($quantity) || $productId <= 0) {
+        return false;
+    }
+
+    $productId = (int)$productId;
+    $quantity = (int)$quantity;
+
+    if (!isset($_SESSION['cart'])) {
+        $_SESSION['cart'] = [];
+    }
+
+    if ($quantity > 0) {
+        $_SESSION['cart'][$productId] = $quantity;
+    } else {
+        unset($_SESSION['cart'][$productId]);
     }
 
     return true;
 }
 
 /**
- * Рассчитывает предполагаемую дату доставки
+ * Удаление товара из корзины
  */
-function getDeliveryDate($deliveryMethod, $orderDate = null) {
-    $orderDate = $orderDate ?: date('Y-m-d H:i:s');
-    $orderTimestamp = strtotime($orderDate);
-
-    $deliveryMethods = getDeliveryMethods();
-    $method = $deliveryMethods[$deliveryMethod] ?? null;
-
-    if (!$method) {
-        return formatDate(modifyDate($orderDate, '+3 days'), 'short');
+function removeFromCart($productId) {
+    if (session_status() === PHP_SESSION_NONE) {
+        initSession();
     }
 
-    // Парсим время доставки
-    $timeString = $method['time'];
-    $days = 1;
-
-    if (preg_match('/(\d+)-(\d+)\s*дн/', $timeString, $matches)) {
-        $days = intval($matches[2]); // Берем максимальное время
-    } elseif (preg_match('/(\d+)\s*дн/', $timeString, $matches)) {
-        $days = intval($matches[1]);
+    if (!is_numeric($productId) || $productId <= 0) {
+        return false;
     }
 
-    // Учитываем рабочие дни
-    $deliveryDate = $orderTimestamp;
-    $addedDays = 0;
+    $productId = (int)$productId;
 
-    while ($addedDays < $days) {
-        $deliveryDate += 86400; // +1 день
-        $dayOfWeek = date('N', $deliveryDate);
-
-        // Пропускаем выходные для большинства служб доставки
-        if ($deliveryMethod !== 'post' && ($dayOfWeek == 6 || $dayOfWeek == 7)) {
-            continue;
-        }
-
-        $addedDays++;
+    if (isset($_SESSION['cart'][$productId])) {
+        unset($_SESSION['cart'][$productId]);
+        return true;
     }
 
-    return formatDate($deliveryDate, 'short');
+    return false;
 }
 
 /**
- * Возвращает информацию о времени работы
+ * Получение товаров корзины с деталями
  */
-function getWorkingHoursInfo() {
-    $settings = getSiteSettings();
-    $workingHours = $settings['working_hours'] ?? 'Ежедневно 9:00-21:00';
+function getCartItems() {
+    $cart = getCart();
+    $items = [];
+    $total = 0;
 
-    $isOpen = isStoreOpen();
-    $status = $isOpen ? 'Открыт' : 'Закрыт';
-    $statusClass = $isOpen ? 'text-success' : 'text-danger';
+    foreach ($cart as $productId => $quantity) {
+        $product = getProductById($productId);
+        if ($product && is_numeric($quantity) && $quantity > 0) {
+            $item = $product;
+            $item['quantity'] = (int)$quantity;
+            $item['subtotal'] = (float)$product['price'] * (int)$quantity;
+            $total += $item['subtotal'];
+            $items[] = $item;
+        }
+    }
 
     return [
-        'hours' => $workingHours,
-        'is_open' => $isOpen,
-        'status' => $status,
-        'status_class' => $statusClass
+        'items' => $items,
+        'total' => $total,
+        'count' => count($items)
     ];
 }
 
 /**
- * Генерирует расписание работы для отображения
+ * Очистка корзины
  */
-function getWeekSchedule() {
-    $days = [
-        1 => 'Понедельник',
-        2 => 'Вторник', 
-        3 => 'Среда',
-        4 => 'Четверг',
-        5 => 'Пятница',
-        6 => 'Суббота',
-        7 => 'Воскресенье'
+function clearCart() {
+    if (session_status() === PHP_SESSION_NONE) {
+        initSession();
+    }
+    $_SESSION['cart'] = [];
+    return true;
+}
+
+/**
+ * Получение количества товаров в корзине
+ */
+function getCartCount() {
+    $cart = getCart();
+    $count = array_sum($cart);
+    error_log("getCartCount: Всего товаров в корзине - $count");
+    return $count;
+}
+
+/**
+ * Сохранение заказа
+ */
+function saveOrder($orderData) {
+    $orders = loadJsonData('orders.json');
+
+    $order = [
+        'id' => generateId($orders),
+        'date' => date('Y-m-d H:i:s'),
+        'status' => 'new',
+        'customer' => $orderData['customer'] ?? [],
+        'items' => $orderData['items'] ?? [],
+        'total' => $orderData['total'] ?? 0
     ];
 
-    $schedule = [];
-    foreach ($days as $num => $name) {
-        $schedule[] = [
-            'day' => $name,
-            'hours' => '9:00 — 21:00',
-            'is_today' => date('N') == $num,
-            'is_weekend' => in_array($num, [6, 7])
-        ];
+    $orders[] = $order;
+    if (saveJsonData('orders.json', $orders)) {
+        return $order['id'];
     }
-
-    return $schedule;
-}
-
-// === АНАЛИТИЧЕСКИЕ ФУНКЦИИ ДАТ ===
-
-/**
- * Группирует заказы по датам для аналитики
- */
-function groupOrdersByDate($orders, $groupBy = 'day') {
-    $grouped = [];
-
-    foreach ($orders as $order) {
-        $date = $order['created_at'];
-        $timestamp = strtotime($date);
-
-        switch ($groupBy) {
-            case 'hour':
-                $key = date('Y-m-d H', $timestamp);
-                $label = date('H:i', $timestamp);
-                break;
-            case 'day':
-                $key = date('Y-m-d', $timestamp);
-                $label = date('d.m.Y', $timestamp);
-                break;
-            case 'week':
-                $key = date('Y-W', $timestamp);
-                $label = 'Неделя ' . date('W, Y', $timestamp);
-                break;
-            case 'month':
-                $key = date('Y-m', $timestamp);
-                $label = date('F Y', $timestamp);
-                break;
-            case 'year':
-                $key = date('Y', $timestamp);
-                $label = date('Y', $timestamp);
-                break;
-            default:
-                $key = date('Y-m-d', $timestamp);
-                $label = date('d.m.Y', $timestamp);
-        }
-
-        if (!isset($grouped[$key])) {
-            $grouped[$key] = [
-                'key' => $key,
-                'label' => $label,
-                'orders' => [],
-                'count' => 0,
-                'total_amount' => 0
-            ];
-        }
-
-        $grouped[$key]['orders'][] = $order;
-        $grouped[$key]['count']++;
-        $grouped[$key]['total_amount'] += $order['total_amount'];
-    }
-
-    // Сортируем по ключу
-    ksort($grouped);
-
-    return array_values($grouped);
+    return false;
 }
 
 /**
- * Получает статистику за период
+ * Получение заказов
  */
-function getPeriodStats($startDate, $endDate, $orders = null) {
-    if (!$orders) {
-        $orders = getOrders();
-    }
+function getOrders() {
+    return loadJsonData('orders.json');
+}
 
-    $periodOrders = array_filter($orders, function($order) use ($startDate, $endDate) {
-        $orderDate = date('Y-m-d', strtotime($order['created_at']));
-        return $orderDate >= $startDate && $orderDate <= $endDate;
+/**
+ * Обновление статуса заказа
+ */
+function updateOrderStatus($id, $status) {
+    $orders = loadJsonData('orders.json');
+    foreach ($orders as &$order) {
+        if ($order['id'] == $id) {
+            $order['status'] = $status;
+            $order['updated_at'] = date('Y-m-d H:i:s');
+            return saveJsonData('orders.json', $orders);
+        }
+    }
+    return false;
+}
+
+/**
+ * Получение популярных товаров
+ */
+function getFeaturedProducts($limit = 8) {
+    $products = getProducts();
+    if (empty($products)) {
+        return [];
+    }
+    shuffle($products);
+    return array_slice($products, 0, $limit);
+}
+
+/**
+ * Получение статистики для дашборда
+ */
+function getDashboardStats() {
+    $products = getAllProducts();
+    $orders = getOrders();
+    $categories = getCategories();
+
+    $activeProducts = array_filter($products, function($p) {
+        return !isset($p['status']) || $p['status'] == 1;
     });
 
-    $totalRevenue = array_sum(array_column($periodOrders, 'total_amount'));
-    $totalOrders = count($periodOrders);
-    $avgOrderValue = $totalOrders > 0 ? $totalRevenue / $totalOrders : 0;
+    $today = date('Y-m-d');
+    $todayOrders = array_filter($orders, function($o) use ($today) {
+        return isset($o['date']) && date('Y-m-d', strtotime($o['date'])) === $today;
+    });
+
+    $thisMonth = date('Y-m');
+    $thisMonthOrders = array_filter($orders, function($o) use ($thisMonth) {
+        return isset($o['date']) && date('Y-m', strtotime($o['date'])) === $thisMonth;
+    });
+
+    $totalRevenue = 0;
+    $monthRevenue = 0;
+
+    foreach ($orders as $order) {
+        if (isset($order['total']) && is_numeric($order['total'])) {
+            $totalRevenue += (float)$order['total'];
+        }
+    }
+
+    foreach ($thisMonthOrders as $order) {
+        if (isset($order['total']) && is_numeric($order['total'])) {
+            $monthRevenue += (float)$order['total'];
+        }
+    }
 
     return [
-        'period_start' => $startDate,
-        'period_end' => $endDate,
-        'total_orders' => $totalOrders,
+        'total_products' => count($activeProducts),
+        'total_categories' => count($categories),
+        'total_orders' => count($orders),
+        'today_orders' => count($todayOrders),
+        'month_orders' => count($thisMonthOrders),
         'total_revenue' => $totalRevenue,
-        'avg_order_value' => $avgOrderValue,
-        'orders' => $periodOrders
+        'month_revenue' => $monthRevenue
     ];
 }
 
 /**
- * Сравнивает статистику двух периодов
+ * Получение настроек сайта
  */
-function comparePeriods($period1Start, $period1End, $period2Start, $period2End) {
-    $stats1 = getPeriodStats($period1Start, $period1End);
-    $stats2 = getPeriodStats($period2Start, $period2End);
-
-    $revenueChange = $stats2['total_revenue'] > 0 
-        ? (($stats1['total_revenue'] - $stats2['total_revenue']) / $stats2['total_revenue']) * 100
-        : 0;
-
-    $ordersChange = $stats2['total_orders'] > 0
-        ? (($stats1['total_orders'] - $stats2['total_orders']) / $stats2['total_orders']) * 100
-        : 0;
-
-    $avgChange = $stats2['avg_order_value'] > 0
-        ? (($stats1['avg_order_value'] - $stats2['avg_order_value']) / $stats2['avg_order_value']) * 100
-        : 0;
-
-    return [
-        'current_period' => $stats1,
-        'previous_period' => $stats2,
-        'revenue_change' => round($revenueChange, 1),
-        'orders_change' => round($ordersChange, 1),
-        'avg_order_change' => round($avgChange, 1)
-    ];
-}
-
-// === ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ===
-
-/**
- * Конвертирует русские месяцы в английские для strtotime
- */
-function convertRussianDate($date) {
-    $months = [
-        'января' => 'January', 'февраля' => 'February', 'марта' => 'March',
-        'апреля' => 'April', 'мая' => 'May', 'июня' => 'June',
-        'июля' => 'July', 'августа' => 'August', 'сентября' => 'September',
-        'октября' => 'October', 'ноября' => 'November', 'декабря' => 'December'
-    ];
-
-    return strtr($date, $months);
+function getSiteSettings() {
+    return loadJsonData('settings.json');
 }
 
 /**
- * Возвращает локализованные названия месяцев
+ * Сохранение настроек сайта
  */
-function getMonthNames() {
-    return [
-        1 => 'Январь', 2 => 'Февраль', 3 => 'Март', 4 => 'Апрель',
-        5 => 'Май', 6 => 'Июнь', 7 => 'Июль', 8 => 'Август', 
-        9 => 'Сентябрь', 10 => 'Октябрь', 11 => 'Ноябрь', 12 => 'Декабрь'
-    ];
+function saveSiteSettings($settingsData) {
+    return saveJsonData('settings.json', $settingsData);
 }
 
 /**
- * Возвращает локализованные названия дней недели
+ * Получение конкретной настройки
  */
-function getDayNames() {
-    return [
-        1 => 'Понедельник', 2 => 'Вторник', 3 => 'Среда', 4 => 'Четверг',
-        5 => 'Пятница', 6 => 'Суббота', 7 => 'Воскресенье'
-    ];
+function getSiteSetting($key, $default = '') {
+    static $settings = null;
+    if ($settings === null) {
+        $settings = getSiteSettings();
+    }
+    return $settings[$key] ?? $default;
 }
 
 /**
- * Форматирует период в человекочитаемом виде
+ * Валидация данных товара
  */
-function formatPeriod($startDate, $endDate) {
-    $start = strtotime($startDate);
-    $end = strtotime($endDate);
+function validateProductData($data) {
+    $errors = [];
 
-    if (date('Y-m-d', $start) === date('Y-m-d', $end)) {
-        return formatDate($start, 'short');
+    if (empty($data['name'])) {
+        $errors[] = 'Название товара обязательно';
     }
 
-    if (date('Y-m', $start) === date('Y-m', $end)) {
-        return date('d', $start) . ' - ' . formatDate($end, 'short');
+    if (empty($data['description'])) {
+        $errors[] = 'Описание товара обязательно';
     }
 
-    if (date('Y', $start) === date('Y', $end)) {
-        return date('d.m', $start) . ' - ' . formatDate($end, 'short');
+    if (!isset($data['price']) || !is_numeric($data['price']) || $data['price'] <= 0) {
+        $errors[] = 'Цена должна быть положительным числом';
     }
 
-    return formatDate($start, 'short') . ' - ' . formatDate($end, 'short');
+    if (empty($data['category_id'])) {
+        $errors[] = 'Категория товара обязательна';
+    }
+
+    return $errors;
 }
 
-// Настройка локали для правильного отображения дат
-setlocale(LC_TIME, 'ru_RU.UTF-8', 'rus_RUS.UTF-8', 'Russian_Russia.UTF-8');
+/**
+ * Инициализация базовых данных (категории по умолчанию)
+ */
+function initializeDefaultData() {
+    $categories = getCategories();
+    if (empty($categories)) {
+        $defaultCategories = [
+            ['id' => 1, 'name' => 'Растения', 'slug' => 'plants', 'created_at' => date('Y-m-d H:i:s')],
+            ['id' => 2, 'name' => 'Рыбки', 'slug' => 'fish', 'created_at' => date('Y-m-d H:i:s')],
+            ['id' => 3, 'name' => 'Оборудование', 'slug' => 'equipment', 'created_at' => date('Y-m-d H:i:s')],
+            ['id' => 4, 'name' => 'Декор', 'slug' => 'decoration', 'created_at' => date('Y-m-d H:i:s')]
+        ];
+        saveJsonData('categories.json', $defaultCategories);
+    }
+
+    // Создаем базовые настройки
+    $settings = getSiteSettings();
+    if (empty($settings)) {
+        $defaultSettings = [
+            'site_name' => 'АкваСбор',
+            'site_description' => 'Интернет-магазин аквариумных товаров',
+            'contact_email' => 'info@akvasbor.ru',
+            'contact_phone' => '+7 (000) 000-00-00',
+            'currency' => 'RUB',
+            'updated_at' => date('Y-m-d H:i:s')
+        ];
+        saveSiteSettings($defaultSettings);
+    }
+}
+
+// Автоматическая инициализация при подключении файла
+if (!defined('SKIP_AUTO_INIT')) {
+    initializeDefaultData();
+}
+
 ?>
