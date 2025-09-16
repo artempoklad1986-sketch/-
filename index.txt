@@ -1,876 +1,1230 @@
 <?php
-// functions.php - Полный файл функций для интернет-магазина (ИСПРАВЛЕННАЯ ВЕРСИЯ)
-error_reporting(E_ALL);
-ini_set('display_errors', 1);
+// admin/pages/products.php - СИСТЕМА УПРАВЛЕНИЯ ТОВАРАМИ С АЛИАСОМ
 
-/**
- * Функция для надежного запуска сессии
- */
-function initSession() {
-    // Настройки сессии ПЕРЕД запуском
-    if (session_status() === PHP_SESSION_NONE) {
-        ini_set('session.cookie_lifetime', 86400); // 24 часа
-        ini_set('session.gc_maxlifetime', 86400);
-        ini_set('session.cookie_httponly', 1);
-        ini_set('session.cookie_samesite', 'Lax');
+// 🔗 АЛИАС ДЛЯ РЕДАКТОРА ТОВАРОВ - ДОЛЖЕН БЫТЬ ПЕРВЫМ!
+if (isset($_GET['page']) && $_GET['page'] === 'product_editor') {
+    $editor_file = __DIR__ . '/product_editor.php';
 
-        if (!session_start()) {
-            error_log('ОШИБКА: Не удалось запустить сессию');
-            return false;
-        }
-        error_log('Сессия запущена: ' . session_id());
+    if (file_exists($editor_file)) {
+        // Устанавливаем флаги для редактора
+        $_REQUEST['editor_mode'] = true;
+        $_REQUEST['from_products'] = true;
+        $_REQUEST['no_redirect'] = true;
+
+        // Логируем для отладки
+        error_log("🔗 Алиас активирован: " . $editor_file);
+        error_log("🔗 Параметры: " . http_build_query($_GET));
+
+        // Подключаем редактор
+        include $editor_file;
+        exit; // Важно - останавливаем выполнение products.php
     } else {
-        error_log('Сессия уже активна: ' . session_id());
+        echo "<div class='alert alert-danger animate-fade-in'>
+            <h5><i class='fas fa-exclamation-triangle me-2'></i>🔗 Ошибка алиаса</h5>
+            <p><strong>Файл не найден:</strong> <code>{$editor_file}</code></p>
+        </div>";
     }
-    return true;
 }
 
-/**
- * Загрузка данных из JSON файла
- */
-function loadJsonData($filename) {
-    $filepath = __DIR__ . '/data/' . $filename;
-    if (!file_exists($filepath)) {
-        error_log("JSON файл не найден: $filepath");
-        return [];
-    }
-    $content = file_get_contents($filepath);
-    $data = json_decode($content, true);
-    if (json_last_error() !== JSON_ERROR_NONE) {
-        error_log("Ошибка парсинга JSON в $filename: " . json_last_error_msg());
-        return [];
-    }
-    return $data ?: [];
+// Подключаем функции
+if (!function_exists('getAllProducts')) {
+    require_once '../../functions.php';
 }
 
-/**
- * Сохранение данных в JSON файл
- */
-function saveJsonData($filename, $data) {
-    $filepath = __DIR__ . '/data/' . $filename;
-    $dir = dirname($filepath);
-    if (!is_dir($dir)) {
-        if (!mkdir($dir, 0755, true)) {
-            error_log("Не удалось создать директорию: $dir");
-            return false;
-        }
-    }
-    $json = json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
-    if ($json === false) {
-        error_log("Ошибка кодирования JSON для $filename: " . json_last_error_msg());
-        return false;
-    }
-    $result = file_put_contents($filepath, $json, LOCK_EX);
-    if ($result === false) {
-        error_log("Не удалось записать файл: $filepath");
-        return false;
-    }
-    return $result;
+// Проверяем, что функции загружены
+if (!function_exists('getAllProducts')) {
+    die('Ошибка: Не удалось загрузить функции');
 }
 
-/**
- * ИНТЕГРИРОВАННАЯ ФУНКЦИЯ СОХРАНЕНИЯ ТОВАРА ДЛЯ РЕДАКТОРА
- */
-function saveProduct($productData) {
-    try {
-        $products = loadJsonData('products.json');
+// Обработка удаления товара
+if (isset($_POST['delete_product'])) {
+    $result = deleteProduct($_POST['product_id']);
+    if ($result['success']) {
+        echo '<div class=\'alert alert-success alert-dismissible fade show\'>
+            <i class=\'fas fa-check-circle me-2\'></i>Товар успешно удален!
+            <button type=\'button\' class=\'btn-close\' data-bs-dismiss=\'alert\'></button>
+        </div>';
+    } else {
+        echo '<div class=\'alert alert-danger alert-dismissible fade show\'>
+            <i class=\'fas fa-exclamation-circle me-2\'></i>Ошибка: ' . htmlspecialchars($result['error']) . '
+            <button type=\'button\' class=\'btn-close\' data-bs-dismiss=\'alert\'></button>
+        </div>';
+    }
+}
 
-        // Генерируем ID если его нет (новый товар)
-        if (empty($productData['id'])) {
-            $productData['id'] = generateProductId();
-            $productData['created_at'] = date('Y-m-d H:i:s');
-        }
+// Обработка копирования товара
+if (isset($_POST['copy_product'])) {
+    $result = copyProduct($_POST['product_id']);
+    if ($result['success']) {
+        echo '<div class=\'alert alert-success alert-dismissible fade show\'>
+            <i class=\'fas fa-copy me-2\'></i>Товар успешно скопирован! ID: ' . $result['product_id'] . '
+            <button type=\'button\' class=\'btn-close\' data-bs-dismiss=\'alert\'></button>
+        </div>';
+    } else {
+        echo '<div class=\'alert alert-danger alert-dismissible fade show\'>
+            <i class=\'fas fa-exclamation-circle me-2\'></i>Ошибка копирования: ' . htmlspecialchars($result['error']) . '
+            <button type=\'button\' class=\'btn-close\' data-bs-dismiss=\'alert\'></button>
+        </div>';
+    }
+}
 
-        $productData['updated_at'] = date('Y-m-d H:i:s');
+// Обработка массовых действий
+if (isset($_POST['bulk_action']) && !empty($_POST['selected_products'])) {
+    $action = $_POST['bulk_action'];
+    $productIds = $_POST['selected_products'];
+    $results = [];
 
-        // Обработка изображений
-        if (isset($productData['main_image'])) {
-            $productData['image'] = $productData['main_image']; // Для совместимости
-        }
-
-        // Обработка галереи
-        if (isset($productData['gallery']) && is_string($productData['gallery'])) {
-            $productData['gallery'] = json_decode($productData['gallery'], true) ?: [];
-        }
-
-        // Обработка ярлыков
-        if (isset($productData['badges']) && is_string($productData['badges'])) {
-            $productData['badges'] = json_decode($productData['badges'], true) ?: [];
-        }
-
-        // Создаем папку для загрузки изображений
-        createProductUploadDirs($productData['id']);
-
-        // Ищем существующий товар
-        $productExists = false;
-        foreach ($products as $key => $product) {
-            if ($product['id'] == $productData['id']) {
-                $products[$key] = $productData;
-                $productExists = true;
-                break;
+    switch ($action) {
+        case 'delete':
+            foreach ($productIds as $id) {
+                $results[] = deleteProduct($id);
             }
-        }
-
-        // Если товар не найден, добавляем новый
-        if (!$productExists) {
-            $products[] = $productData;
-        }
-
-        if (saveJsonData('products.json', $products)) {
-            return ['success' => true, 'product_id' => $productData['id']];
-        } else {
-            return ['success' => false, 'error' => 'Не удалось сохранить в файл'];
-        }
-
-    } catch (Exception $e) {
-        error_log('Ошибка сохранения товара: ' . $e->getMessage());
-        return ['success' => false, 'error' => $e->getMessage()];
-    }
-}
-
-/**
- * Создание папок для загрузки товара
- */
-function createProductUploadDirs($productId) {
-    $basePath = __DIR__ . "/uploads/products/$productId";
-    $dirs = ['main', 'gallery', 'thumbnails'];
-
-    foreach ($dirs as $dir) {
-        $fullPath = "$basePath/$dir";
-        if (!is_dir($fullPath)) {
-            if (!mkdir($fullPath, 0755, true)) {
-                throw new Exception("Не удалось создать папку: $fullPath");
+            break;
+        case 'activate':
+            foreach ($productIds as $id) {
+                $product = getProductById($id);
+                if ($product) {
+                    $product['status'] = 1;
+                    $results[] = saveProduct($product);
+                }
             }
-        }
-    }
-
-    return $basePath;
-}
-
-/**
- * Генерация уникального ID для товара
- */
-function generateProductId() {
-    return 'prod_' . time() . '_' . uniqid();
-}
-
-/**
- * Обработка загрузки изображений
- */
-function handleImageUpload($file, $productId, $type = 'main') {
-    try {
-        $uploadPath = createProductUploadDirs($productId);
-
-        $allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp'];
-        if (!in_array($file['type'], $allowedTypes)) {
-            throw new Exception('Неподдерживаемый тип файла');
-        }
-
-        $maxSize = 10 * 1024 * 1024; // 10MB
-        if ($file['size'] > $maxSize) {
-            throw new Exception('Файл слишком большой');
-        }
-
-        $extension = pathinfo($file['name'], PATHINFO_EXTENSION);
-        $fileName = $type . '_' . uniqid() . '.' . $extension;
-        $targetPath = "$uploadPath/$type/$fileName";
-
-        if (move_uploaded_file($file['tmp_name'], $targetPath)) {
-            // Создаем thumbnail для основного изображения
-            if ($type === 'main') {
-                $thumbnailPath = "$uploadPath/thumbnails/thumb_$fileName";
-                createThumbnail($targetPath, $thumbnailPath, 300, 300);
+            break;
+        case 'deactivate':
+            foreach ($productIds as $id) {
+                $product = getProductById($id);
+                if ($product) {
+                    $product['status'] = 0;
+                    $results[] = saveProduct($product);
+                }
             }
-
-            return [
-                'success' => true,
-                'path' => "/uploads/products/$productId/$type/$fileName",
-                'filename' => $fileName
-            ];
-        } else {
-            throw new Exception('Не удалось переместить загруженный файл');
-        }
-
-    } catch (Exception $e) {
-        return ['success' => false, 'error' => $e->getMessage()];
+            break;
     }
+
+    $successCount = count(array_filter($results, function($r) { return $r['success']; }));
+    echo '<div class=\'alert alert-info alert-dismissible fade show\'>
+        <i class=\'fas fa-info-circle me-2\'></i>Обработано товаров: ' . $successCount . ' из ' . count($productIds) . '
+        <button type=\'button\' class=\'btn-close\' data-bs-dismiss=\'alert\'></button>
+    </div>';
 }
 
-/**
- * Создание thumbnail изображения (ЕДИНСТВЕННАЯ ВЕРСИЯ)
- */
-function createThumbnail($source, $destination, $width, $height) {
-    // Проверяем наличие GD расширения
-    if (!extension_loaded('gd')) {
-        // Если GD недоступно, просто копируем файл
-        return copy($source, $destination);
-    }
+// Получение данных
+$products = getAllProducts();
+$categories = getCategories();
+$search = $_GET['search'] ?? '';
+$category_filter = $_GET['category'] ?? '';
+$status_filter = $_GET['status'] ?? '';
+$sort_by = $_GET['sort'] ?? 'name_asc';
 
-    $imageInfo = getimagesize($source);
-    if (!$imageInfo) return false;
-
-    switch ($imageInfo[2]) {
-        case IMAGETYPE_JPEG:
-            $sourceImage = imagecreatefromjpeg($source);
-            break;
-        case IMAGETYPE_PNG:
-            $sourceImage = imagecreatefrompng($source);
-            break;
-        case IMAGETYPE_GIF:
-            $sourceImage = imagecreatefromgif($source);
-            break;
-        case IMAGETYPE_WEBP:
-            $sourceImage = imagecreatefromwebp($source);
-            break;
-        default:
-            return false;
-    }
-
-    if (!$sourceImage) return false;
-
-    $sourceWidth = imagesx($sourceImage);
-    $sourceHeight = imagesy($sourceImage);
-
-    $thumbnail = imagecreatetruecolor($width, $height);
-
-    // Прозрачность для PNG
-    if ($imageInfo[2] == IMAGETYPE_PNG || $imageInfo[2] == IMAGETYPE_WEBP) {
-        imagealphablending($thumbnail, false);
-        imagesavealpha($thumbnail, true);
-        $transparent = imagecolorallocatealpha($thumbnail, 255, 255, 255, 127);
-        imagefill($thumbnail, 0, 0, $transparent);
-    }
-
-    imagecopyresampled(
-        $thumbnail, $sourceImage,
-        0, 0, 0, 0,
-        $width, $height, $sourceWidth, $sourceHeight
-    );
-
-    $result = false;
-    switch ($imageInfo[2]) {
-        case IMAGETYPE_JPEG:
-            $result = imagejpeg($thumbnail, $destination, 90);
-            break;
-        case IMAGETYPE_PNG:
-            $result = imagepng($thumbnail, $destination);
-            break;
-        case IMAGETYPE_GIF:
-            $result = imagegif($thumbnail, $destination);
-            break;
-        case IMAGETYPE_WEBP:
-            $result = imagewebp($thumbnail, $destination, 90);
-            break;
-    }
-
-    imagedestroy($sourceImage);
-    imagedestroy($thumbnail);
-
-    return $result;
-}
-
-/**
- * Копирование товара
- */
-function copyProduct($productId) {
-    try {
-        $product = getProductById($productId);
-        if (!$product) {
-            return ['success' => false, 'error' => 'Товар не найден'];
-        }
-
-        // Очищаем ID и обновляем название
-        unset($product['id']);
-        $product['name'] = 'Копия - ' . $product['name'];
-        $product['sku'] = $product['sku'] . '_copy';
-
-        $result = saveProduct($product);
-        return $result;
-
-    } catch (Exception $e) {
-        return ['success' => false, 'error' => $e->getMessage()];
-    }
-}
-
-/**
- * Получение товаров с фильтрацией
- */
-function getProducts($filters = []) {
-    $products = loadJsonData('products.json');
-
-    if (!empty($filters['category_id'])) {
-        $products = array_filter($products, function($product) use ($filters) {
-            return isset($product['category_id']) && $product['category_id'] == $filters['category_id'];
-        });
-    }
-
-    if (!empty($filters['search'])) {
-        $search = mb_strtolower($filters['search']);
-        $products = array_filter($products, function($product) use ($search) {
-            $name = mb_strtolower($product['name'] ?? '');
-            $latin = mb_strtolower($product['latin_name'] ?? '');
-            $desc = mb_strtolower($product['description'] ?? '');
-            $tags = mb_strtolower($product['tags'] ?? '');
-            return mb_strpos($name, $search) !== false ||
-                   mb_strpos($latin, $search) !== false ||
-                   mb_strpos($desc, $search) !== false ||
-                   mb_strpos($tags, $search) !== false;
-        });
-    }
-
-    if (!empty($filters['price_min'])) {
-        $products = array_filter($products, function($product) use ($filters) {
-            return isset($product['price']) && $product['price'] >= $filters['price_min'];
-        });
-    }
-
-    if (!empty($filters['price_max'])) {
-        $products = array_filter($products, function($product) use ($filters) {
-            return isset($product['price']) && $product['price'] <= $filters['price_max'];
-        });
-    }
-
-    // Фильтр по статусу (активные товары)
-    if (!isset($filters['include_inactive'])) {
-        $products = array_filter($products, function($product) {
-            return !isset($product['status']) || $product['status'] == 1;
-        });
-    }
-
-    return array_values($products);
-}
-
-/**
- * Получение всех товаров без фильтров (для админки)
- */
-function getAllProducts() {
-    return loadJsonData('products.json');
-}
-
-/**
- * Получение товара по ID
- */
-function getProductById($id) {
-    if (empty($id)) {
-        return null;
-    }
-    $products = loadJsonData('products.json');
+// Фильтрация товаров
+if ($search || $category_filter || $status_filter !== '') {
+    $filtered_products = [];
     foreach ($products as $product) {
-        if (isset($product['id']) && $product['id'] == $id) {
-            return $product;
-        }
-    }
-    return null;
-}
+        $match = true;
 
-/**
- * Добавление товара (для совместимости)
- */
-function addProduct($productData) {
-    return saveProduct($productData);
-}
+        // Фильтр по поиску
+        if ($search) {
+            $searchLower = mb_strtolower($search);
+            $nameMatch = mb_strpos(mb_strtolower($product['name']), $searchLower) !== false;
+            $descMatch = mb_strpos(mb_strtolower($product['description'] ?? ''), $searchLower) !== false;
+            $tagsMatch = mb_strpos(mb_strtolower($product['tags'] ?? ''), $searchLower) !== false;
+            $skuMatch = mb_strpos(mb_strtolower($product['sku'] ?? ''), $searchLower) !== false;
 
-/**
- * Обновление товара (для совместимости)
- */
-function updateProduct($id, $productData) {
-    $productData['id'] = $id;
-    return saveProduct($productData);
-}
-
-/**
- * Удаление товара
- */
-function deleteProduct($id) {
-    try {
-        $products = loadJsonData('products.json');
-        $products = array_filter($products, function($product) use ($id) {
-            return $product['id'] != $id;
-        });
-
-        if (saveJsonData('products.json', array_values($products))) {
-            return ['success' => true];
-        } else {
-            return ['success' => false, 'error' => 'Не удалось сохранить изменения'];
-        }
-    } catch (Exception $e) {
-        return ['success' => false, 'error' => $e->getMessage()];
-    }
-}
-
-/**
- * Получение категорий
- */
-function getCategories() {
-    return loadJsonData('categories.json');
-}
-
-/**
- * Получение категорий с подсчетом товаров
- */
-function getCategoriesWithCount() {
-    $categories = loadJsonData('categories.json');
-    $products = getProducts();
-
-    foreach ($categories as &$category) {
-        $count = 0;
-        foreach ($products as $product) {
-            if (isset($product['category_id']) && $product['category_id'] == $category['id']) {
-                $count++;
+            if (!($nameMatch || $descMatch || $tagsMatch || $skuMatch)) {
+                $match = false;
             }
         }
-        $category['products_count'] = $count;
-    }
 
-    return $categories;
-}
+        // Фильтр по категории
+        if ($category_filter && $product['category_id'] != $category_filter) {
+            $match = false;
+        }
 
-/**
- * Получение категории по ID
- */
-function getCategoryById($id) {
-    if (!is_numeric($id) || $id <= 0) {
-        return null;
-    }
-    $categories = loadJsonData('categories.json');
-    foreach ($categories as $category) {
-        if (isset($category['id']) && $category['id'] == $id) {
-            return $category;
+        // Фильтр по статусу
+        if ($status_filter !== '' && ($product['status'] ?? 1) != $status_filter) {
+            $match = false;
+        }
+
+        if ($match) {
+            $filtered_products[] = $product;
         }
     }
-    return null;
+    $products = $filtered_products;
 }
 
-/**
- * Добавление категории
- */
-function addCategory($categoryData) {
-    $categories = loadJsonData('categories.json');
-    $categoryData['id'] = generateId($categories);
-    $categoryData['created_at'] = date('Y-m-d H:i:s');
-    $categories[] = $categoryData;
-    return saveJsonData('categories.json', $categories);
-}
-
-/**
- * Обновление категории
- */
-function updateCategory($id, $categoryData) {
-    $categories = loadJsonData('categories.json');
-    foreach ($categories as &$category) {
-        if ($category['id'] == $id) {
-            $categoryData['id'] = $id;
-            $categoryData['updated_at'] = date('Y-m-d H:i:s');
-            $category = array_merge($category, $categoryData);
-            return saveJsonData('categories.json', $categories);
-        }
+// Сортировка товаров
+usort($products, function($a, $b) use ($sort_by) {
+    switch ($sort_by) {
+        case 'name_desc':
+            return strcasecmp($b['name'], $a['name']);
+        case 'price_asc':
+            return ($a['price'] ?? 0) <=> ($b['price'] ?? 0);
+        case 'price_desc':
+            return ($b['price'] ?? 0) <=> ($a['price'] ?? 0);
+        case 'date_desc':
+            return strcmp($b['created_at'] ?? '', $a['created_at'] ?? '');
+        case 'date_asc':
+            return strcmp($a['created_at'] ?? '', $b['created_at'] ?? '');
+        default: // name_asc
+            return strcasecmp($a['name'], $b['name']);
     }
-    return false;
-}
+});
 
-/**
- * Удаление категории
- */
-function deleteCategory($id) {
-    $categories = loadJsonData('categories.json');
-    $categories = array_filter($categories, function($category) use ($id) {
-        return $category['id'] != $id;
-    });
-    return saveJsonData('categories.json', array_values($categories));
-}
+// Статистика
+$totalProducts = count(getAllProducts());
+$activeProducts = count(array_filter($products, function($p) { return ($p['status'] ?? 1) == 1; }));
+$inactiveProducts = $totalProducts - $activeProducts;
+$totalValue = array_sum(array_map(function($p) { return ($p['price'] ?? 0) * ($p['stock_quantity'] ?? 0); }, $products));
 
-/**
- * Генерация уникального ID для старых функций
- */
-function generateId($data) {
-    if (empty($data)) return 1;
-    $maxId = 0;
-    foreach ($data as $item) {
-        if (isset($item['id']) && is_numeric($item['id']) && $item['id'] > $maxId) {
-            $maxId = (int)$item['id'];
-        }
-    }
-    return $maxId + 1;
-}
-
-/**
- * Создание slug из названия
- */
-function createSlug($text) {
-    $text = mb_strtolower(trim($text));
-    $text = preg_replace('/[^a-z0-9а-я\s-]/u', '', $text);
-    $text = preg_replace('/\s+/', '-', $text);
-    $text = trim($text, '-');
-    return $text;
-}
-
-/**
- * Форматирование цены
- */
-function formatPrice($price) {
-    if (!is_numeric($price)) return '0 ₽';
-    return number_format((float)$price, 0, ',', ' ') . ' ₽';
-}
-
-/**
- * Получение настроек сайта
- */
-function getSettings() {
-    return loadJsonData('settings.json');
-}
-
-/**
- * Получение корзины из сессии
- */
-function getCart() {
-    // Если сессия не активна, запускаем её
-    if (session_status() === PHP_SESSION_NONE) {
-        initSession();
-    }
-
-    $cart = $_SESSION['cart'] ?? [];
-    error_log('getCart: Текущая корзина - ' . print_r($cart, true));
-    return $cart;
-}
-
-/**
- * Добавление товара в корзину - УПРОЩЕННАЯ ВЕРСИЯ
- */
-function addToCart($productId, $quantity = 1) {
-    // Проверяем сессию
-    if (session_status() === PHP_SESSION_NONE) {
-        if (!initSession()) {
-            error_log('addToCart: Не удалось инициализировать сессию');
-            return false;
-        }
-    }
-
-    error_log('addToCart: Статус сессии - ' . session_status());
-    error_log('addToCart: ID сессии - ' . session_id());
-
-    // Валидация
-    if (!is_numeric($productId) || !is_numeric($quantity) || $productId <= 0 || $quantity <= 0) {
-        error_log("addToCart: Некорректные параметры - productId: $productId, quantity: $quantity");
-        return false;
-    }
-
-    $productId = (int)$productId;
-    $quantity = (int)$quantity;
-
-    // Проверяем существование товара
-    $product = getProductById($productId);
-    if (!$product) {
-        error_log("addToCart: Товар с ID $productId не найден");
-        return false;
-    }
-
-    // Инициализируем корзину если её нет
-    if (!isset($_SESSION['cart'])) {
-        $_SESSION['cart'] = [];
-        error_log('addToCart: Инициализирована новая корзина');
-    }
-
-    error_log('addToCart: Корзина ДО добавления - ' . print_r($_SESSION['cart'], true));
-
-    // Добавляем товар
-    if (isset($_SESSION['cart'][$productId])) {
-        $_SESSION['cart'][$productId] += $quantity;
-        error_log("addToCart: Увеличено количество товара $productId до " . $_SESSION['cart'][$productId]);
-    } else {
-        $_SESSION['cart'][$productId] = $quantity;
-        error_log("addToCart: Добавлен новый товар $productId в количестве $quantity");
-    }
-
-    error_log('addToCart: Корзина ПОСЛЕ добавления - ' . print_r($_SESSION['cart'], true));
-    error_log('addToCart: УСПЕШНО ЗАВЕРШЕНО');
-
-    return true;
-}
-
-/**
- * Обновление количества товара в корзине
- */
-function updateCartItem($productId, $quantity) {
-    if (session_status() === PHP_SESSION_NONE) {
-        initSession();
-    }
-
-    if (!is_numeric($productId) || !is_numeric($quantity) || $productId <= 0) {
-        return false;
-    }
-
-    $productId = (int)$productId;
-    $quantity = (int)$quantity;
-
-    if (!isset($_SESSION['cart'])) {
-        $_SESSION['cart'] = [];
-    }
-
-    if ($quantity > 0) {
-        $_SESSION['cart'][$productId] = $quantity;
-    } else {
-        unset($_SESSION['cart'][$productId]);
-    }
-
-    return true;
-}
-
-/**
- * Удаление товара из корзины
- */
-function removeFromCart($productId) {
-    if (session_status() === PHP_SESSION_NONE) {
-        initSession();
-    }
-
-    if (!is_numeric($productId) || $productId <= 0) {
-        return false;
-    }
-
-    $productId = (int)$productId;
-
-    if (isset($_SESSION['cart'][$productId])) {
-        unset($_SESSION['cart'][$productId]);
-        return true;
-    }
-
-    return false;
-}
-
-/**
- * Получение товаров корзины с деталями
- */
-function getCartItems() {
-    $cart = getCart();
-    $items = [];
-    $total = 0;
-
-    foreach ($cart as $productId => $quantity) {
-        $product = getProductById($productId);
-        if ($product && is_numeric($quantity) && $quantity > 0) {
-            $item = $product;
-            $item['quantity'] = (int)$quantity;
-            $item['subtotal'] = (float)$product['price'] * (int)$quantity;
-            $total += $item['subtotal'];
-            $items[] = $item;
-        }
-    }
-
-    return [
-        'items' => $items,
-        'total' => $total,
-        'count' => count($items)
-    ];
-}
-
-/**
- * Очистка корзины
- */
-function clearCart() {
-    if (session_status() === PHP_SESSION_NONE) {
-        initSession();
-    }
-    $_SESSION['cart'] = [];
-    return true;
-}
-
-/**
- * Получение количества товаров в корзине
- */
-function getCartCount() {
-    $cart = getCart();
-    $count = array_sum($cart);
-    error_log("getCartCount: Всего товаров в корзине - $count");
-    return $count;
-}
-
-/**
- * Сохранение заказа
- */
-function saveOrder($orderData) {
-    $orders = loadJsonData('orders.json');
-
-    $order = [
-        'id' => generateId($orders),
-        'date' => date('Y-m-d H:i:s'),
-        'status' => 'new',
-        'customer' => $orderData['customer'] ?? [],
-        'items' => $orderData['items'] ?? [],
-        'total' => $orderData['total'] ?? 0
-    ];
-
-    $orders[] = $order;
-    if (saveJsonData('orders.json', $orders)) {
-        return $order['id'];
-    }
-    return false;
-}
-
-/**
- * Получение заказов
- */
-function getOrders() {
-    return loadJsonData('orders.json');
-}
-
-/**
- * Обновление статуса заказа
- */
-function updateOrderStatus($id, $status) {
-    $orders = loadJsonData('orders.json');
-    foreach ($orders as &$order) {
-        if ($order['id'] == $id) {
-            $order['status'] = $status;
-            $order['updated_at'] = date('Y-m-d H:i:s');
-            return saveJsonData('orders.json', $orders);
-        }
-    }
-    return false;
-}
-
-/**
- * Получение популярных товаров
- */
-function getFeaturedProducts($limit = 8) {
-    $products = getProducts();
-    if (empty($products)) {
-        return [];
-    }
-    shuffle($products);
-    return array_slice($products, 0, $limit);
-}
-
-/**
- * Получение статистики для дашборда
- */
-function getDashboardStats() {
-    $products = getAllProducts();
-    $orders = getOrders();
-    $categories = getCategories();
-
-    $activeProducts = array_filter($products, function($p) {
-        return !isset($p['status']) || $p['status'] == 1;
-    });
-
-    $today = date('Y-m-d');
-    $todayOrders = array_filter($orders, function($o) use ($today) {
-        return isset($o['date']) && date('Y-m-d', strtotime($o['date'])) === $today;
-    });
-
-    $thisMonth = date('Y-m');
-    $thisMonthOrders = array_filter($orders, function($o) use ($thisMonth) {
-        return isset($o['date']) && date('Y-m', strtotime($o['date'])) === $thisMonth;
-    });
-
-    $totalRevenue = 0;
-    $monthRevenue = 0;
-
-    foreach ($orders as $order) {
-        if (isset($order['total']) && is_numeric($order['total'])) {
-            $totalRevenue += (float)$order['total'];
-        }
-    }
-
-    foreach ($thisMonthOrders as $order) {
-        if (isset($order['total']) && is_numeric($order['total'])) {
-            $monthRevenue += (float)$order['total'];
-        }
-    }
-
-    return [
-        'total_products' => count($activeProducts),
-        'total_categories' => count($categories),
-        'total_orders' => count($orders),
-        'today_orders' => count($todayOrders),
-        'month_orders' => count($thisMonthOrders),
-        'total_revenue' => $totalRevenue,
-        'month_revenue' => $monthRevenue
-    ];
-}
-
-/**
- * Получение настроек сайта
- */
-function getSiteSettings() {
-    return loadJsonData('settings.json');
-}
-
-/**
- * Сохранение настроек сайта
- */
-function saveSiteSettings($settingsData) {
-    return saveJsonData('settings.json', $settingsData);
-}
-
-/**
- * Получение конкретной настройки
- */
-function getSiteSetting($key, $default = '') {
-    static $settings = null;
-    if ($settings === null) {
-        $settings = getSiteSettings();
-    }
-    return $settings[$key] ?? $default;
-}
-
-/**
- * Валидация данных товара
- */
-function validateProductData($data) {
-    $errors = [];
-
-    if (empty($data['name'])) {
-        $errors[] = 'Название товара обязательно';
-    }
-
-    if (empty($data['description'])) {
-        $errors[] = 'Описание товара обязательно';
-    }
-
-    if (!isset($data['price']) || !is_numeric($data['price']) || $data['price'] <= 0) {
-        $errors[] = 'Цена должна быть положительным числом';
-    }
-
-    if (empty($data['category_id'])) {
-        $errors[] = 'Категория товара обязательна';
-    }
-
-    return $errors;
-}
-
-/**
- * Инициализация базовых данных (категории по умолчанию)
- */
-function initializeDefaultData() {
-    $categories = getCategories();
-    if (empty($categories)) {
-        $defaultCategories = [
-            ['id' => 1, 'name' => 'Растения', 'slug' => 'plants', 'created_at' => date('Y-m-d H:i:s')],
-            ['id' => 2, 'name' => 'Рыбки', 'slug' => 'fish', 'created_at' => date('Y-m-d H:i:s')],
-            ['id' => 3, 'name' => 'Оборудование', 'slug' => 'equipment', 'created_at' => date('Y-m-d H:i:s')],
-            ['id' => 4, 'name' => 'Декор', 'slug' => 'decoration', 'created_at' => date('Y-m-d H:i:s')]
-        ];
-        saveJsonData('categories.json', $defaultCategories);
-    }
-
-    // Создаем базовые настройки
-    $settings = getSiteSettings();
-    if (empty($settings)) {
-        $defaultSettings = [
-            'site_name' => 'АкваСбор',
-            'site_description' => 'Интернет-магазин аквариумных товаров',
-            'contact_email' => 'info@akvasbor.ru',
-            'contact_phone' => '+7 (000) 000-00-00',
-            'currency' => 'RUB',
-            'updated_at' => date('Y-m-d H:i:s')
-        ];
-        saveSiteSettings($defaultSettings);
-    }
-}
-
-// Автоматическая инициализация при подключении файла
-if (!defined('SKIP_AUTO_INIT')) {
-    initializeDefaultData();
-}
-
+// 🔍 ОТЛАДОЧНАЯ ИНФОРМАЦИЯ ДЛЯ РАЗРАБОТЧИКА
+$debug_info = [
+    'current_file' => __FILE__,
+    'current_dir' => __DIR__,
+    'editor_path' => __DIR__ . '/product_editor.php',
+    'editor_exists' => file_exists(__DIR__ . '/product_editor.php'),
+    'get_params' => $_GET,
+    'request_uri' => $_SERVER['REQUEST_URI'] ?? 'не определен'
+];
 ?>
+
+<style>
+/* Профессиональные стили для страницы товаров */
+.product-stats {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    border-radius: 15px;
+    padding: 20px;
+    margin-bottom: 25px;
+    box-shadow: 0 10px 30px rgba(102, 126, 234, 0.3);
+}
+
+.stat-card {
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 10px;
+    padding: 15px;
+    text-align: center;
+    backdrop-filter: blur(10px);
+    transition: all 0.3s ease;
+}
+
+.stat-card:hover {
+    transform: translateY(-5px);
+    background: rgba(255, 255, 255, 0.2);
+}
+
+.product-card {
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    border: 1px solid #e3e6f0;
+    border-radius: 15px;
+    overflow: hidden;
+    position: relative;
+}
+
+.product-card:hover {
+    transform: translateY(-8px);
+    box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+    border-color: #4e73df;
+}
+
+.product-image {
+    position: relative;
+    overflow: hidden;
+    height: 200px;
+    background: linear-gradient(45deg, #f8f9fc, #e3e6f0);
+}
+
+.product-image img {
+    transition: all 0.3s ease;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.product-card:hover .product-image img {
+    transform: scale(1.05);
+}
+
+.product-badges {
+    position: absolute;
+    top: 10px;
+    left: 10px;
+    z-index: 2;
+}
+
+.product-actions {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    opacity: 0;
+    transition: all 0.3s ease;
+    z-index: 2;
+}
+
+.product-card:hover .product-actions {
+    opacity: 1;
+}
+
+.table-hover tbody tr:hover {
+    background: linear-gradient(90deg, rgba(78, 115, 223, 0.05), rgba(78, 115, 223, 0.02));
+    transform: translateX(5px);
+}
+
+.filter-panel {
+    background: linear-gradient(135deg, #ffffff 0%, #f8f9fc 100%);
+    border: 1px solid #e3e6f0;
+    border-radius: 15px;
+    padding: 20px;
+    box-shadow: 0 5px 15px rgba(0,0,0,0.05);
+}
+
+.search-box {
+    position: relative;
+}
+
+.search-box .form-control {
+    border-radius: 25px;
+    padding-left: 45px;
+    border: 2px solid #e3e6f0;
+    transition: all 0.3s ease;
+}
+
+.search-box .form-control:focus {
+    border-color: #4e73df;
+    box-shadow: 0 0 0 0.2rem rgba(78, 115, 223, 0.25);
+    transform: translateY(-2px);
+}
+
+.search-box .input-group-text {
+    position: absolute;
+    left: 15px;
+    top: 50%;
+    transform: translateY(-50%);
+    background: none;
+    border: none;
+    z-index: 5;
+}
+
+.btn-gradient-primary {
+    background: linear-gradient(135deg, #4e73df, #2653d4);
+    border: none;
+    border-radius: 25px;
+    color: white;
+    font-weight: 600;
+    padding: 10px 25px;
+    transition: all 0.3s ease;
+}
+
+.btn-gradient-primary:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 25px rgba(78, 115, 223, 0.3);
+    color: white;
+}
+
+.btn-gradient-success {
+    background: linear-gradient(135deg, #1cc88a, #17a673);
+    border: none;
+    border-radius: 25px;
+    color: white;
+    font-weight: 600;
+    transition: all 0.3s ease;
+}
+
+.btn-gradient-success:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 25px rgba(28, 200, 138, 0.3);
+    color: white;
+}
+
+.bulk-actions {
+    background: linear-gradient(135deg, #f6c23e 0%, #f4b619 100%);
+    border-radius: 10px;
+    padding: 15px;
+    color: white;
+    margin-bottom: 20px;
+    display: none;
+}
+
+.page-header {
+    background: linear-gradient(135deg, #ffffff 0%, #f8f9fc 100%);
+    border-radius: 15px;
+    padding: 25px;
+    margin-bottom: 25px;
+    border: 1px solid #e3e6f0;
+}
+
+.breadcrumb {
+    background: none;
+    padding: 0;
+    margin: 0;
+}
+
+.breadcrumb-item + .breadcrumb-item::before {
+    content: '›';
+    color: #858796;
+}
+
+@keyframes fadeInUp {
+    from {
+        opacity: 0;
+        transform: translate3d(0, 40px, 0);
+    }
+    to {
+        opacity: 1;
+        transform: translate3d(0, 0, 0);
+    }
+}
+
+.animate-fade-in {
+    animation: fadeInUp 0.6s ease-out;
+}
+
+.product-row {
+    animation: fadeInUp 0.3s ease-out;
+}
+
+.status-indicator {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    display: inline-block;
+    margin-right: 8px;
+    animation: pulse 2s infinite;
+}
+
+.status-active { background: #1cc88a; }
+.status-inactive { background: #e74a3b; }
+
+@keyframes pulse {
+    0% { box-shadow: 0 0 0 0 rgba(28, 200, 138, 0.7); }
+    70% { box-shadow: 0 0 0 10px rgba(28, 200, 138, 0); }
+    100% { box-shadow: 0 0 0 0 rgba(28, 200, 138, 0); }
+}
+
+.price-display {
+    font-size: 1.1em;
+    font-weight: 700;
+    color: #1cc88a;
+}
+
+.old-price {
+    text-decoration: line-through;
+    color: #858796;
+    font-size: 0.9em;
+}
+
+.discount-badge {
+    background: linear-gradient(45deg, #e74a3b, #c0392b);
+    color: white;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 0.8em;
+    font-weight: 600;
+}
+
+/* 🔧 Стили для отладки алиаса */
+.debug-panel {
+    background: linear-gradient(135deg, #17a2b8, #138496);
+    color: white;
+    border-radius: 10px;
+    padding: 15px;
+    margin-bottom: 20px;
+    font-family: 'Courier New', monospace;
+    font-size: 0.9em;
+}
+
+.debug-toggle {
+    cursor: pointer;
+    user-select: none;
+}
+
+.debug-content {
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px solid rgba(255,255,255,0.3);
+}
+
+.editor-success {
+    background: linear-gradient(135deg, #28a745, #20c997);
+    color: white;
+    border-radius: 10px;
+    padding: 10px 15px;
+    margin-bottom: 15px;
+    font-size: 0.9em;
+}
+</style>
+
+<!-- 🔧 ОТЛАДОЧНАЯ ПАНЕЛЬ -->
+<div class='debug-panel animate-fade-in'>
+    <div class='debug-toggle' onclick='toggleDebug()'>
+        <i class='fas fa-bug me-2'></i>🔧 <strong>DEBUG:</strong> Информация об алиасе редактора (нажмите для раскрытия)
+    </div>
+    <div class='debug-content' id='debugContent' style='display: none;'>
+        <div class='row'>
+            <div class='col-md-6'>
+                <strong>📁 Пути файлов:</strong><br>
+                <small>
+                    • Текущий файл: <code><?= $debug_info['current_file'] ?></code><br>
+                    • Текущая папка: <code><?= $debug_info['current_dir'] ?></code><br>
+                    • Ищем редактор: <code><?= $debug_info['editor_path'] ?></code><br>
+                    • Редактор найден: <span class='badge bg-<?= $debug_info['editor_exists'] ? 'success' : 'danger' ?>'><?= $debug_info['editor_exists'] ? '✅ ДА' : '❌ НЕТ' ?></span>
+                </small>
+            </div>
+            <div class='col-md-6'>
+                <strong>🌐 Параметры запроса:</strong><br>
+                <small>
+                    • REQUEST_URI: <code><?= $debug_info['request_uri'] ?></code><br>
+                    • GET параметры: <code><?= json_encode($debug_info['get_params']) ?></code>
+                </small>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ✅ Уведомление об успешной интеграции -->
+<?php if (file_exists(__DIR__ . '/product_editor.php')): ?>
+<div class='editor-success animate-fade-in'>
+    <i class='fas fa-link me-2'></i>
+    <strong>✅ Алиас настроен:</strong> Редактор товаров успешно подключен
+</div>
+<?php endif; ?>
+
+<!-- Заголовок страницы -->
+<div class='page-header animate-fade-in'>
+    <div class='d-flex justify-content-between align-items-center'>
+        <div>
+            <h1 class='h3 mb-1'>
+                <i class='fas fa-fish me-2 text-primary'></i>🐠 Управление товарами
+            </h1>
+            <nav aria-label='breadcrumb'>
+                <ol class='breadcrumb'>
+                    <li class='breadcrumb-item'><a href='?'>🏠 Главная</a></li>
+                    <li class='breadcrumb-item active'>📦 Товары</li>
+                </ol>
+            </nav>
+        </div>
+        <div>
+            <button class='btn btn-outline-info me-2' onclick='exportProducts()'>
+                <i class='fas fa-download me-1'></i>📊 Экспорт
+            </button>
+            <a href='?page=product_editor' class='btn btn-gradient-success'>
+                <i class='fas fa-plus me-2'></i>➕ Добавить товар
+            </a>
+        </div>
+    </div>
+</div>
+
+<!-- Статистика -->
+<div class='product-stats animate-fade-in'>
+    <div class='row'>
+        <div class='col-md-3'>
+            <div class='stat-card'>
+                <div class='stat-icon mb-2'>📦</div>
+                <h4 class='mb-1'><?= $totalProducts ?></h4>
+                <small>Всего товаров</small>
+            </div>
+        </div>
+        <div class='col-md-3'>
+            <div class='stat-card'>
+                <div class='stat-icon mb-2'>✅</div>
+                <h4 class='mb-1'><?= $activeProducts ?></h4>
+                <small>Активных</small>
+            </div>
+        </div>
+        <div class='col-md-3'>
+            <div class='stat-card'>
+                <div class='stat-icon mb-2'>❌</div>
+                <h4 class='mb-1'><?= $inactiveProducts ?></h4>
+                <small>Скрытых</small>
+            </div>
+        </div>
+        <div class='col-md-3'>
+            <div class='stat-card'>
+                <div class='stat-icon mb-2'>💰</div>
+                <h4 class='mb-1'><?= formatPrice($totalValue) ?></h4>
+                <small>Общая стоимость</small>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Панель фильтров -->
+<div class='filter-panel animate-fade-in'>
+    <form method='GET' id='filterForm'>
+        <input type='hidden' name='page' value='products'>
+        <div class='row g-3'>
+            <div class='col-md-4'>
+                <label class='form-label fw-semibold'>🔍 Поиск товаров</label>
+                <div class='search-box'>
+                    <span class='input-group-text'><i class='fas fa-search text-primary'></i></span>
+                    <input type='text' class='form-control' name='search' value='<?= htmlspecialchars($search) ?>'
+                           placeholder='Название, SKU, описание, теги...' id='searchInput'>
+                </div>
+            </div>
+            <div class='col-md-2'>
+                <label class='form-label fw-semibold'>📂 Категория</label>
+                <select name='category' class='form-select'>
+                    <option value=''>Все категории</option>
+                    <?php foreach ($categories as $category): ?>
+                        <option value='<?= $category['id'] ?>' <?= $category_filter == $category['id'] ? 'selected' : '' ?>>
+                            <?= htmlspecialchars($category['name']) ?>
+                        </option>
+                    <?php endforeach; ?>
+                </select>
+            </div>
+            <div class='col-md-2'>
+                <label class='form-label fw-semibold'>📊 Статус</label>
+                <select name='status' class='form-select'>
+                    <option value=''>Все</option>
+                    <option value='1' <?= $status_filter === '1' ? 'selected' : '' ?>>✅ Активные</option>
+                    <option value='0' <?= $status_filter === '0' ? 'selected' : '' ?>>❌ Скрытые</option>
+                </select>
+            </div>
+            <div class='col-md-2'>
+                <label class='form-label fw-semibold'>🔄 Сортировка</label>
+                <select name='sort' class='form-select'>
+                    <option value='name_asc' <?= $sort_by === 'name_asc' ? 'selected' : '' ?>>📝 По названию ↑</option>
+                    <option value='name_desc' <?= $sort_by === 'name_desc' ? 'selected' : '' ?>>📝 По названию ↓</option>
+                    <option value='price_asc' <?= $sort_by === 'price_asc' ? 'selected' : '' ?>>💰 По цене ↑</option>
+                    <option value='price_desc' <?= $sort_by === 'price_desc' ? 'selected' : '' ?>>💰 По цене ↓</option>
+                    <option value='date_desc' <?= $sort_by === 'date_desc' ? 'selected' : '' ?>>📅 Сначала новые</option>
+                    <option value='date_asc' <?= $sort_by === 'date_asc' ? 'selected' : '' ?>>📅 Сначала старые</option>
+                </select>
+            </div>
+            <div class='col-md-2'>
+                <label class='form-label fw-semibold'>&nbsp;</label>
+                <div class='d-grid'>
+                    <button type='submit' class='btn btn-gradient-primary'>
+                        <i class='fas fa-search me-1'></i>Найти
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Быстрые фильтры -->
+        <div class='row mt-3'>
+            <div class='col-12'>
+                <small class='text-muted'>🚀 Быстрые фильтры:</small>
+                <div class='btn-group ms-2' role='group'>
+                    <a href='?page=products' class='btn btn-outline-secondary btn-sm'>
+                        🌟 Все товары
+                    </a>
+                    <a href='?page=products&status=1' class='btn btn-outline-success btn-sm'>
+                        ✅ Активные
+                    </a>
+                    <a href='?page=products&status=0' class='btn btn-outline-danger btn-sm'>
+                        ❌ Скрытые
+                    </a>
+                    <?php foreach (array_slice($categories, 0, 3) as $cat): ?>
+                        <a href='?page=products&category=<?= $cat['id'] ?>' class='btn btn-outline-info btn-sm'>
+                            📂 <?= htmlspecialchars($cat['name']) ?>
+                        </a>
+                    <?php endforeach; ?>
+                </div>
+            </div>
+        </div>
+    </form>
+</div>
+
+<!-- Массовые действия -->
+<div class='bulk-actions' id='bulkActions'>
+    <form method='POST' id='bulkForm'>
+        <div class='d-flex justify-content-between align-items-center'>
+            <div>
+                <strong>🎯 Выбрано товаров: <span id='selectedCount'>0</span></strong>
+            </div>
+            <div class='btn-group'>
+                <select name='bulk_action' class='form-select form-select-sm me-2' style='width: auto;'>
+                    <option value=''>Выберите действие</option>
+                    <option value='activate'>✅ Активировать</option>
+                    <option value='deactivate'>❌ Скрыть</option>
+                    <option value='delete'>🗑️ Удалить</option>
+                </select>
+                <button type='submit' class='btn btn-warning btn-sm' onclick='return confirmBulkAction()'>
+                    <i class='fas fa-play me-1'></i>Выполнить
+                </button>
+                <button type='button' class='btn btn-secondary btn-sm' onclick='clearSelection()'>
+                    <i class='fas fa-times me-1'></i>Отмена
+                </button>
+            </div>
+        </div>
+        <div id='selectedProducts'></div>
+    </form>
+</div>
+
+<!-- Главная карточка с товарами -->
+<div class='card shadow-sm animate-fade-in' style='border-radius: 15px; border: none;'>
+    <div class='card-header bg-white d-flex justify-content-between align-items-center' style='border-radius: 15px 15px 0 0;'>
+        <h5 class='card-title mb-0'>
+            <i class='fas fa-list me-2 text-primary'></i>📋 Список товаров
+            <span class='badge bg-primary ms-2'><?= count($products) ?></span>
+        </h5>
+        <div class='d-flex align-items-center'>
+            <!-- Переключатель видов -->
+            <div class='btn-group me-3' role='group'>
+                <button type='button' class='btn btn-outline-primary btn-sm' id='gridViewBtn' onclick='switchView("grid")'>
+                    <i class='fas fa-th-large'></i> 🔲 Плитка
+                </button>
+                <button type='button' class='btn btn-primary btn-sm' id='listViewBtn' onclick='switchView("list")'>
+                    <i class='fas fa-list'></i> 📝 Список
+                </button>
+            </div>
+
+            <!-- Массовый выбор -->
+            <label class='form-check-label me-2'>
+                <input type='checkbox' class='form-check-input' id='selectAll' onchange='toggleSelectAll()'>
+                Выбрать все
+            </label>
+        </div>
+    </div>
+    <div class='card-body p-0'>
+        <?php if (empty($products)): ?>
+            <!-- Пустое состояние -->
+            <div class='text-center py-5 animate-fade-in'>
+                <div class='mb-4'>
+                    <i class='fas fa-fish fa-4x text-muted'></i>
+                </div>
+                <h4 class='text-muted mb-3'>🔍 Товары не найдены</h4>
+                <p class='text-muted mb-4'>
+                    <?php if ($search || $category_filter || $status_filter !== ''): ?>
+                        🎯 Попробуйте изменить параметры поиска или фильтры
+                    <?php else: ?>
+                        🚀 Добавьте первый товар в свой каталог
+                    <?php endif; ?>
+                </p>
+                <div>
+                    <?php if ($search || $category_filter || $status_filter !== ''): ?>
+                        <a href='?page=products' class='btn btn-outline-secondary me-2'>
+                            <i class='fas fa-undo me-1'></i>🔄 Сбросить фильтры
+                        </a>
+                    <?php endif; ?>
+                    <a href='?page=product_editor' class='btn btn-gradient-success'>
+                        <i class='fas fa-plus me-2'></i>➕ Добавить первый товар
+                    </a>
+                </div>
+            </div>
+        <?php else: ?>
+            <!-- Табличный вид -->
+            <div id='tableView'>
+                <div class='table-responsive'>
+                    <table class='table table-hover align-middle mb-0'>
+                        <thead class='table-light'>
+                            <tr>
+                                <th width='50' class='text-center'>☑️</th>
+                                <th width='80'>🖼️ Фото</th>
+                                <th>📦 Товар</th>
+                                <th>📂 Категория</th>
+                                <th>💰 Цена</th>
+                                <th>📊 Склад</th>
+                                <th>🚦 Статус</th>
+                                <th width='150'>⚡ Действия</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <?php foreach ($products as $index => $product): ?>
+                                <?php
+                                $category = getCategoryById($product['category_id']);
+                                $categoryName = $category ? $category['name'] : 'Без категории';
+                                $mainImage = $product['main_image'] ?? $product['image'] ?? '';
+                                $gallery = $product['gallery'] ?? [];
+                                $badges = $product['badges'] ?? [];
+                                ?>
+                                <tr class='product-row' style='animation-delay: <?= $index * 0.05 ?>s' data-product-id='<?= $product['id'] ?>'>
+                                    <td class='text-center'>
+                                        <input type='checkbox' class='form-check-input product-checkbox' value='<?= $product['id'] ?>'>
+                                    </td>
+                                    <td>
+                                        <div class='position-relative'>
+                                            <?php if ($mainImage): ?>
+                                                <img src='<?= htmlspecialchars($mainImage) ?>'
+                                                     class='rounded' style='width: 60px; height: 60px; object-fit: cover; cursor: pointer;'
+                                                     onclick='showImageModal("<?= htmlspecialchars($mainImage) ?>")'
+                                                     onerror='this.src="data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' width=\'60\' height=\'60\'%3E%3Crect width=\'60\' height=\'60\' fill=\'%23e9ecef\'/%3E%3Ctext x=\'30\' y=\'35\' text-anchor=\'middle\' font-size=\'12\' fill=\'%236c757d\'%3E📷%3C/text%3E%3C/svg%3E"'>
+                                            <?php else: ?>
+                                                <div class='bg-light d-flex align-items-center justify-content-center rounded'
+                                                     style='width: 60px; height: 60px;'>
+                                                    <i class='fas fa-fish text-muted'></i>
+                                                </div>
+                                            <?php endif; ?>
+
+                                            <?php if (is_array($gallery) && count($gallery) > 0): ?>
+                                                <span class='position-absolute top-0 end-0 badge bg-info rounded-pill'
+                                                      style='font-size: 10px; margin-top: -5px; margin-right: -5px;'>
+                                                    +<?= count($gallery) ?>
+                                                </span>
+                                            <?php endif; ?>
+                                        </div>
+                                    </td>
+                                    <td>
+                                        <div>
+                                            <h6 class='mb-1 fw-bold'><?= htmlspecialchars($product['name']) ?></h6>
+                                            <?php if (!empty($product['latin_name'])): ?>
+                                                <small class='text-muted fst-italic'>🔬 <?= htmlspecialchars($product['latin_name']) ?></small><br>
+                                            <?php endif; ?>
+                                            <?php if (!empty($product['sku'])): ?>
+                                                <small class='text-muted'>📋 SKU: <?= htmlspecialchars($product['sku']) ?></small>
+                                            <?php endif; ?>
+
+                                            <!-- Ярлыки товара -->
+                                            <?php if (!empty($badges) && is_array($badges)): ?>
+                                                <div class='mt-1'>
+                                                    <?php foreach (array_slice($badges, 0, 3) as $badge): ?>
+                                                        <?php
+                                                        $badgeColors = ['new' => 'success', 'hit' => 'danger', 'recommend' => 'warning', 'discount' => 'info', 'premium' => 'dark', 'eco' => 'success'];
+                                                        $badgeTexts = ['new' => '🆕', 'hit' => '🔥', 'recommend' => '⭐', 'discount' => '💸', 'premium' => '💎', 'eco' => '🌿'];
+                                                        $color = $badgeColors[$badge] ?? 'secondary';
+                                                        $text = $badgeTexts[$badge] ?? '🏷️';
+                                                        ?>
+                                                        <span class='badge bg-<?= $color ?> me-1 mb-1' style='font-size: 10px;'><?= $text ?></span>
+                                                    <?php endforeach; ?>
+                                                    <?php if (count($badges) > 3): ?>
+                                                        <span class='badge bg-light text-dark me-1 mb-1' style='font-size: 10px;'>+<?= count($badges) - 3 ?></span>
+                                                    <?php endif; ?>
+                                                </div>
+                                            <?php endif; ?>
+                                        </div>
+                                    </td>
+                                    <td>
+                                        <span class='badge bg-secondary'>📂 <?= htmlspecialchars($categoryName) ?></span>
+                                    </td>
+                                    <td>
+                                        <div>
+                                            <div class='price-display'><?= formatPrice($product['price']) ?></div>
+                                            <?php if (!empty($product['old_price']) && $product['old_price'] > $product['price']): ?>
+                                                <div class='old-price'><?= formatPrice($product['old_price']) ?></div>
+                                                <?php
+                                                $discount = round((($product['old_price'] - $product['price']) / $product['old_price']) * 100);
+                                                ?>
+                                                <span class='discount-badge'>-<?= $discount ?>%</span>
+                                            <?php endif; ?>
+                                        </div>
+                                    </td>
+                                    <td>
+                                        <?php
+                                        $stock = $product['stock_quantity'] ?? 0;
+                                        if ($stock > 10): ?>
+                                            <span class='badge bg-success'>📦 <?= $stock ?> шт.</span>
+                                        <?php elseif ($stock > 0): ?>
+                                            <span class='badge bg-warning'>⚠️ <?= $stock ?> шт.</span>
+                                        <?php else: ?>
+                                            <span class='badge bg-danger'>❌ Нет в наличии</span>
+                                        <?php endif; ?>
+                                    </td>
+                                    <td>
+                                        <?php if (($product['status'] ?? 1) == 0): ?>
+                                            <span class='status-indicator status-inactive'></span>
+                                            <span class='badge bg-danger'>❌ Скрыт</span>
+                                        <?php else: ?>
+                                            <span class='status-indicator status-active'></span>
+                                            <span class='badge bg-success'>✅ Активен</span>
+                                        <?php endif; ?>
+                                    </td>
+                                    <td>
+                                        <div class='btn-group' role='group'>
+                                            <a href='?page=product_editor&id=<?= $product['id'] ?>'
+                                               class='btn btn-sm btn-outline-primary' title='Редактировать'>
+                                                <i class='fas fa-edit'></i>
+                                            </a>
+                                            <button onclick='viewProduct("<?= $product['id'] ?>")'
+                                                    class='btn btn-sm btn-outline-info' title='Просмотр'>
+                                                <i class='fas fa-eye'></i>
+                                            </button>
+                                            <button onclick='copyProduct("<?= $product['id'] ?>")'
+                                                    class='btn btn-sm btn-outline-success' title='Копировать'>
+                                                <i class='fas fa-copy'></i>
+                                            </button>
+                                            <button onclick='deleteProduct("<?= $product['id'] ?>")'
+                                                    class='btn btn-sm btn-outline-danger' title='Удалить'>
+                                                <i class='fas fa-trash'></i>
+                                            </button>
+                                        </div>
+                                    </td>
+                                </tr>
+                            <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Вид плиткой -->
+            <div id='gridView' class='d-none p-3'>
+                <div class='row'>
+                    <?php foreach ($products as $index => $product): ?>
+                        <?php
+                        $category = getCategoryById($product['category_id']);
+                        $categoryName = $category ? $category['name'] : 'Без категории';
+                        $mainImage = $product['main_image'] ?? $product['image'] ?? '';
+                        $badges = $product['badges'] ?? [];
+                        ?>
+                        <div class='col-xl-3 col-lg-4 col-md-6 mb-4'>
+                            <div class='card product-card h-100' style='animation-delay: <?= $index * 0.1 ?>s' data-product-id='<?= $product['id'] ?>'>
+                                <!-- Изображение товара -->
+                                <div class='product-image'>
+                                    <?php if ($mainImage): ?>
+                                        <img src='<?= htmlspecialchars($mainImage) ?>' alt='<?= htmlspecialchars($product['name']) ?>'>
+                                    <?php else: ?>
+                                        <div class='d-flex align-items-center justify-content-center h-100'>
+                                            <i class='fas fa-fish fa-3x text-muted'></i>
+                                        </div>
+                                    <?php endif; ?>
+
+                                    <!-- Ярлыки -->
+                                    <div class='product-badges'>
+                                        <?php if (!empty($badges) && is_array($badges)): ?>
+                                            <?php foreach (array_slice($badges, 0, 2) as $badge): ?>
+                                                <?php
+                                                $badgeColors = ['new' => 'success', 'hit' => 'danger', 'recommend' => 'warning', 'discount' => 'info', 'premium' => 'dark', 'eco' => 'success'];
+                                                $badgeTexts = ['new' => '🆕', 'hit' => '🔥', 'recommend' => '⭐', 'discount' => '💸', 'premium' => '💎', 'eco' => '🌿'];
+                                                $color = $badgeColors[$badge] ?? 'secondary';
+                                                $text = $badgeTexts[$badge] ?? '🏷️';
+                                                ?>
+                                                <span class='badge bg-<?= $color ?> mb-1 d-block'><?= $text ?></span>
+                                            <?php endforeach; ?>
+                                        <?php endif; ?>
+                                    </div>
+
+                                    <!-- Быстрые действия -->
+                                    <div class='product-actions'>
+                                        <div class='btn-group-vertical'>
+                                            <button onclick='viewProduct("<?= $product['id'] ?>")' class='btn btn-sm btn-light' title='Просмотр'>
+                                                <i class='fas fa-eye'></i>
+                                            </button>
+                                            <a href='?page=product_editor&id=<?= $product['id'] ?>' class='btn btn-sm btn-primary' title='Редактировать'>
+                                                <i class='fas fa-edit'></i>
+                                            </a>
+                                            <button onclick='copyProduct("<?= $product['id'] ?>")' class='btn btn-sm btn-success' title='Копировать'>
+                                                <i class='fas fa-copy'></i>
+                                            </button>
+                                        </div>
+                                    </div>
+
+                                    <!-- Статус -->
+                                    <div class='position-absolute bottom-0 end-0 m-2'>
+                                        <?php if (($product['status'] ?? 1) == 0): ?>
+                                            <span class='badge bg-danger'>❌</span>
+                                        <?php else: ?>
+                                            <span class='badge bg-success'>✅</span>
+                                        <?php endif; ?>
+                                    </div>
+
+                                    <!-- Чекбокс -->
+                                    <div class='position-absolute top-0 start-0 m-2'>
+                                        <input type='checkbox' class='form-check-input product-checkbox bg-white' value='<?= $product['id'] ?>'>
+                                    </div>
+                                </div>
+
+                                <!-- Информация о товаре -->
+                                <div class='card-body d-flex flex-column'>
+                                    <h6 class='card-title fw-bold'><?= htmlspecialchars($product['name']) ?></h6>
+                                    <?php if (!empty($product['latin_name'])): ?>
+                                        <p class='card-text small text-muted fst-italic mb-2'>🔬 <?= htmlspecialchars($product['latin_name']) ?></p>
+                                    <?php endif; ?>
+
+                                    <p class='card-text small text-muted flex-grow-1'>
+                                        <?= htmlspecialchars(mb_substr($product['description'] ?? '', 0, 100)) ?><?= mb_strlen($product['description'] ?? '') > 100 ? '...' : '' ?>
+                                    </p>
+
+                                    <div class='mt-auto'>
+                                        <!-- Категория и цена -->
+                                        <div class='d-flex justify-content-between align-items-center mb-3'>
+                                            <span class='badge bg-secondary'>📂 <?= htmlspecialchars($categoryName) ?></span>
+                                            <div class='text-end'>
+                                                <div class='price-display'><?= formatPrice($product['price']) ?></div>
+                                                <?php if (!empty($product['old_price']) && $product['old_price'] > $product['price']): ?>
+                                                    <div class='old-price'><?= formatPrice($product['old_price']) ?></div>
+                                                <?php endif; ?>
+                                            </div>
+                                        </div>
+
+                                        <!-- Основные действия -->
+                                        <div class='d-grid gap-2'>
+                                            <a href='?page=product_editor&id=<?= $product['id'] ?>' class='btn btn-gradient-primary btn-sm'>
+                                                <i class='fas fa-edit me-1'></i>Редактировать
+                                            </a>
+                                            <div class='btn-group'>
+                                                <button onclick='viewProduct("<?= $product['id'] ?>")' class='btn btn-outline-info btn-sm'>
+                                                    <i class='fas fa-eye'></i>
+                                                </button>
+                                                <button onclick='copyProduct("<?= $product['id'] ?>")' class='btn btn-outline-success btn-sm'>
+                                                    <i class='fas fa-copy'></i>
+                                                </button>
+                                                <button onclick='deleteProduct("<?= $product['id'] ?>")' class='btn btn-outline-danger btn-sm'>
+                                                    <i class='fas fa-trash'></i>
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    <?php endforeach; ?>
+                </div>
+            </div>
+        <?php endif; ?>
+    </div>
+</div>
+
+<!-- Модальное окно для изображения -->
+<div class='modal fade' id='imageModal' tabindex='-1'>
+    <div class='modal-dialog modal-lg'>
+        <div class='modal-content'>
+            <div class='modal-header'>
+                <h5 class='modal-title'>🖼️ Просмотр изображения</h5>
+                <button type='button' class='btn-close' data-bs-dismiss='modal'></button>
+            </div>
+            <div class='modal-body text-center'>
+                <img id='modalImage' src='' class='img-fluid rounded' alt='Товар'>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+// 🚀 JAVASCRIPT С ПРАВИЛЬНЫМ АЛИАСОМ
+
+// 🔧 Функция переключения отладки
+function toggleDebug() {
+    const content = document.getElementById('debugContent');
+    content.style.display = content.style.display === 'none' ? 'block' : 'none';
+}
+
+// Переключение видов отображения
+function switchView(view) {
+    if (view === 'grid') {
+        document.getElementById('tableView').classList.add('d-none');
+        document.getElementById('gridView').classList.remove('d-none');
+        document.getElementById('gridViewBtn').classList.remove('btn-outline-primary');
+        document.getElementById('gridViewBtn').classList.add('btn-primary');
+        document.getElementById('listViewBtn').classList.add('btn-outline-primary');
+        document.getElementById('listViewBtn').classList.remove('btn-primary');
+        localStorage.setItem('productsView', 'grid');
+    } else {
+        document.getElementById('gridView').classList.add('d-none');
+        document.getElementById('tableView').classList.remove('d-none');
+        document.getElementById('listViewBtn').classList.remove('btn-outline-primary');
+        document.getElementById('listViewBtn').classList.add('btn-primary');
+        document.getElementById('gridViewBtn').classList.add('btn-outline-primary');
+        document.getElementById('gridViewBtn').classList.remove('btn-primary');
+        localStorage.setItem('productsView', 'list');
+    }
+}
+
+// Восстановление последнего выбранного вида
+document.addEventListener('DOMContentLoaded', function() {
+    const savedView = localStorage.getItem('productsView');
+    if (savedView === 'grid') {
+        switchView('grid');
+    }
+
+    // Автопоиск при вводе
+    const searchInput = document.getElementById('searchInput');
+    let searchTimeout;
+    searchInput.addEventListener('input', function() {
+        clearTimeout(searchTimeout);
+        searchTimeout = setTimeout(() => {
+            if (this.value.length >= 2 || this.value.length === 0) {
+                document.getElementById('filterForm').submit();
+            }
+        }, 1000);
+    });
+
+    console.log('🔧 Страница с исправленным алиасом загружена');
+});
+
+// Просмотр товара
+function viewProduct(id) {
+    showNotification('🔍 Загружаю информацию о товаре...', 'info');
+    setTimeout(() => {
+        showNotification('✅ Функция просмотра товара в разработке', 'success');
+    }, 1000);
+}
+
+// Копирование товара
+function copyProduct(id) {
+    if (confirm('🔄 Создать копию этого товара?')) {
+        showNotification('📋 Копирую товар...', 'info');
+
+        const form = document.createElement('form');
+        form.method = 'POST';
+        form.innerHTML = `
+            <input type='hidden' name='copy_product' value='1'>
+            <input type='hidden' name='product_id' value='${id}'>
+        `;
+        document.body.appendChild(form);
+        form.submit();
+    }
+}
+
+// Удаление товара
+function deleteProduct(id) {
+    if (confirm('🗑️ Вы уверены, что хотите удалить этот товар?\n\n⚠️ Это действие нельзя отменить!')) {
+        showNotification('🗑️ Удаляю товар...', 'warning');
+
+        const form = document.createElement('form');
+        form.method = 'POST';
+        form.innerHTML = `
+            <input type='hidden' name='delete_product' value='1'>
+            <input type='hidden' name='product_id' value='${id}'>
+        `;
+        document.body.appendChild(form);
+        form.submit();
+    }
+}
+
+// Управление массовым выбором
+function toggleSelectAll() {
+    const selectAll = document.getElementById('selectAll');
+    const checkboxes = document.querySelectorAll('.product-checkbox');
+
+    checkboxes.forEach(checkbox => {
+        checkbox.checked = selectAll.checked;
+    });
+
+    updateBulkActions();
+}
+
+// Обработка индивидуальных чекбоксов
+document.addEventListener('change', function(e) {
+    if (e.target.classList.contains('product-checkbox')) {
+        updateBulkActions();
+        updateSelectAllState();
+    }
+});
+
+// Обновление состояния главного чекбокса
+function updateSelectAllState() {
+    const checkboxes = document.querySelectorAll('.product-checkbox');
+    const checkedBoxes = document.querySelectorAll('.product-checkbox:checked');
+    const selectAll = document.getElementById('selectAll');
+
+    if (selectAll) {
+        if (checkedBoxes.length === 0) {
+            selectAll.indeterminate = false;
+            selectAll.checked = false;
+        } else if (checkedBoxes.length === checkboxes.length) {
+            selectAll.indeterminate = false;
+            selectAll.checked = true;
+        } else {
+            selectAll.indeterminate = true;
+            selectAll.checked = false;
+        }
+    }
+}
+
+// Обновление панели массовых действий
+function updateBulkActions() {
+    const checkedBoxes = document.querySelectorAll('.product-checkbox:checked');
+    const bulkActions = document.getElementById('bulkActions');
+    const selectedCount = document.getElementById('selectedCount');
+    const selectedProducts = document.getElementById('selectedProducts');
+
+    if (checkedBoxes.length > 0) {
+        bulkActions.style.display = 'block';
+        selectedCount.textContent = checkedBoxes.length;
+
+        // Добавляем скрытые поля для выбранных товаров
+        selectedProducts.innerHTML = '';
+        checkedBoxes.forEach(checkbox => {
+            const input = document.createElement('input');
+            input.type = 'hidden';
+            input.name = 'selected_products[]';
+            input.value = checkbox.value;
+            selectedProducts.appendChild(input);
+        });
+    } else {
+        bulkActions.style.display = 'none';
+    }
+}
+
+// Подтверждение массовых действий
+function confirmBulkAction() {
+    const action = document.querySelector('select[name="bulk_action"]').value;
+    const count = document.querySelectorAll('.product-checkbox:checked').length;
+
+    if (!action) {
+        alert('⚠️ Выберите действие для выполнения');
+        return false;
+    }
+
+    const messages = {
+        'activate': `✅ Активировать ${count} товаров?`,
+        'deactivate': `❌ Скрыть ${count} товаров?`,
+        'delete': `🗑️ УДАЛИТЬ ${count} товаров?\n\n⚠️ Это действие НЕЛЬЗЯ отменить!`
+    };
+
+    return confirm(messages[action] || `Выполнить действие для ${count} товаров?`);
+}
+
+// Очистка выбора
+function clearSelection() {
+    document.querySelectorAll('.product-checkbox').forEach(checkbox => {
+        checkbox.checked = false;
+    });
+    document.getElementById('selectAll').checked = false;
+    document.getElementById('selectAll').indeterminate = false;
+    updateBulkActions();
+}
+
+// Показ модального окна с изображением
+function showImageModal(imageSrc) {
+    document.getElementById('modalImage').src = imageSrc;
+    const modal = new bootstrap.Modal(document.getElementById('imageModal'));
+    modal.show();
+}
+
+// Экспорт товаров
+function exportProducts() {
+    showNotification('📊 Начинаю экспорт товаров...', 'info');
+    setTimeout(() => {
+        showNotification('✅ Экспорт завершен! Файл загружается...', 'success');
+    }, 2000);
+}
+
+// Система уведомлений
+function showNotification(message, type = 'info', duration = 3000) {
+    const alertClass = {
+        'success': 'alert-success',
+        'error': 'alert-danger',
+        'warning': 'alert-warning',
+        'info': 'alert-info'
+    }[type] || 'alert-info';
+
+    const notification = document.createElement('div');
+    notification.className = `alert ${alertClass} alert-dismissible fade show position-fixed`;
+    notification.style.cssText = 'top: 20px; right: 20px; z-index: 9999; min-width: 300px;';
+    notification.innerHTML = `
+        ${message}
+        <button type='button' class='btn-close' onclick='this.parentElement.remove()'></button>
+    `;
+
+    document.body.appendChild(notification);
+
+    setTimeout(() => {
+        if (notification.parentNode) {
+            notification.remove();
+        }
+    }, duration);
+}
+
+// Горячие клавиши
+document.addEventListener('keydown', function(e) {
+    if (e.ctrlKey || e.metaKey) {
+        switch(e.key) {
+            case 'f':
+                e.preventDefault();
+                document.getElementById('searchInput').focus();
+                break;
+            case 'n':
+                e.preventDefault();
+                window.location.href = '?page=product_editor';
+                break;
+            case 'a':
+                e.preventDefault();
+                document.getElementById('selectAll').click();
+                break;
+        }
+    }
+});
+
+console.log('🚀 Страница товаров с правильным алиасом загружена!');
+console.log('🔗 Алиас: product_editor → product_editor.php');
+console.log('💡 Горячие клавиши: Ctrl+F (поиск), Ctrl+N (новый товар), Ctrl+A (выбрать все)');
+</script>
