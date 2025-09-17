@@ -237,7 +237,7 @@ function addToCart($productId, $quantity = 1) {
     }
 
     // Валидация параметров
-    if (!is_numeric($productId) || !is_numeric($quantity) || $productId <= 0 || $quantity <= 0) {
+    if (empty($productId) || !is_numeric($quantity) || $quantity <= 0) {
         error_log("КОРЗИНА: Некорректные параметры - productId: $productId, quantity: $quantity");
         return false;
     }
@@ -293,6 +293,14 @@ function getCartItems() {
         'total' => $total,
         'count' => count($items)
     ];
+}
+
+/**
+ * МЕГА функция получения общей стоимости корзины
+ */
+function getCartTotal() {
+    $cartData = getCartItems();
+    return $cartData['total'];
 }
 
 /**
@@ -362,52 +370,125 @@ function clearCart() {
     return true;
 }
 
-// ========== ИЗБРАННОЕ ==========
+// ========== ИЗБРАННОЕ (ПОЛНОСТЬЮ ПЕРЕПИСАННОЕ) ==========
 
-function getFavorites() {
-    if (!initSession()) return [];
-    return $_SESSION['favorites'] ?? [];
-}
-
-function addToFavorites($productId) {
-    if (!initSession()) return false;
+/**
+ * Инициализация избранного
+ */
+function initFavorites() {
+    if (!initSession()) {
+        return false;
+    }
 
     if (!isset($_SESSION['favorites'])) {
         $_SESSION['favorites'] = [];
+        error_log('ИЗБРАННОЕ: Инициализировано новое избранное');
     }
 
-    $productId = strval($productId);
-    if (!in_array($productId, $_SESSION['favorites'])) {
-        $_SESSION['favorites'][] = $productId;
-        return true;
-    }
-    return false;
+    return true;
 }
 
-function removeFromFavorites($productId) {
-    if (!initSession()) return false;
+/**
+ * Получение списка ID избранных товаров
+ */
+function getFavorites() {
+    if (!initFavorites()) return [];
+    return $_SESSION['favorites'] ?? [];
+}
 
-    if (isset($_SESSION['favorites'])) {
-        $productId = strval($productId);
-        $key = array_search($productId, $_SESSION['favorites']);
-        if ($key !== false) {
-            unset($_SESSION['favorites'][$key]);
-            $_SESSION['favorites'] = array_values($_SESSION['favorites']);
-            return true;
+/**
+ * Получение полных данных избранных товаров
+ */
+function getFavoritesItems() {
+    if (!initFavorites()) {
+        return [];
+    }
+
+    $favorites = $_SESSION['favorites'] ?? [];
+    $items = [];
+
+    foreach ($favorites as $productId) {
+        $product = getProductById($productId);
+        if ($product) {
+            $items[] = $product;
         }
     }
+
+    return $items;
+}
+
+/**
+ * Добавление товара в избранное
+ */
+function addToFavorites($productId) {
+    if (!initFavorites()) return false;
+
+    $productId = strval($productId);
+
+    // Проверяем существование товара
+    $product = getProductById($productId);
+    if (!$product) {
+        error_log("ИЗБРАННОЕ: Товар с ID $productId не найден");
+        return false;
+    }
+
+    if (!in_array($productId, $_SESSION['favorites'])) {
+        $_SESSION['favorites'][] = $productId;
+        error_log("ИЗБРАННОЕ: Добавлен товар $productId");
+        return true;
+    }
+
+    return false; // Уже в избранном
+}
+
+/**
+ * Удаление товара из избранного
+ */
+function removeFromFavorites($productId) {
+    if (!initFavorites()) return false;
+
+    $productId = strval($productId);
+    $key = array_search($productId, $_SESSION['favorites']);
+
+    if ($key !== false) {
+        unset($_SESSION['favorites'][$key]);
+        $_SESSION['favorites'] = array_values($_SESSION['favorites']); // Переиндексация
+        error_log("ИЗБРАННОЕ: Удален товар $productId");
+        return true;
+    }
+
     return false;
 }
 
+/**
+ * Получение количества товаров в избранном
+ */
 function getFavoritesCount() {
-    return count(getFavorites());
+    if (!initFavorites()) return 0;
+    $count = count($_SESSION['favorites'] ?? []);
+    error_log("ИЗБРАННОЕ: Количество товаров - $count");
+    return $count;
 }
 
+/**
+ * Проверка, находится ли товар в избранном
+ */
 function isInFavorites($productId) {
-    return in_array(strval($productId), getFavorites());
+    if (!initFavorites()) return false;
+    return in_array(strval($productId), $_SESSION['favorites'] ?? []);
 }
 
-// ========== ОТЗЫВЫ ==========
+/**
+ * Очистка избранного
+ */
+function clearFavorites() {
+    if (!initFavorites()) return false;
+    $_SESSION['favorites'] = [];
+    error_log('ИЗБРАННОЕ: Избранное очищено');
+    return true;
+}
+
+// ========== ОТЗЫВЫ (ИСПРАВЛЕННЫЕ) ==========
 
 function getAllReviews() {
     return loadJsonData('reviews.json');
@@ -426,7 +507,8 @@ function getReviewById($id) {
 function getProductReviews($productId) {
     $reviews = loadJsonData('reviews.json');
     $productReviews = array_filter($reviews, function($review) use ($productId) {
-        return isset($review['product_id']) && $review['product_id'] == $productId && $review['status'] === 'approved';
+        return isset($review['product_id']) && $review['product_id'] == $productId && 
+               isset($review['status']) && $review['status'] === 'approved';
     });
     return array_values($productReviews);
 }
@@ -438,17 +520,54 @@ function getProductRating($productId) {
     }
 
     $ratings = array_column($reviews, 'rating');
-    $average = array_sum($ratings) / count($ratings);
+    $validRatings = array_filter($ratings, function($rating) {
+        return is_numeric($rating) && $rating > 0 && $rating <= 5;
+    });
+
+    if (empty($validRatings)) {
+        return ['average' => 0, 'count' => 0];
+    }
+
+    $average = array_sum($validRatings) / count($validRatings);
 
     return [
         'average' => round($average, 1),
-        'count' => count($reviews)
+        'count' => count($validRatings)
     ];
 }
 
 function saveReview($reviewData) {
     try {
+        // Валидация данных
+        if (empty($reviewData['product_id']) || empty($reviewData['customer_name']) || 
+            empty($reviewData['comment']) || !isset($reviewData['rating'])) {
+            return ['success' => false, 'message' => 'Заполните все обязательные поля'];
+        }
+
+        if (!is_numeric($reviewData['rating']) || $reviewData['rating'] < 1 || $reviewData['rating'] > 5) {
+            return ['success' => false, 'message' => 'Некорректный рейтинг'];
+        }
+
+        // Проверяем существование товара
+        $product = getProductById($reviewData['product_id']);
+        if (!$product) {
+            return ['success' => false, 'message' => 'Товар не найден'];
+        }
+
         $reviews = getAllReviews();
+
+        // Генерируем ID если его нет
+        if (empty($reviewData['id'])) {
+            $reviewData['id'] = generateUniqueId();
+            $reviewData['created_at'] = date('Y-m-d H:i:s');
+        }
+
+        $reviewData['updated_at'] = date('Y-m-d H:i:s');
+
+        // Устанавливаем статус по умолчанию
+        if (!isset($reviewData['status'])) {
+            $reviewData['status'] = 'pending';
+        }
 
         $exists = false;
         foreach ($reviews as $key => $review) {
@@ -464,16 +583,21 @@ function saveReview($reviewData) {
         }
 
         if (saveJsonData('reviews.json', $reviews)) {
-            return ['success' => true, 'message' => 'Отзыв сохранен'];
+            return ['success' => true, 'message' => 'Отзыв сохранен успешно'];
         } else {
-            return ['success' => false, 'message' => 'Ошибка сохранения'];
+            return ['success' => false, 'message' => 'Ошибка сохранения отзыва'];
         }
     } catch (Exception $e) {
-        return ['success' => false, 'message' => $e->getMessage()];
+        error_log('Ошибка сохранения отзыва: ' . $e->getMessage());
+        return ['success' => false, 'message' => 'Внутренняя ошибка сервера'];
     }
 }
 
 function updateReviewStatus($id, $status) {
+    if (!in_array($status, ['pending', 'approved', 'rejected'])) {
+        return false;
+    }
+
     $reviews = getAllReviews();
     foreach ($reviews as &$review) {
         if ($review['id'] === $id) {
@@ -599,10 +723,10 @@ function initializeDefaultData() {
     $categories = getCategories();
     if (empty($categories)) {
         $defaultCategories = [
-            ['id' => 1, 'name' => 'Растения', 'slug' => 'plants', 'created_at' => date('Y-m-d H:i:s')],
-            ['id' => 2, 'name' => 'Рыбки', 'slug' => 'fish', 'created_at' => date('Y-m-d H:i:s')],
-            ['id' => 3, 'name' => 'Оборудование', 'slug' => 'equipment', 'created_at' => date('Y-m-d H:i:s')],
-            ['id' => 4, 'name' => 'Декор', 'slug' => 'decoration', 'created_at' => date('Y-m-d H:i:s')]
+            ['id' => 1, 'name' => 'Растения', 'slug' => 'plants', 'description' => 'Аквариумные растения', 'created_at' => date('Y-m-d H:i:s')],
+            ['id' => 2, 'name' => 'Рыбки', 'slug' => 'fish', 'description' => 'Аквариумные рыбки', 'created_at' => date('Y-m-d H:i:s')],
+            ['id' => 3, 'name' => 'Оборудование', 'slug' => 'equipment', 'description' => 'Аквариумное оборудование', 'created_at' => date('Y-m-d H:i:s')],
+            ['id' => 4, 'name' => 'Декор', 'slug' => 'decoration', 'description' => 'Декорации для аквариума', 'created_at' => date('Y-m-d H:i:s')]
         ];
         saveJsonData('categories.json', $defaultCategories);
     }
