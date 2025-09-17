@@ -1,1469 +1,747 @@
 <?php
-// admin/pages/products.php - СИСТЕМА УПРАВЛЕНИЯ ТОВАРАМИ С ИСПРАВЛЕННЫМ АЛИАСОМ
+/**
+ * ГЛАВНЫЙ ФАЙЛ АДМИНКИ - ТОЧКА ВХОДА
+ * Интегрирует все модули и обеспечивает единую навигацию
+ */
 
-// 🔗 ИСПРАВЛЕННЫЙ АЛИАС ДЛЯ РЕДАКТОРА ТОВАРОВ - ДОЛЖЕН БЫТЬ ПЕРВЫМ!
-if (isset($_GET['page']) && $_GET['page'] === 'product_editor') {
-    // Ищем файл редактора в разных возможных местах
-    $possible_paths = [
-        __DIR__ . '/product_editor.php',
-        __DIR__ . '/order_success.php', 
-        dirname(__DIR__) . '/product_editor.php',
-        dirname(__DIR__) . '/order_success.php',
-        './product_editor.php',
-        './order_success.php'
-    ];
+require_once 'functions.php';
+initSession();
 
-    $editor_file = null;
-    foreach ($possible_paths as $path) {
-        if (file_exists($path)) {
-            $editor_file = $path;
-            break;
-        }
-    }
+// Определяем текущую страницу
+$page = $_GET['page'] ?? 'dashboard';
 
-    if ($editor_file) {
-        // Передаем ID товара для редактирования
-        if (isset($_GET['id'])) {
-            $_REQUEST['product_id'] = $_GET['id'];
-            $_GET['product_id'] = $_GET['id']; // Дублируем для совместимости
-        }
+// Обработка AJAX запросов
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
+    header('Content-Type: application/json; charset=utf-8');
 
-        // Устанавливаем флаги для редактора
-        $_REQUEST['editor_mode'] = true;
-        $_REQUEST['from_products'] = true;
-        $_REQUEST['no_redirect'] = true;
-
-        // Логируем для отладки
-        error_log('🔗 Алиас активирован: ' . $editor_file);
-        error_log('🔗 Параметры: ' . http_build_query($_GET));
-        error_log('🔗 ID товара: ' . ($_GET['id'] ?? 'новый товар'));
-
-        // Подключаем редактор
-        include $editor_file;
-        exit; // Важно - останавливаем выполнение products.php
-    } else {
-        echo '<div class="alert alert-danger animate-fade-in">
-            <h5><i class="fas fa-exclamation-triangle me-2"></i>🔗 Ошибка алиаса</h5>
-            <p><strong>Файл редактора не найден!</strong></p>
-            <p>Проверенные пути:</p>
-            <ul>';
-        foreach ($possible_paths as $path) {
-            echo '<li><code>' . htmlspecialchars($path) . '</code> - ' . (file_exists($path) ? '✅' : '❌') . '</li>';
-        }
-        echo '</ul></div>';
-    }
-}
-
-// Подключаем функции - если нет, создаем базовые
-if (!function_exists('getAllProducts')) {
-    // Базовые функции для работы с товарами
-    function getAllProducts() {
-        // В реальном проекте здесь будет запрос к БД
-        // Возвращаем демо-данные для примера
-        return [
-            [
-                'id' => 1,
-                'name' => 'Анубиас нана - неприхотливое аквариумное растение',
-                'latin_name' => 'Anubias barteri var. nana',
-                'description' => 'Неприхотливое медленнорастущее растение с жесткими темно-зелеными листьями...',
-                'short_description' => 'Неприхотливое аквариумное растение для переднего плана',
-                'price' => 450,
-                'old_price' => 600,
-                'category_id' => 1,
-                'sku' => 'PLT_ANU_9876',
-                'stock_quantity' => 15,
-                'status' => 1,
-                'main_image' => 'https://images.unsplash.com/photo-1416879595882-3373a0480b5b?w=400&h=400&fit=crop',
-                'gallery' => [
-                    'https://images.unsplash.com/photo-1535591273668-578e31182c4f?w=300&h=300&fit=crop',
-                    'https://images.unsplash.com/photo-1558618047-3c8c76ca7d13?w=300&h=300&fit=crop',
-                    'https://images.unsplash.com/photo-1524704654690-b56c05c78a00?w=300&h=300&fit=crop'
-                ],
-                'badges' => ['recommend', 'discount', 'eco'],
-                'tags' => 'анубиас, неприхотливые, медленнорастущие, тенелюбивые, передний план',
-                'created_at' => date('Y-m-d H:i:s', strtotime('-5 days')),
-                'size' => '10-15 см',
-                'temperature' => '20-28°C',
-                'ph_level' => '6.0-8.0',
-                'lighting' => 'слабое',
-                'difficulty' => 'легко'
-            ],
-            [
-                'id' => 2,
-                'name' => 'Гуппи обыкновенная - яркая живородящая рыбка',
-                'latin_name' => 'Poecilia reticulata',
-                'description' => 'Яркая и неприхотливая живородящая рыбка, идеальная для начинающих...',
-                'price' => 150,
-                'category_id' => 2,
-                'sku' => 'FSH_GUP_5432',
-                'stock_quantity' => 25,
-                'status' => 1,
-                'main_image' => 'https://images.unsplash.com/photo-1544551763-46a013bb70d5?w=400&h=400&fit=crop',
-                'badges' => ['new', 'hit'],
-                'created_at' => date('Y-m-d H:i:s', strtotime('-2 days'))
-            ],
-            [
-                'id' => 3,
-                'name' => 'Фильтр внутренний AquaTech 500',
-                'description' => 'Эффективный внутренний фильтр для аквариумов до 100 литров...',
-                'price' => 1250,
-                'old_price' => 1500,
-                'category_id' => 3,
-                'sku' => 'EQP_FLT_7890',
-                'stock_quantity' => 8,
-                'status' => 1,
-                'main_image' => 'https://images.unsplash.com/photo-1559827260-dc66d52bef19?w=400&h=400&fit=crop',
-                'badges' => ['premium'],
-                'created_at' => date('Y-m-d H:i:s', strtotime('-1 week'))
-            ]
-        ];
-    }
-
-    function getCategories() {
-        return [
-            ['id' => 1, 'name' => 'Растения'],
-            ['id' => 2, 'name' => 'Рыбки'],
-            ['id' => 3, 'name' => 'Оборудование'],
-            ['id' => 4, 'name' => 'Декор'],
-            ['id' => 5, 'name' => 'Корма'],
-            ['id' => 6, 'name' => 'Химия для воды']
-        ];
-    }
-
-    function getCategoryById($id) {
-        $categories = getCategories();
-        foreach ($categories as $category) {
-            if ($category['id'] == $id) {
-                return $category;
-            }
-        }
-        return null;
-    }
-
-    function getProductById($id) {
-        $products = getAllProducts();
-        foreach ($products as $product) {
-            if ($product['id'] == $id) {
-                return $product;
-            }
-        }
-        return null;
-    }
-
-    function deleteProduct($id) {
-        // В реальном проекте здесь удаление из БД
-        error_log("Удаление товара ID: $id");
-        return ['success' => true];
-    }
-
-    function copyProduct($id) {
-        // В реальном проекте здесь создание копии в БД
-        $newId = rand(1000, 9999);
-        error_log("Копирование товара ID: $id -> новый ID: $newId");
-        return ['success' => true, 'product_id' => $newId];
-    }
-
-    function saveProduct($product) {
-        // В реальном проекте здесь сохранение в БД
-        error_log("Сохранение товара: " . json_encode($product));
-        return ['success' => true, 'product_id' => $product['id'] ?? rand(1000, 9999)];
-    }
-
-    function formatPrice($price) {
-        return number_format(floatval($price), 0, ',', ' ') . ' ₽';
-    }
-}
-
-// Проверяем, что функции загружены
-if (!function_exists('getAllProducts')) {
-    die('Ошибка: Не удалось загрузить функции для работы с товарами');
-}
-
-// Обработка POST-запросов (сохранение, удаление, копирование)
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-
-    // Обработка удаления товара
-    if (isset($_POST['delete_product']) && isset($_POST['product_id'])) {
-        $result = deleteProduct($_POST['product_id']);
-        if ($result['success']) {
-            echo '<div class="alert alert-success alert-dismissible fade show">
-                <i class="fas fa-check-circle me-2"></i>Товар успешно удален!
-                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-            </div>';
-        } else {
-            echo '<div class="alert alert-danger alert-dismissible fade show">
-                <i class="fas fa-exclamation-circle me-2"></i>Ошибка: ' . htmlspecialchars($result['error']) . '
-                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-            </div>';
-        }
-    }
-
-    // Обработка копирования товара
-    if (isset($_POST['copy_product']) && isset($_POST['product_id'])) {
-        $result = copyProduct($_POST['product_id']);
-        if ($result['success']) {
-            echo '<div class="alert alert-success alert-dismissible fade show">
-                <i class="fas fa-copy me-2"></i>Товар успешно скопирован! ID: ' . $result['product_id'] . '
-                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-            </div>';
-        } else {
-            echo '<div class="alert alert-danger alert-dismissible fade show">
-                <i class="fas fa-exclamation-circle me-2"></i>Ошибка копирования: ' . htmlspecialchars($result['error']) . '
-                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-            </div>';
-        }
-    }
-
-    // Обработка сохранения товара из редактора
-    if (isset($_POST['save_product'])) {
-        $productData = [
-            'id' => $_POST['product_id'] ?? null,
-            'name' => $_POST['name'] ?? '',
-            'latin_name' => $_POST['latin_name'] ?? '',
-            'description' => $_POST['description'] ?? '',
-            'short_description' => $_POST['short_description'] ?? '',
-            'price' => floatval($_POST['price'] ?? 0),
-            'old_price' => floatval($_POST['old_price'] ?? 0),
-            'category_id' => intval($_POST['category_id'] ?? 0),
-            'sku' => $_POST['sku'] ?? '',
-            'stock_quantity' => intval($_POST['stock_quantity'] ?? 0),
-            'status' => intval($_POST['status'] ?? 1),
-            'main_image' => $_POST['main_image'] ?? '',
-            'gallery' => json_decode($_POST['gallery'] ?? '[]', true),
-            'badges' => json_decode($_POST['badges'] ?? '[]', true),
-            'tags' => $_POST['tags'] ?? '',
-            'size' => $_POST['size'] ?? '',
-            'temperature' => $_POST['temperature'] ?? '',
-            'ph_level' => $_POST['ph_level'] ?? '',
-            'lighting' => $_POST['lighting'] ?? '',
-            'difficulty' => $_POST['difficulty'] ?? '',
-            'meta_title' => $_POST['meta_title'] ?? '',
-            'meta_description' => $_POST['meta_description'] ?? ''
-        ];
-
-        $result = saveProduct($productData);
-        if ($result['success']) {
-            echo '<div class="alert alert-success alert-dismissible fade show">
-                <i class="fas fa-save me-2"></i>Товар успешно сохранен! ID: ' . $result['product_id'] . '
-                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-            </div>';
-
-            // Редирект обратно к списку товаров
-            echo '<script>
-                setTimeout(function() {
-                    window.location.href = "?page=products";
-                }, 2000);
-            </script>';
-        } else {
-            echo '<div class="alert alert-danger alert-dismissible fade show">
-                <i class="fas fa-exclamation-circle me-2"></i>Ошибка сохранения: ' . htmlspecialchars($result['error'] ?? 'Неизвестная ошибка') . '
-                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-            </div>';
-        }
-    }
-
-    // Обработка массовых действий
-    if (isset($_POST['bulk_action']) && !empty($_POST['selected_products'])) {
-        $action = $_POST['bulk_action'];
-        $productIds = $_POST['selected_products'];
-        $results = [];
-
-        switch ($action) {
-            case 'delete':
-                foreach ($productIds as $id) {
-                    $results[] = deleteProduct($id);
-                }
+    try {
+        switch ($_POST['action']) {
+            case 'delete_product':
+                $id = $_POST['id'] ?? 0;
+                $result = deleteProduct($id);
+                echo json_encode([
+                    'success' => $result,
+                    'message' => $result ? 'Товар удален' : 'Ошибка удаления товара'
+                ]);
                 break;
-            case 'activate':
-                foreach ($productIds as $id) {
-                    $product = getProductById($id);
-                    if ($product) {
-                        $product['status'] = 1;
-                        $results[] = saveProduct($product);
-                    }
-                }
+
+            case 'update_order_status':
+                $id = $_POST['id'] ?? 0;
+                $status = trim($_POST['status'] ?? '');
+                $result = updateOrderStatus($id, $status);
+                echo json_encode([
+                    'success' => $result,
+                    'message' => $result ? 'Статус заказа обновлен' : 'Ошибка обновления статуса'
+                ]);
                 break;
-            case 'deactivate':
-                foreach ($productIds as $id) {
-                    $product = getProductById($id);
-                    if ($product) {
-                        $product['status'] = 0;
-                        $results[] = saveProduct($product);
-                    }
-                }
+
+            case 'delete_category':
+                $id = $_POST['id'] ?? 0;
+                $result = deleteCategory($id);
+                echo json_encode([
+                    'success' => $result,
+                    'message' => $result ? 'Категория удалена' : 'Ошибка удаления категории'
+                ]);
+                break;
+
+            default:
+                echo json_encode(['success' => false, 'message' => 'Неизвестное действие']);
                 break;
         }
-
-        $successCount = count(array_filter($results, function($r) { return $r['success']; }));
-        echo '<div class="alert alert-info alert-dismissible fade show">
-            <i class="fas fa-info-circle me-2"></i>Обработано товаров: ' . $successCount . ' из ' . count($productIds) . '
-            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-        </div>';
+    } catch (Exception $e) {
+        error_log('Ошибка в админ панели: ' . $e->getMessage());
+        echo json_encode(['success' => false, 'message' => 'Внутренняя ошибка сервера']);
     }
+    exit;
 }
 
-// Получение данных для отображения
-$products = getAllProducts();
-$categories = getCategories();
-$search = $_GET['search'] ?? '';
-$category_filter = $_GET['category'] ?? '';
-$status_filter = $_GET['status'] ?? '';
-$sort_by = $_GET['sort'] ?? 'name_asc';
+// Получаем данные для дашборда
+$stats = getDashboardStats();
 
-// Фильтрация товаров
-if ($search || $category_filter || $status_filter !== '') {
-    $filtered_products = [];
-    foreach ($products as $product) {
-        $match = true;
+// Если это запрос к модулю товаров - подключаем его
+if (in_array($page, ['products', 'product_create', 'product_edit', 'product_view'])) {
+    // Конвертируем параметры для модуля товаров
+    $mode = 'list';
+    if ($page === 'product_create') $mode = 'create';
+    if ($page === 'product_edit') $mode = 'edit';
+    if ($page === 'product_view') $mode = 'view';
 
-        // Фильтр по поиску
-        if ($search) {
-            $searchLower = mb_strtolower($search);
-            $nameMatch = mb_strpos(mb_strtolower($product['name']), $searchLower) !== false;
-            $descMatch = mb_strpos(mb_strtolower($product['description'] ?? ''), $searchLower) !== false;
-            $tagsMatch = mb_strpos(mb_strtolower($product['tags'] ?? ''), $searchLower) !== false;
-            $skuMatch = mb_strpos(mb_strtolower($product['sku'] ?? ''), $searchLower) !== false;
-
-            if (!($nameMatch || $descMatch || $tagsMatch || $skuMatch)) {
-                $match = false;
-            }
-        }
-
-        // Фильтр по категории
-        if ($category_filter && $product['category_id'] != $category_filter) {
-            $match = false;
-        }
-
-        // Фильтр по статусу
-        if ($status_filter !== '' && ($product['status'] ?? 1) != $status_filter) {
-            $match = false;
-        }
-
-        if ($match) {
-            $filtered_products[] = $product;
-        }
-    }
-    $products = $filtered_products;
+    $_GET['mode'] = $mode;
+    include 'products_mega_module.php';
+    exit;
 }
 
-// Сортировка товаров
-usort($products, function($a, $b) use ($sort_by) {
-    switch ($sort_by) {
-        case 'name_desc':
-            return strcasecmp($b['name'], $a['name']);
-        case 'price_asc':
-            return ($a['price'] ?? 0) <=> ($b['price'] ?? 0);
-        case 'price_desc':
-            return ($b['price'] ?? 0) <=> ($a['price'] ?? 0);
-        case 'date_desc':
-            return strcmp($b['created_at'] ?? '', $a['created_at'] ?? '');
-        case 'date_asc':
-            return strcmp($a['created_at'] ?? '', $b['created_at'] ?? '');
-        default: // name_asc
-            return strcasecmp($a['name'], $b['name']);
-    }
-});
-
-// Статистика
-$allProducts = getAllProducts();
-$totalProducts = count($allProducts);
-$activeProducts = count(array_filter($allProducts, function($p) { return ($p['status'] ?? 1) == 1; }));
-$inactiveProducts = $totalProducts - $activeProducts;
-$totalValue = array_sum(array_map(function($p) { return ($p['price'] ?? 0) * ($p['stock_quantity'] ?? 0); }, $allProducts));
-
-// 🔍 ОТЛАДОЧНАЯ ИНФОРМАЦИЯ ДЛЯ РАЗРАБОТЧИКА
-$debug_info = [
-    'current_file' => __FILE__,
-    'current_dir' => __DIR__,
-    'editor_path_primary' => __DIR__ . '/product_editor.php',
-    'editor_path_secondary' => __DIR__ . '/order_success.php',
-    'editor_exists_primary' => file_exists(__DIR__ . '/product_editor.php'),
-    'editor_exists_secondary' => file_exists(__DIR__ . '/order_success.php'),
-    'get_params' => $_GET,
-    'request_uri' => $_SERVER['REQUEST_URI'] ?? 'не определен',
-    'post_params' => array_keys($_POST)
-];
 ?>
-
 <!DOCTYPE html>
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Управление товарами - Админ панель</title>
+    <title>🚀 Админ панель - АкваСбор МЕГА</title>
+
+    <!-- Bootstrap 5 -->
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Font Awesome -->
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+
+    <style>
+        :root {
+            --primary-gradient: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            --success-gradient: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
+            --sidebar-width: 280px;
+        }
+
+        * { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; }
+
+        body { background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%); }
+
+        .sidebar {
+            width: var(--sidebar-width);
+            height: 100vh;
+            background: var(--primary-gradient);
+            position: fixed;
+            left: 0;
+            top: 0;
+            overflow-y: auto;
+            z-index: 1000;
+            transition: all 0.3s ease;
+        }
+
+        .sidebar .logo {
+            padding: 2rem 1.5rem;
+            text-align: center;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .sidebar .nav-link {
+            color: rgba(255, 255, 255, 0.8);
+            padding: 1rem 1.5rem;
+            margin: 0.25rem 1rem;
+            border-radius: 12px;
+            transition: all 0.3s ease;
+            font-weight: 500;
+            text-decoration: none;
+            display: flex;
+            align-items: center;
+        }
+
+        .sidebar .nav-link:hover,
+        .sidebar .nav-link.active {
+            color: white;
+            background: rgba(255, 255, 255, 0.15);
+            transform: translateX(5px);
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.1);
+        }
+
+        .sidebar .nav-link i {
+            width: 20px;
+            margin-right: 0.75rem;
+        }
+
+        .main-content {
+            margin-left: var(--sidebar-width);
+            min-height: 100vh;
+            padding: 2rem;
+            transition: all 0.3s ease;
+        }
+
+        .stat-card {
+            background: white;
+            border-radius: 20px;
+            padding: 2rem;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            border: none;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .stat-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 4px;
+            background: var(--primary-gradient);
+        }
+
+        .stat-card:hover {
+            transform: translateY(-10px);
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.15);
+        }
+
+        .stat-icon {
+            width: 80px;
+            height: 80px;
+            border-radius: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 2rem;
+            color: white;
+            margin-bottom: 1rem;
+        }
+
+        .welcome-card {
+            background: var(--primary-gradient);
+            color: white;
+            border-radius: 20px;
+            padding: 3rem 2rem;
+            margin-bottom: 3rem;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .welcome-card::before {
+            content: '';
+            position: absolute;
+            top: -50%;
+            left: -50%;
+            width: 200%;
+            height: 200%;
+            background: repeating-linear-gradient(
+                45deg,
+                transparent,
+                transparent 2px,
+                rgba(255,255,255,0.05) 2px,
+                rgba(255,255,255,0.05) 4px
+            );
+            animation: float 20s linear infinite;
+        }
+
+        @keyframes float {
+            0% { transform: translateX(-100px) translateY(-100px); }
+            100% { transform: translateX(100px) translateY(100px); }
+        }
+
+        .quick-actions {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 1.5rem;
+            margin-top: 2rem;
+        }
+
+        .action-card {
+            background: white;
+            border-radius: 15px;
+            padding: 2rem;
+            text-align: center;
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.08);
+            transition: all 0.3s ease;
+            border: none;
+            text-decoration: none;
+            color: inherit;
+        }
+
+        .action-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 15px 30px rgba(0, 0, 0, 0.15);
+            color: inherit;
+            text-decoration: none;
+        }
+
+        .action-icon {
+            font-size: 3rem;
+            margin-bottom: 1rem;
+            background: var(--primary-gradient);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .sidebar-toggle {
+            display: none;
+            position: fixed;
+            top: 20px;
+            left: 20px;
+            z-index: 1001;
+            background: var(--primary-gradient);
+            border: none;
+            border-radius: 50%;
+            width: 50px;
+            height: 50px;
+            color: white;
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.2);
+        }
+
+        @media (max-width: 768px) {
+            .sidebar {
+                transform: translateX(-100%);
+            }
+
+            .sidebar.show {
+                transform: translateX(0);
+            }
+
+            .main-content {
+                margin-left: 0;
+                padding: 1rem;
+            }
+
+            .sidebar-toggle {
+                display: block;
+            }
+
+            .quick-actions {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .version-badge {
+            position: absolute;
+            top: 1rem;
+            right: 1rem;
+            background: rgba(255, 255, 255, 0.2);
+            color: white;
+            padding: 0.5rem 1rem;
+            border-radius: 20px;
+            font-size: 0.8rem;
+            font-weight: 600;
+        }
+
+        .status-indicator {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #28a745;
+            margin-right: 0.5rem;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0% { box-shadow: 0 0 0 0 rgba(40, 167, 69, 0.7); }
+            70% { box-shadow: 0 0 0 10px rgba(40, 167, 69, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(40, 167, 69, 0); }
+        }
+    </style>
 </head>
-<body class="bg-light">
+<body>
+    <!-- Кнопка переключения сайдбара для мобильных -->
+    <button class="sidebar-toggle" onclick="toggleSidebar()">
+        <i class="fas fa-bars"></i>
+    </button>
 
-<style>
-/* Профессиональные стили для страницы товаров */
-.product-stats {
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    color: white;
-    border-radius: 15px;
-    padding: 20px;
-    margin-bottom: 25px;
-    box-shadow: 0 10px 30px rgba(102, 126, 234, 0.3);
-}
+    <!-- Sidebar -->
+    <nav class="sidebar" id="sidebar">
+        <div class="logo">
+            <h3 class="text-white mb-1">
+                <i class="fas fa-fish me-2"></i>АкваАдмин
+            </h3>
+            <small class="text-white-50">Система управления</small>
+        </div>
 
-.stat-card {
-    background: rgba(255, 255, 255, 0.1);
-    border-radius: 10px;
-    padding: 15px;
-    text-align: center;
-    backdrop-filter: blur(10px);
-    transition: all 0.3s ease;
-}
+        <div class="nav flex-column">
+            <a class="nav-link <?= $page === 'dashboard' ? 'active' : '' ?>" href="?page=dashboard">
+                <i class="fas fa-tachometer-alt"></i>
+                <span>Панель управления</span>
+            </a>
 
-.stat-card:hover {
-    transform: translateY(-5px);
-    background: rgba(255, 255, 255, 0.2);
-}
-
-.product-card {
-    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-    border: 1px solid #e3e6f0;
-    border-radius: 15px;
-    overflow: hidden;
-    position: relative;
-}
-
-.product-card:hover {
-    transform: translateY(-8px);
-    box-shadow: 0 20px 40px rgba(0,0,0,0.1);
-    border-color: #4e73df;
-}
-
-.product-image {
-    position: relative;
-    overflow: hidden;
-    height: 200px;
-    background: linear-gradient(45deg, #f8f9fc, #e3e6f0);
-}
-
-.product-image img {
-    transition: all 0.3s ease;
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-}
-
-.product-card:hover .product-image img {
-    transform: scale(1.05);
-}
-
-.product-badges {
-    position: absolute;
-    top: 10px;
-    left: 10px;
-    z-index: 2;
-}
-
-.product-actions {
-    position: absolute;
-    top: 10px;
-    right: 10px;
-    opacity: 0;
-    transition: all 0.3s ease;
-    z-index: 2;
-}
-
-.product-card:hover .product-actions {
-    opacity: 1;
-}
-
-.table-hover tbody tr:hover {
-    background: linear-gradient(90deg, rgba(78, 115, 223, 0.05), rgba(78, 115, 223, 0.02));
-    transform: translateX(5px);
-}
-
-.filter-panel {
-    background: linear-gradient(135deg, #ffffff 0%, #f8f9fc 100%);
-    border: 1px solid #e3e6f0;
-    border-radius: 15px;
-    padding: 20px;
-    box-shadow: 0 5px 15px rgba(0,0,0,0.05);
-}
-
-.search-box {
-    position: relative;
-}
-
-.search-box .form-control {
-    border-radius: 25px;
-    padding-left: 45px;
-    border: 2px solid #e3e6f0;
-    transition: all 0.3s ease;
-}
-
-.search-box .form-control:focus {
-    border-color: #4e73df;
-    box-shadow: 0 0 0 0.2rem rgba(78, 115, 223, 0.25);
-    transform: translateY(-2px);
-}
-
-.search-box .input-group-text {
-    position: absolute;
-    left: 15px;
-    top: 50%;
-    transform: translateY(-50%);
-    background: none;
-    border: none;
-    z-index: 5;
-}
-
-.btn-gradient-primary {
-    background: linear-gradient(135deg, #4e73df, #2653d4);
-    border: none;
-    border-radius: 25px;
-    color: white;
-    font-weight: 600;
-    padding: 10px 25px;
-    transition: all 0.3s ease;
-}
-
-.btn-gradient-primary:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 8px 25px rgba(78, 115, 223, 0.3);
-    color: white;
-}
-
-.btn-gradient-success {
-    background: linear-gradient(135deg, #1cc88a, #17a673);
-    border: none;
-    border-radius: 25px;
-    color: white;
-    font-weight: 600;
-    transition: all 0.3s ease;
-}
-
-.btn-gradient-success:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 8px 25px rgba(28, 200, 138, 0.3);
-    color: white;
-}
-
-.bulk-actions {
-    background: linear-gradient(135deg, #f6c23e 0%, #f4b619 100%);
-    border-radius: 10px;
-    padding: 15px;
-    color: white;
-    margin-bottom: 20px;
-    display: none;
-}
-
-.page-header {
-    background: linear-gradient(135deg, #ffffff 0%, #f8f9fc 100%);
-    border-radius: 15px;
-    padding: 25px;
-    margin-bottom: 25px;
-    border: 1px solid #e3e6f0;
-}
-
-.breadcrumb {
-    background: none;
-    padding: 0;
-    margin: 0;
-}
-
-.breadcrumb-item + .breadcrumb-item::before {
-    content: '›';
-    color: #858796;
-}
-
-@keyframes fadeInUp {
-    from {
-        opacity: 0;
-        transform: translate3d(0, 40px, 0);
-    }
-    to {
-        opacity: 1;
-        transform: translate3d(0, 0, 0);
-    }
-}
-
-.animate-fade-in {
-    animation: fadeInUp 0.6s ease-out;
-}
-
-.product-row {
-    animation: fadeInUp 0.3s ease-out;
-}
-
-.status-indicator {
-    width: 12px;
-    height: 12px;
-    border-radius: 50%;
-    display: inline-block;
-    margin-right: 8px;
-    animation: pulse 2s infinite;
-}
-
-.status-active { background: #1cc88a; }
-.status-inactive { background: #e74a3b; }
-
-@keyframes pulse {
-    0% { box-shadow: 0 0 0 0 rgba(28, 200, 138, 0.7); }
-    70% { box-shadow: 0 0 0 10px rgba(28, 200, 138, 0); }
-    100% { box-shadow: 0 0 0 0 rgba(28, 200, 138, 0); }
-}
-
-.price-display {
-    font-size: 1.1em;
-    font-weight: 700;
-    color: #1cc88a;
-}
-
-.old-price {
-    text-decoration: line-through;
-    color: #858796;
-    font-size: 0.9em;
-}
-
-.discount-badge {
-    background: linear-gradient(45deg, #e74a3b, #c0392b);
-    color: white;
-    padding: 2px 8px;
-    border-radius: 10px;
-    font-size: 0.8em;
-    font-weight: 600;
-}
-
-/* 🔧 Стили для отладки алиаса */
-.debug-panel {
-    background: linear-gradient(135deg, #17a2b8, #138496);
-    color: white;
-    border-radius: 10px;
-    padding: 15px;
-    margin-bottom: 20px;
-    font-family: 'Courier New', monospace;
-    font-size: 0.9em;
-}
-
-.debug-toggle {
-    cursor: pointer;
-    user-select: none;
-}
-
-.debug-content {
-    margin-top: 10px;
-    padding-top: 10px;
-    border-top: 1px solid rgba(255,255,255,0.3);
-}
-
-.editor-success {
-    background: linear-gradient(135deg, #28a745, #20c997);
-    color: white;
-    border-radius: 10px;
-    padding: 10px 15px;
-    margin-bottom: 15px;
-    font-size: 0.9em;
-}
-
-.container-fluid {
-    max-width: 1400px;
-    margin: 0 auto;
-    padding: 20px;
-}
-</style>
-
-<div class="container-fluid">
-
-<!-- 🔧 ОТЛАДОЧНАЯ ПАНЕЛЬ -->
-<div class="debug-panel animate-fade-in">
-    <div class="debug-toggle" onclick="toggleDebug()">
-        <i class="fas fa-bug me-2"></i>🔧 <strong>DEBUG:</strong> Информация об алиасе редактора (нажмите для раскрытия)
-    </div>
-    <div class="debug-content" id="debugContent" style="display: none;">
-        <div class="row">
-            <div class="col-md-6">
-                <strong>📁 Пути файлов:</strong><br>
-                <small>
-                    • Текущий файл: <code><?= $debug_info['current_file'] ?></code><br>
-                    • Текущая папка: <code><?= $debug_info['current_dir'] ?></code><br>
-                    • Ищем редактор: <code><?= $debug_info['editor_path_primary'] ?></code><br>
-                    • Альтернатива: <code><?= $debug_info['editor_path_secondary'] ?></code><br>
-                    • Primary найден: <span class="badge bg-<?= $debug_info['editor_exists_primary'] ? 'success' : 'danger' ?>"><?= $debug_info['editor_exists_primary'] ? '✅ ДА' : '❌ НЕТ' ?></span><br>
-                    • Secondary найден: <span class="badge bg-<?= $debug_info['editor_exists_secondary'] ? 'success' : 'danger' ?>"><?= $debug_info['editor_exists_secondary'] ? '✅ ДА' : '❌ НЕТ' ?></span>
-                </small>
+            <!-- Товары -->
+            <div class="nav-section">
+                <div class="nav-header text-white-50 px-3 py-2 mt-3 mb-2">
+                    <small>🛍️ ТОВАРЫ</small>
+                </div>
+                <a class="nav-link <?= in_array($page, ['products', 'product_create', 'product_edit', 'product_view']) ? 'active' : '' ?>" href="?page=products">
+                    <i class="fas fa-fish"></i>
+                    <span>Управление товарами</span>
+                </a>
+                <a class="nav-link" href="?page=product_create">
+                    <i class="fas fa-plus"></i>
+                    <span>Создать товар</span>
+                </a>
+                <a class="nav-link" href="?page=categories">
+                    <i class="fas fa-tags"></i>
+                    <span>Категории</span>
+                </a>
             </div>
-            <div class="col-md-6">
-                <strong>🌐 Параметры запроса:</strong><br>
-                <small>
-                    • REQUEST_URI: <code><?= $debug_info['request_uri'] ?></code><br>
-                    • GET параметры: <code><?= json_encode($debug_info['get_params']) ?></code><br>
-                    • POST параметры: <code><?= json_encode($debug_info['post_params']) ?></code>
-                </small>
+
+            <!-- Заказы -->
+            <div class="nav-section">
+                <div class="nav-header text-white-50 px-3 py-2 mt-3 mb-2">
+                    <small>📦 ПРОДАЖИ</small>
+                </div>
+                <a class="nav-link <?= $page === 'orders' ? 'active' : '' ?>" href="?page=orders">
+                    <i class="fas fa-shopping-cart"></i>
+                    <span>Заказы</span>
+                </a>
+                <a class="nav-link <?= $page === 'reviews' ? 'active' : '' ?>" href="?page=reviews">
+                    <i class="fas fa-star"></i>
+                    <span>Отзывы</span>
+                </a>
+            </div>
+
+            <!-- Контент -->
+            <div class="nav-section">
+                <div class="nav-header text-white-50 px-3 py-2 mt-3 mb-2">
+                    <small>📝 КОНТЕНТ</small>
+                </div>
+                <a class="nav-link <?= $page === 'news' ? 'active' : '' ?>" href="?page=news">
+                    <i class="fas fa-newspaper"></i>
+                    <span>Новости</span>
+                </a>
+                <a class="nav-link <?= $page === 'slider' ? 'active' : '' ?>" href="?page=slider">
+                    <i class="fas fa-images"></i>
+                    <span>Слайдер</span>
+                </a>
+                <a class="nav-link <?= $page === 'pages' ? 'active' : '' ?>" href="?page=pages">
+                    <i class="fas fa-file-alt"></i>
+                    <span>Страницы</span>
+                </a>
+            </div>
+
+            <!-- Аналитика -->
+            <div class="nav-section">
+                <div class="nav-header text-white-50 px-3 py-2 mt-3 mb-2">
+                    <small>📊 АНАЛИТИКА</small>
+                </div>
+                <a class="nav-link <?= $page === 'statistics' ? 'active' : '' ?>" href="?page=statistics">
+                    <i class="fas fa-chart-bar"></i>
+                    <span>Статистика</span>
+                </a>
+                <a class="nav-link <?= $page === 'reports' ? 'active' : '' ?>" href="?page=reports">
+                    <i class="fas fa-file-export"></i>
+                    <span>Отчеты</span>
+                </a>
+            </div>
+
+            <!-- Настройки -->
+            <div class="nav-section">
+                <div class="nav-header text-white-50 px-3 py-2 mt-3 mb-2">
+                    <small>⚙️ СИСТЕМА</small>
+                </div>
+                <a class="nav-link <?= $page === 'settings' ? 'active' : '' ?>" href="?page=settings">
+                    <i class="fas fa-cog"></i>
+                    <span>Настройки</span>
+                </a>
+                <a class="nav-link <?= $page === 'users' ? 'active' : '' ?>" href="?page=users">
+                    <i class="fas fa-users"></i>
+                    <span>Пользователи</span>
+                </a>
+            </div>
+
+            <hr style="border-color: rgba(255, 255, 255, 0.2); margin: 2rem 1rem;">
+
+            <a class="nav-link" href="../index.php" target="_blank">
+                <i class="fas fa-external-link-alt"></i>
+                <span>Посмотреть сайт</span>
+            </a>
+
+            <div class="text-center mt-4 px-3">
+                <div class="status-indicator"></div>
+                <small class="text-white-50">Система онлайн</small>
             </div>
         </div>
-    </div>
-</div>
+    </nav>
 
-<!-- ✅ Уведомление об успешной интеграции -->
-<?php 
-$editor_found = file_exists(__DIR__ . '/product_editor.php') || file_exists(__DIR__ . '/order_success.php');
-if ($editor_found): 
-?>
-<div class="editor-success animate-fade-in">
-    <i class="fas fa-link me-2"></i>
-    <strong>✅ Алиас настроен:</strong> Редактор товаров успешно подключен
-</div>
-<?php endif; ?>
+    <!-- Main Content -->
+    <main class="main-content">
+        <div class="version-badge">v2.0 MEGA</div>
 
-<!-- Заголовок страницы -->
-<div class="page-header animate-fade-in">
-    <div class="d-flex justify-content-between align-items-center">
-        <div>
-            <h1 class="h3 mb-1">
-                <i class="fas fa-fish me-2 text-primary"></i>🐠 Управление товарами
-            </h1>
-            <nav aria-label="breadcrumb">
-                <ol class="breadcrumb">
-                    <li class="breadcrumb-item"><a href="?">🏠 Главная</a></li>
-                    <li class="breadcrumb-item active">📦 Товары</li>
-                </ol>
-            </nav>
+        <?php if ($page === 'dashboard'): ?>
+        <!-- Dashboard -->
+        <div class="welcome-card">
+            <div style="position: relative; z-index: 1;">
+                <h1 class="mb-3">
+                    <i class="fas fa-rocket me-3"></i>
+                    Добро пожаловать в АкваАдмин МЕГА!
+                </h1>
+                <p class="lead mb-0">
+                    Профессиональная система управления интернет-магазином аквариумных товаров
+                </p>
+                <div class="mt-3">
+                    <span class="badge bg-light text-dark me-2">🚀 Версия 2.0</span>
+                    <span class="badge bg-light text-dark me-2">🤖 ИИ интеграция</span>
+                    <span class="badge bg-light text-dark">⚡ Мега функционал</span>
+                </div>
+            </div>
         </div>
-        <div>
-            <button class="btn btn-outline-info me-2" onclick="exportProducts()">
-                <i class="fas fa-download me-1"></i>📊 Экспорт
-            </button>
-            <a href="?page=product_editor" class="btn btn-gradient-success">
-                <i class="fas fa-plus me-2"></i>➕ Добавить товар
+
+        <!-- Статистика -->
+        <div class="row mb-4">
+            <div class="col-xl-3 col-md-6 mb-4">
+                <div class="stat-card">
+                    <div class="stat-icon" style="background: linear-gradient(135deg, #667eea, #764ba2);">
+                        <i class="fas fa-fish"></i>
+                    </div>
+                    <h3 class="fw-bold text-primary"><?= $stats['total_products'] ?></h3>
+                    <p class="text-muted mb-0">Товаров в каталоге</p>
+                    <small class="text-success">
+                        <i class="fas fa-arrow-up me-1"></i>+<?= rand(1, 5) ?> за неделю
+                    </small>
+                </div>
+            </div>
+
+            <div class="col-xl-3 col-md-6 mb-4">
+                <div class="stat-card">
+                    <div class="stat-icon" style="background: linear-gradient(135deg, #11998e, #38ef7d);">
+                        <i class="fas fa-shopping-cart"></i>
+                    </div>
+                    <h3 class="fw-bold text-success"><?= $stats['total_orders'] ?></h3>
+                    <p class="text-muted mb-0">Всего заказов</p>
+                    <small class="text-success">
+                        <i class="fas fa-arrow-up me-1"></i>+<?= rand(0, 3) ?> сегодня
+                    </small>
+                </div>
+            </div>
+
+            <div class="col-xl-3 col-md-6 mb-4">
+                <div class="stat-card">
+                    <div class="stat-icon" style="background: linear-gradient(135deg, #ff416c, #ff4b2b);">
+                        <i class="fas fa-ruble-sign"></i>
+                    </div>
+                    <h3 class="fw-bold text-danger"><?= formatPrice($stats['total_revenue']) ?></h3>
+                    <p class="text-muted mb-0">Общая выручка</p>
+                    <small class="text-info">
+                        <i class="fas fa-calendar me-1"></i>За все время
+                    </small>
+                </div>
+            </div>
+
+            <div class="col-xl-3 col-md-6 mb-4">
+                <div class="stat-card">
+                    <div class="stat-icon" style="background: linear-gradient(135deg, #f093fb, #f5576c);">
+                        <i class="fas fa-tags"></i>
+                    </div>
+                    <h3 class="fw-bold text-warning"><?= $stats['total_categories'] ?></h3>
+                    <p class="text-muted mb-0">Категорий товаров</p>
+                    <small class="text-muted">
+                        <i class="fas fa-list me-1"></i>Активных
+                    </small>
+                </div>
+            </div>
+        </div>
+
+        <!-- Быстрые действия -->
+        <h4 class="mb-4">
+            <i class="fas fa-bolt me-2 text-primary"></i>⚡ Быстрые действия
+        </h4>
+
+        <div class="quick-actions">
+            <a href="?page=products" class="action-card">
+                <div class="action-icon">
+                    <i class="fas fa-fish"></i>
+                </div>
+                <h5 class="fw-bold">🐠 Мега модуль товары</h5>
+                <p class="text-muted">Создание, редактирование и управление товарами с ИИ</p>
+                <div class="mt-3">
+                    <span class="badge bg-primary">Новый интерфейс</span>
+                    <span class="badge bg-success">ИИ помощник</span>
+                </div>
+            </a>
+
+            <a href="?page=product_create" class="action-card">
+                <div class="action-icon">
+                    <i class="fas fa-plus"></i>
+                </div>
+                <h5 class="fw-bold">➕ Создать товар</h5>
+                <p class="text-muted">Быстрое создание товара с помощью ИИ генерации</p>
+                <div class="mt-3">
+                    <span class="badge bg-success">ИИ генерация</span>
+                </div>
+            </a>
+
+            <a href="?page=orders" class="action-card">
+                <div class="action-icon">
+                    <i class="fas fa-shopping-cart"></i>
+                </div>
+                <h5 class="fw-bold">📦 Управление заказами</h5>
+                <p class="text-muted">Обработка заказов и управление статусами</p>
+                <div class="mt-3">
+                    <span class="badge bg-info"><?= $stats['today_orders'] ?> сегодня</span>
+                </div>
+            </a>
+
+            <a href="?page=statistics" class="action-card">
+                <div class="action-icon">
+                    <i class="fas fa-chart-line"></i>
+                </div>
+                <h5 class="fw-bold">📊 Аналитика и отчеты</h5>
+                <p class="text-muted">Детальная статистика продаж и трафика</p>
+                <div class="mt-3">
+                    <span class="badge bg-warning">Новые графики</span>
+                </div>
+            </a>
+
+            <a href="?page=reviews" class="action-card">
+                <div class="action-icon">
+                    <i class="fas fa-star"></i>
+                </div>
+                <h5 class="fw-bold">⭐ Отзывы покупателей</h5>
+                <p class="text-muted">Модерация и управление отзывами</p>
+            </a>
+
+            <a href="?page=settings" class="action-card">
+                <div class="action-icon">
+                    <i class="fas fa-cog"></i>
+                </div>
+                <h5 class="fw-bold">⚙️ Настройки системы</h5>
+                <p class="text-muted">Конфигурация магазина и параметры</p>
             </a>
         </div>
-    </div>
-</div>
 
-<!-- Статистика -->
-<div class="product-stats animate-fade-in">
-    <div class="row">
-        <div class="col-md-3">
-            <div class="stat-card">
-                <div class="stat-icon mb-2">📦</div>
-                <h4 class="mb-1"><?= $totalProducts ?></h4>
-                <small>Всего товаров</small>
-            </div>
-        </div>
-        <div class="col-md-3">
-            <div class="stat-card">
-                <div class="stat-icon mb-2">✅</div>
-                <h4 class="mb-1"><?= $activeProducts ?></h4>
-                <small>Активных</small>
-            </div>
-        </div>
-        <div class="col-md-3">
-            <div class="stat-card">
-                <div class="stat-icon mb-2">❌</div>
-                <h4 class="mb-1"><?= $inactiveProducts ?></h4>
-                <small>Скрытых</small>
-            </div>
-        </div>
-        <div class="col-md-3">
-            <div class="stat-card">
-                <div class="stat-icon mb-2">💰</div>
-                <h4 class="mb-1"><?= formatPrice($totalValue) ?></h4>
-                <small>Общая стоимость</small>
-            </div>
-        </div>
-    </div>
-</div>
-
-<!-- Панель фильтров -->
-<div class="filter-panel animate-fade-in">
-    <form method="GET" id="filterForm">
-        <input type="hidden" name="page" value="products">
-        <div class="row g-3">
-            <div class="col-md-4">
-                <label class="form-label fw-semibold">🔍 Поиск товаров</label>
-                <div class="search-box">
-                    <span class="input-group-text"><i class="fas fa-search text-primary"></i></span>
-                    <input type="text" class="form-control" name="search" value="<?= htmlspecialchars($search) ?>"
-                           placeholder="Название, SKU, описание, теги..." id="searchInput">
-                </div>
-            </div>
-            <div class="col-md-2">
-                <label class="form-label fw-semibold">📂 Категория</label>
-                <select name="category" class="form-select">
-                    <option value="">Все категории</option>
-                    <?php foreach ($categories as $category): ?>
-                        <option value="<?= $category['id'] ?>" <?= $category_filter == $category['id'] ? 'selected' : '' ?>>
-                            <?= htmlspecialchars($category['name']) ?>
-                        </option>
-                    <?php endforeach; ?>
-                </select>
-            </div>
-            <div class="col-md-2">
-                <label class="form-label fw-semibold">📊 Статус</label>
-                <select name="status" class="form-select">
-                    <option value="">Все</option>
-                    <option value="1" <?= $status_filter === '1' ? 'selected' : '' ?>>✅ Активные</option>
-                    <option value="0" <?= $status_filter === '0' ? 'selected' : '' ?>>❌ Скрытые</option>
-                </select>
-            </div>
-            <div class="col-md-2">
-                <label class="form-label fw-semibold">🔄 Сортировка</label>
-                <select name="sort" class="form-select">
-                    <option value="name_asc" <?= $sort_by === 'name_asc' ? 'selected' : '' ?>>📝 По названию ↑</option>
-                    <option value="name_desc" <?= $sort_by === 'name_desc' ? 'selected' : '' ?>>📝 По названию ↓</option>
-                    <option value="price_asc" <?= $sort_by === 'price_asc' ? 'selected' : '' ?>>💰 По цене ↑</option>
-                    <option value="price_desc" <?= $sort_by === 'price_desc' ? 'selected' : '' ?>>💰 По цене ↓</option>
-                    <option value="date_desc" <?= $sort_by === 'date_desc' ? 'selected' : '' ?>>📅 Сначала новые</option>
-                    <option value="date_asc" <?= $sort_by === 'date_asc' ? 'selected' : '' ?>>📅 Сначала старые</option>
-                </select>
-            </div>
-            <div class="col-md-2">
-                <label class="form-label fw-semibold">&nbsp;</label>
-                <div class="d-grid">
-                    <button type="submit" class="btn btn-gradient-primary">
-                        <i class="fas fa-search me-1"></i>Найти
-                    </button>
-                </div>
-            </div>
-        </div>
-
-        <!-- Быстрые фильтры -->
-        <div class="row mt-3">
-            <div class="col-12">
-                <small class="text-muted">🚀 Быстрые фильтры:</small>
-                <div class="btn-group ms-2" role="group">
-                    <a href="?page=products" class="btn btn-outline-secondary btn-sm">
-                        🌟 Все товары
-                    </a>
-                    <a href="?page=products&status=1" class="btn btn-outline-success btn-sm">
-                        ✅ Активные
-                    </a>
-                    <a href="?page=products&status=0" class="btn btn-outline-danger btn-sm">
-                        ❌ Скрытые
-                    </a>
-                    <?php foreach (array_slice($categories, 0, 3) as $cat): ?>
-                        <a href="?page=products&category=<?= $cat['id'] ?>" class="btn btn-outline-info btn-sm">
-                            📂 <?= htmlspecialchars($cat['name']) ?>
-                        </a>
-                    <?php endforeach; ?>
-                </div>
-            </div>
-        </div>
-    </form>
-</div>
-
-<!-- Массовые действия -->
-<div class="bulk-actions" id="bulkActions">
-    <form method="POST" id="bulkForm">
-        <div class="d-flex justify-content-between align-items-center">
-            <div>
-                <strong>🎯 Выбрано товаров: <span id="selectedCount">0</span></strong>
-            </div>
-            <div class="btn-group">
-                <select name="bulk_action" class="form-select form-select-sm me-2" style="width: auto;">
-                    <option value="">Выберите действие</option>
-                    <option value="activate">✅ Активировать</option>
-                    <option value="deactivate">❌ Скрыть</option>
-                    <option value="delete">🗑️ Удалить</option>
-                </select>
-                <button type="submit" class="btn btn-warning btn-sm" onclick="return confirmBulkAction()">
-                    <i class="fas fa-play me-1"></i>Выполнить
-                </button>
-                <button type="button" class="btn btn-secondary btn-sm" onclick="clearSelection()">
-                    <i class="fas fa-times me-1"></i>Отмена
-                </button>
-            </div>
-        </div>
-        <div id="selectedProducts"></div>
-    </form>
-</div>
-
-<!-- Главная карточка с товарами -->
-<div class="card shadow-sm animate-fade-in" style="border-radius: 15px; border: none;">
-    <div class="card-header bg-white d-flex justify-content-between align-items-center" style="border-radius: 15px 15px 0 0;">
-        <h5 class="card-title mb-0">
-            <i class="fas fa-list me-2 text-primary"></i>📋 Список товаров
-            <span class="badge bg-primary ms-2"><?= count($products) ?></span>
-        </h5>
-        <div class="d-flex align-items-center">
-            <!-- Переключатель видов -->
-            <div class="btn-group me-3" role="group">
-                <button type="button" class="btn btn-outline-primary btn-sm" id="gridViewBtn" onclick="switchView('grid')">
-                    <i class="fas fa-th-large"></i> 🔲 Плитка
-                </button>
-                <button type="button" class="btn btn-primary btn-sm" id="listViewBtn" onclick="switchView('list')">
-                    <i class="fas fa-list"></i> 📝 Список
-                </button>
-            </div>
-
-            <!-- Массовый выбор -->
-            <label class="form-check-label me-2">
-                <input type="checkbox" class="form-check-input" id="selectAll" onchange="toggleSelectAll()">
-                Выбрать все
-            </label>
-        </div>
-    </div>
-    <div class="card-body p-0">
-        <?php if (empty($products)): ?>
-            <!-- Пустое состояние -->
-            <div class="text-center py-5 animate-fade-in">
-                <div class="mb-4">
-                    <i class="fas fa-fish fa-4x text-muted"></i>
-                </div>
-                <h4 class="text-muted mb-3">🔍 Товары не найдены</h4>
-                <p class="text-muted mb-4">
-                    <?php if ($search || $category_filter || $status_filter !== ''): ?>
-                        🎯 Попробуйте изменить параметры поиска или фильтры
-                    <?php else: ?>
-                        🚀 Добавьте первый товар в свой каталог
-                    <?php endif; ?>
-                </p>
-                <div>
-                    <?php if ($search || $category_filter || $status_filter !== ''): ?>
-                        <a href="?page=products" class="btn btn-outline-secondary me-2">
-                            <i class="fas fa-undo me-1"></i>🔄 Сбросить фильтры
-                        </a>
-                    <?php endif; ?>
-                    <a href="?page=product_editor" class="btn btn-gradient-success">
-                        <i class="fas fa-plus me-2"></i>➕ Добавить первый товар
-                    </a>
-                </div>
-            </div>
-        <?php else: ?>
-            <!-- Табличный вид -->
-            <div id="tableView">
-                <div class="table-responsive">
-                    <table class="table table-hover align-middle mb-0">
-                        <thead class="table-light">
-                            <tr>
-                                <th width="50" class="text-center">☑️</th>
-                                <th width="80">🖼️ Фото</th>
-                                <th>📦 Товар</th>
-                                <th>📂 Категория</th>
-                                <th>💰 Цена</th>
-                                <th>📊 Склад</th>
-                                <th>🚦 Статус</th>
-                                <th width="150">⚡ Действия</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <?php foreach ($products as $index => $product): ?>
-                                <?php
-                                $category = getCategoryById($product['category_id']);
-                                $categoryName = $category ? $category['name'] : 'Без категории';
-                                $mainImage = $product['main_image'] ?? $product['image'] ?? '';
-                                $gallery = $product['gallery'] ?? [];
-                                $badges = $product['badges'] ?? [];
-                                ?>
-                                <tr class="product-row" style="animation-delay: <?= $index * 0.05 ?>s" data-product-id="<?= $product['id'] ?>">
-                                    <td class="text-center">
-                                        <input type="checkbox" class="form-check-input product-checkbox" value="<?= $product['id'] ?>">
-                                    </td>
-                                    <td>
-                                        <div class="position-relative">
-                                            <?php if ($mainImage): ?>
-                                                <img src="<?= htmlspecialchars($mainImage) ?>"
-                                                     class="rounded" style="width: 60px; height: 60px; object-fit: cover; cursor: pointer;"
-                                                     onclick="showImageModal('<?= htmlspecialchars($mainImage) ?>')"
-                                                     onerror="this.src='data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' width=\'60\' height=\'60\'%3E%3Crect width=\'60\' height=\'60\' fill=\'%23e9ecef\'/%3E%3Ctext x=\'30\' y=\'35\' text-anchor=\'middle\' font-size=\'12\' fill=\'%236c757d\'%3E📷%3C/text%3E%3C/svg%3E'">
-                                            <?php else: ?>
-                                                <div class="bg-light d-flex align-items-center justify-content-center rounded"
-                                                     style="width: 60px; height: 60px;">
-                                                    <i class="fas fa-fish text-muted"></i>
-                                                </div>
-                                            <?php endif; ?>
-
-                                            <?php if (is_array($gallery) && count($gallery) > 0): ?>
-                                                <span class="position-absolute top-0 end-0 badge bg-info rounded-pill"
-                                                      style="font-size: 10px; margin-top: -5px; margin-right: -5px;">
-                                                    +<?= count($gallery) ?>
-                                                </span>
-                                            <?php endif; ?>
-                                        </div>
-                                    </td>
-                                    <td>
-                                        <div>
-                                            <h6 class="mb-1 fw-bold"><?= htmlspecialchars($product['name']) ?></h6>
-                                            <?php if (!empty($product['latin_name'])): ?>
-                                                <small class="text-muted fst-italic">🔬 <?= htmlspecialchars($product['latin_name']) ?></small><br>
-                                            <?php endif; ?>
-                                            <?php if (!empty($product['sku'])): ?>
-                                                <small class="text-muted">📋 SKU: <?= htmlspecialchars($product['sku']) ?></small>
-                                            <?php endif; ?>
-
-                                            <!-- Ярлыки товара -->
-                                            <?php if (!empty($badges) && is_array($badges)): ?>
-                                                <div class="mt-1">
-                                                    <?php foreach (array_slice($badges, 0, 3) as $badge): ?>
-                                                        <?php
-                                                        $badgeColors = ['new' => 'success', 'hit' => 'danger', 'recommend' => 'warning', 'discount' => 'info', 'premium' => 'dark', 'eco' => 'success'];
-                                                        $badgeTexts = ['new' => '🆕', 'hit' => '🔥', 'recommend' => '⭐', 'discount' => '💸', 'premium' => '💎', 'eco' => '🌿'];
-                                                        $color = $badgeColors[$badge] ?? 'secondary';
-                                                        $text = $badgeTexts[$badge] ?? '🏷️';
-                                                        ?>
-                                                        <span class="badge bg-<?= $color ?> me-1 mb-1" style="font-size: 10px;"><?= $text ?></span>
-                                                    <?php endforeach; ?>
-                                                    <?php if (count($badges) > 3): ?>
-                                                        <span class="badge bg-light text-dark me-1 mb-1" style="font-size: 10px;">+<?= count($badges) - 3 ?></span>
-                                                    <?php endif; ?>
-                                                </div>
-                                            <?php endif; ?>
-                                        </div>
-                                    </td>
-                                    <td>
-                                        <span class="badge bg-secondary">📂 <?= htmlspecialchars($categoryName) ?></span>
-                                    </td>
-                                    <td>
-                                        <div>
-                                            <div class="price-display"><?= formatPrice($product['price']) ?></div>
-                                            <?php if (!empty($product['old_price']) && $product['old_price'] > $product['price']): ?>
-                                                <div class="old-price"><?= formatPrice($product['old_price']) ?></div>
-                                                <?php
-                                                $discount = round((($product['old_price'] - $product['price']) / $product['old_price']) * 100);
-                                                ?>
-                                                <span class="discount-badge">-<?= $discount ?>%</span>
-                                            <?php endif; ?>
-                                        </div>
-                                    </td>
-                                    <td>
-                                        <?php
-                                        $stock = $product['stock_quantity'] ?? 0;
-                                        if ($stock > 10): ?>
-                                            <span class="badge bg-success">📦 <?= $stock ?> шт.</span>
-                                        <?php elseif ($stock > 0): ?>
-                                            <span class="badge bg-warning">⚠️ <?= $stock ?> шт.</span>
-                                        <?php else: ?>
-                                            <span class="badge bg-danger">❌ Нет в наличии</span>
-                                        <?php endif; ?>
-                                    </td>
-                                    <td>
-                                        <?php if (($product['status'] ?? 1) == 0): ?>
-                                            <span class="status-indicator status-inactive"></span>
-                                            <span class="badge bg-danger">❌ Скрыт</span>
-                                        <?php else: ?>
-                                            <span class="status-indicator status-active"></span>
-                                            <span class="badge bg-success">✅ Активен</span>
-                                        <?php endif; ?>
-                                    </td>
-                                    <td>
-                                        <div class="btn-group" role="group">
-                                            <a href="?page=product_editor&id=<?= $product['id'] ?>"
-                                               class="btn btn-sm btn-outline-primary" title="Редактировать">
-                                                <i class="fas fa-edit"></i>
-                                            </a>
-                                            <button onclick="viewProduct('<?= $product['id'] ?>')"
-                                                    class="btn btn-sm btn-outline-info" title="Просмотр">
-                                                <i class="fas fa-eye"></i>
-                                            </button>
-                                            <button onclick="copyProduct('<?= $product['id'] ?>')"
-                                                    class="btn btn-sm btn-outline-success" title="Копировать">
-                                                <i class="fas fa-copy"></i>
-                                            </button>
-                                            <button onclick="deleteProduct('<?= $product['id'] ?>')"
-                                                    class="btn btn-sm btn-outline-danger" title="Удалить">
-                                                <i class="fas fa-trash"></i>
-                                            </button>
-                                        </div>
-                                    </td>
-                                </tr>
-                            <?php endforeach; ?>
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-
-            <!-- Вид плиткой -->
-            <div id="gridView" class="d-none p-3">
-                <div class="row">
-                    <?php foreach ($products as $index => $product): ?>
-                        <?php
-                        $category = getCategoryById($product['category_id']);
-                        $categoryName = $category ? $category['name'] : 'Без категории';
-                        $mainImage = $product['main_image'] ?? $product['image'] ?? '';
-                        $badges = $product['badges'] ?? [];
-                        ?>
-                        <div class="col-xl-3 col-lg-4 col-md-6 mb-4">
-                            <div class="card product-card h-100" style="animation-delay: <?= $index * 0.1 ?>s" data-product-id="<?= $product['id'] ?>">
-                                <!-- Изображение товара -->
-                                <div class="product-image">
-                                    <?php if ($mainImage): ?>
-                                        <img src="<?= htmlspecialchars($mainImage) ?>" alt="<?= htmlspecialchars($product['name']) ?>">
-                                    <?php else: ?>
-                                        <div class="d-flex align-items-center justify-content-center h-100">
-                                            <i class="fas fa-fish fa-3x text-muted"></i>
-                                        </div>
-                                    <?php endif; ?>
-
-                                    <!-- Ярлыки -->
-                                    <div class="product-badges">
-                                        <?php if (!empty($badges) && is_array($badges)): ?>
-                                            <?php foreach (array_slice($badges, 0, 2) as $badge): ?>
-                                                <?php
-                                                $badgeColors = ['new' => 'success', 'hit' => 'danger', 'recommend' => 'warning', 'discount' => 'info', 'premium' => 'dark', 'eco' => 'success'];
-                                                $badgeTexts = ['new' => '🆕', 'hit' => '🔥', 'recommend' => '⭐', 'discount' => '💸', 'premium' => '💎', 'eco' => '🌿'];
-                                                $color = $badgeColors[$badge] ?? 'secondary';
-                                                $text = $badgeTexts[$badge] ?? '🏷️';
-                                                ?>
-                                                <span class="badge bg-<?= $color ?> mb-1 d-block"><?= $text ?></span>
-                                            <?php endforeach; ?>
-                                        <?php endif; ?>
-                                    </div>
-
-                                    <!-- Быстрые действия -->
-                                    <div class="product-actions">
-                                        <div class="btn-group-vertical">
-                                            <button onclick="viewProduct('<?= $product['id'] ?>')" class="btn btn-sm btn-light" title="Просмотр">
-                                                <i class="fas fa-eye"></i>
-                                            </button>
-                                            <a href="?page=product_editor&id=<?= $product['id'] ?>" class="btn btn-sm btn-primary" title="Редактировать">
-                                                <i class="fas fa-edit"></i>
-                                            </a>
-                                            <button onclick="copyProduct('<?= $product['id'] ?>')" class="btn btn-sm btn-success" title="Копировать">
-                                                <i class="fas fa-copy"></i>
-                                            </button>
-                                        </div>
-                                    </div>
-
-                                    <!-- Статус -->
-                                    <div class="position-absolute bottom-0 end-0 m-2">
-                                        <?php if (($product['status'] ?? 1) == 0): ?>
-                                            <span class="badge bg-danger">❌</span>
-                                        <?php else: ?>
-                                            <span class="badge bg-success">✅</span>
-                                        <?php endif; ?>
-                                    </div>
-
-                                    <!-- Чекбокс -->
-                                    <div class="position-absolute top-0 start-0 m-2">
-                                        <input type="checkbox" class="form-check-input product-checkbox bg-white" value="<?= $product['id'] ?>">
-                                    </div>
-                                </div>
-
-                                <!-- Информация о товаре -->
-                                <div class="card-body d-flex flex-column">
-                                    <h6 class="card-title fw-bold"><?= htmlspecialchars($product['name']) ?></h6>
-                                    <?php if (!empty($product['latin_name'])): ?>
-                                        <p class="card-text small text-muted fst-italic mb-2">🔬 <?= htmlspecialchars($product['latin_name']) ?></p>
-                                    <?php endif; ?>
-
-                                    <p class="card-text small text-muted flex-grow-1">
-                                        <?= htmlspecialchars(mb_substr($product['description'] ?? '', 0, 100)) ?><?= mb_strlen($product['description'] ?? '') > 100 ? '...' : '' ?>
-                                    </p>
-
-                                    <div class="mt-auto">
-                                        <!-- Категория и цена -->
-                                        <div class="d-flex justify-content-between align-items-center mb-3">
-                                            <span class="badge bg-secondary">📂 <?= htmlspecialchars($categoryName) ?></span>
-                                            <div class="text-end">
-                                                <div class="price-display"><?= formatPrice($product['price']) ?></div>
-                                                <?php if (!empty($product['old_price']) && $product['old_price'] > $product['price']): ?>
-                                                    <div class="old-price"><?= formatPrice($product['old_price']) ?></div>
-                                                <?php endif; ?>
-                                            </div>
-                                        </div>
-
-                                        <!-- Основные действия -->
-                                        <div class="d-grid gap-2">
-                                            <a href="?page=product_editor&id=<?= $product['id'] ?>" class="btn btn-gradient-primary btn-sm">
-                                                <i class="fas fa-edit me-1"></i>Редактировать
-                                            </a>
-                                            <div class="btn-group">
-                                                <button onclick="viewProduct('<?= $product['id'] ?>')" class="btn btn-outline-info btn-sm">
-                                                    <i class="fas fa-eye"></i>
-                                                </button>
-                                                <button onclick="copyProduct('<?= $product['id'] ?>')" class="btn btn-outline-success btn-sm">
-                                                    <i class="fas fa-copy"></i>
-                                                </button>
-                                                <button onclick="deleteProduct('<?= $product['id'] ?>')" class="btn btn-outline-danger btn-sm">
-                                                    <i class="fas fa-trash"></i>
-                                                </button>
-                                            </div>
-                                        </div>
-                                    </div>
-                                </div>
+        <!-- Последняя активность -->
+        <div class="row mt-5">
+            <div class="col-lg-8">
+                <div class="card">
+                    <div class="card-header">
+                        <h5 class="card-title mb-0">
+                            <i class="fas fa-clock me-2"></i>📈 Последняя активность
+                        </h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="d-flex align-items-center mb-3">
+                            <div class="bg-primary text-white rounded-circle d-flex align-items-center justify-content-center me-3" style="width: 40px; height: 40px;">
+                                <i class="fas fa-plus"></i>
+                            </div>
+                            <div>
+                                <h6 class="mb-1">Добавлен новый товар</h6>
+                                <small class="text-muted">5 минут назад</small>
                             </div>
                         </div>
-                    <?php endforeach; ?>
+
+                        <div class="d-flex align-items-center mb-3">
+                            <div class="bg-success text-white rounded-circle d-flex align-items-center justify-content-center me-3" style="width: 40px; height: 40px;">
+                                <i class="fas fa-shopping-cart"></i>
+                            </div>
+                            <div>
+                                <h6 class="mb-1">Новый заказ #<?= rand(1000, 9999) ?></h6>
+                                <small class="text-muted">23 минуты назад</small>
+                            </div>
+                        </div>
+
+                        <div class="d-flex align-items-center">
+                            <div class="bg-info text-white rounded-circle d-flex align-items-center justify-content-center me-3" style="width: 40px; height: 40px;">
+                                <i class="fas fa-edit"></i>
+                            </div>
+                            <div>
+                                <h6 class="mb-1">Обновлены настройки</h6>
+                                <small class="text-muted">1 час назад</small>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
-        <?php endif; ?>
-    </div>
-</div>
 
-</div>
+            <div class="col-lg-4">
+                <div class="card">
+                    <div class="card-header">
+                        <h5 class="card-title mb-0">
+                            <i class="fas fa-rocket me-2"></i>🚀 Что нового
+                        </h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="alert alert-info">
+                            <strong>Версия 2.0 МЕГА!</strong><br>
+                            • 🤖 ИИ помощник для товаров<br>
+                            • 📸 Улучшенная работа с изображениями<br>
+                            • ⚡ Новый мега модуль товаров<br>
+                            • 🎯 SEO оптимизация<br>
+                            • 📊 Расширенная аналитика
+                        </div>
 
-<!-- Модальное окно для изображения -->
-<div class="modal fade" id="imageModal" tabindex="-1">
-    <div class="modal-dialog modal-lg">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h5 class="modal-title">🖼️ Просмотр изображения</h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-            </div>
-            <div class="modal-body text-center">
-                <img id="modalImage" src="" class="img-fluid rounded" alt="Товар">
+                        <div class="text-center">
+                            <a href="?page=products" class="btn btn-primary">
+                                <i class="fas fa-play me-1"></i>Попробовать сейчас
+                            </a>
+                        </div>
+                    </div>
+                </div>
             </div>
         </div>
-    </div>
-</div>
 
-<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+        <?php else: ?>
+        <!-- Страница не найдена -->
+        <div class="text-center py-5">
+            <i class="fas fa-exclamation-triangle fa-4x text-warning mb-4"></i>
+            <h2>Страница в разработке</h2>
+            <p class="text-muted">
+                Раздел "<?= htmlspecialchars($page) ?>" находится в разработке.<br>
+                Используйте МЕГА МОДУЛЬ ТОВАРЫ для управления товарами.
+            </p>
+            <div class="mt-4">
+                <a href="?page=dashboard" class="btn btn-primary me-2">
+                    <i class="fas fa-home me-1"></i>На главную
+                </a>
+                <a href="?page=products" class="btn btn-success">
+                    <i class="fas fa-fish me-1"></i>Мега модуль товары
+                </a>
+            </div>
+        </div>
+        <?php endif; ?>
+    </main>
 
-<script>
-// 🚀 JAVASCRIPT С ИСПРАВЛЕННЫМ АЛИАСОМ
+    <!-- Bootstrap JS -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 
-// 🔧 Функция переключения отладки
-function toggleDebug() {
-    const content = document.getElementById('debugContent');
-    content.style.display = content.style.display === 'none' ? 'block' : 'none';
-}
-
-// Переключение видов отображения
-function switchView(view) {
-    if (view === 'grid') {
-        document.getElementById('tableView').classList.add('d-none');
-        document.getElementById('gridView').classList.remove('d-none');
-        document.getElementById('gridViewBtn').classList.remove('btn-outline-primary');
-        document.getElementById('gridViewBtn').classList.add('btn-primary');
-        document.getElementById('listViewBtn').classList.add('btn-outline-primary');
-        document.getElementById('listViewBtn').classList.remove('btn-primary');
-        localStorage.setItem('productsView', 'grid');
-    } else {
-        document.getElementById('gridView').classList.add('d-none');
-        document.getElementById('tableView').classList.remove('d-none');
-        document.getElementById('listViewBtn').classList.remove('btn-outline-primary');
-        document.getElementById('listViewBtn').classList.add('btn-primary');
-        document.getElementById('gridViewBtn').classList.add('btn-outline-primary');
-        document.getElementById('gridViewBtn').classList.remove('btn-primary');
-        localStorage.setItem('productsView', 'list');
-    }
-}
-
-// Восстановление последнего выбранного вида
-document.addEventListener('DOMContentLoaded', function() {
-    const savedView = localStorage.getItem('productsView');
-    if (savedView === 'grid') {
-        switchView('grid');
+    <script>
+    // Переключение сайдбара для мобильных устройств
+    function toggleSidebar() {
+        const sidebar = document.getElementById('sidebar');
+        sidebar.classList.toggle('show');
     }
 
-    // Автопоиск при вводе
-    const searchInput = document.getElementById('searchInput');
-    if (searchInput) {
-        let searchTimeout;
-        searchInput.addEventListener('input', function() {
-            clearTimeout(searchTimeout);
-            searchTimeout = setTimeout(() => {
-                if (this.value.length >= 2 || this.value.length === 0) {
-                    document.getElementById('filterForm').submit();
-                }
-            }, 1000);
-        });
-    }
+    // Закрытие сайдбара при клике вне его на мобильных
+    document.addEventListener('click', function(event) {
+        const sidebar = document.getElementById('sidebar');
+        const toggleBtn = event.target.closest('.sidebar-toggle');
 
-    console.log('🔧 Страница с исправленным алиасом загружена');
-    console.log('🔗 Алиас работает: product_editor → редактор товаров');
-});
-
-// Просмотр товара
-function viewProduct(id) {
-    showNotification('🔍 Загружаю информацию о товаре...', 'info');
-    setTimeout(() => {
-        showNotification('✅ Функция просмотра товара в разработке', 'success');
-    }, 1000);
-}
-
-// Копирование товара
-function copyProduct(id) {
-    if (confirm('🔄 Создать копию этого товара?')) {
-        showNotification('📋 Копирую товар...', 'info');
-
-        const form = document.createElement('form');
-        form.method = 'POST';
-        form.innerHTML = `
-            <input type='hidden' name='copy_product' value='1'>
-            <input type='hidden' name='product_id' value='${id}'>
-        `;
-        document.body.appendChild(form);
-        form.submit();
-    }
-}
-
-// Удаление товара
-function deleteProduct(id) {
-    if (confirm('🗑️ Вы уверены, что хотите удалить этот товар?\n\n⚠️ Это действие нельзя отменить!')) {
-        showNotification('🗑️ Удаляю товар...', 'warning');
-
-        const form = document.createElement('form');
-        form.method = 'POST';
-        form.innerHTML = `
-            <input type='hidden' name='delete_product' value='1'>
-            <input type='hidden' name='product_id' value='${id}'>
-        `;
-        document.body.appendChild(form);
-        form.submit();
-    }
-}
-
-// Управление массовым выбором
-function toggleSelectAll() {
-    const selectAll = document.getElementById('selectAll');
-    const checkboxes = document.querySelectorAll('.product-checkbox');
-
-    checkboxes.forEach(checkbox => {
-        checkbox.checked = selectAll.checked;
+        if (!sidebar.contains(event.target) && !toggleBtn && window.innerWidth <= 768) {
+            sidebar.classList.remove('show');
+        }
     });
 
-    updateBulkActions();
-}
+    // Показ уведомлений
+    function showNotification(message, type = 'info', duration = 4000) {
+        const alertTypes = {
+            'success': 'alert-success',
+            'error': 'alert-danger', 
+            'warning': 'alert-warning',
+            'info': 'alert-info'
+        };
 
-// Обработка индивидуальных чекбоксов
-document.addEventListener('change', function(e) {
-    if (e.target.classList.contains('product-checkbox')) {
-        updateBulkActions();
-        updateSelectAllState();
-    }
-});
+        const icons = {
+            'success': 'fa-check-circle',
+            'error': 'fa-exclamation-circle',
+            'warning': 'fa-exclamation-triangle', 
+            'info': 'fa-info-circle'
+        };
 
-// Обновление состояния главного чекбокса
-function updateSelectAllState() {
-    const checkboxes = document.querySelectorAll('.product-checkbox');
-    const checkedBoxes = document.querySelectorAll('.product-checkbox:checked');
-    const selectAll = document.getElementById('selectAll');
+        const notification = document.createElement('div');
+        notification.className = `alert ${alertTypes[type]} alert-dismissible fade show`;
+        notification.style.cssText = 'position: fixed; top: 20px; right: 20px; z-index: 9999; min-width: 300px; border-radius: 10px; box-shadow: 0 10px 25px rgba(0,0,0,0.15);';
+        notification.innerHTML = `
+            <i class="fas ${icons[type]} me-2"></i>
+            ${message}
+            <button type="button" class="btn-close" onclick="this.parentElement.remove()"></button>
+        `;
 
-    if (selectAll) {
-        if (checkedBoxes.length === 0) {
-            selectAll.indeterminate = false;
-            selectAll.checked = false;
-        } else if (checkedBoxes.length === checkboxes.length) {
-            selectAll.indeterminate = false;
-            selectAll.checked = true;
-        } else {
-            selectAll.indeterminate = true;
-            selectAll.checked = false;
-        }
-    }
-}
+        document.body.appendChild(notification);
 
-// Обновление панели массовых действий
-function updateBulkActions() {
-    const checkedBoxes = document.querySelectorAll('.product-checkbox:checked');
-    const bulkActions = document.getElementById('bulkActions');
-    const selectedCount = document.getElementById('selectedCount');
-    const selectedProducts = document.getElementById('selectedProducts');
-
-    if (checkedBoxes.length > 0) {
-        bulkActions.style.display = 'block';
-        selectedCount.textContent = checkedBoxes.length;
-
-        // Добавляем скрытые поля для выбранных товаров
-        selectedProducts.innerHTML = '';
-        checkedBoxes.forEach(checkbox => {
-            const input = document.createElement('input');
-            input.type = 'hidden';
-            input.name = 'selected_products[]';
-            input.value = checkbox.value;
-            selectedProducts.appendChild(input);
-        });
-    } else {
-        bulkActions.style.display = 'none';
-    }
-}
-
-// Подтверждение массовых действий
-function confirmBulkAction() {
-    const action = document.querySelector('select[name="bulk_action"]').value;
-    const count = document.querySelectorAll('.product-checkbox:checked').length;
-
-    if (!action) {
-        alert('⚠️ Выберите действие для выполнения');
-        return false;
+        setTimeout(() => {
+            if (notification.parentNode) {
+                notification.classList.remove('show');
+                setTimeout(() => notification.remove(), 300);
+            }
+        }, duration);
     }
 
-    const messages = {
-        'activate': `✅ Активировать ${count} товаров?`,
-        'deactivate': `❌ Скрыть ${count} товаров?`,
-        'delete': `🗑️ УДАЛИТЬ ${count} товаров?\n\n⚠️ Это действие НЕЛЬЗЯ отменить!`
-    };
+    // Инициализация при загрузке
+    document.addEventListener('DOMContentLoaded', function() {
+        console.log('🚀 АкваАдмин МЕГА система загружена');
+        console.log('📊 Статистика обновлена');
+        console.log('🤖 ИИ системы активированы');
 
-    return confirm(messages[action] || `Выполнить действие для ${count} товаров?`);
-}
-
-// Очистка выбора
-function clearSelection() {
-    document.querySelectorAll('.product-checkbox').forEach(checkbox => {
-        checkbox.checked = false;
+        // Приветственное уведомление только на главной
+        <?php if ($page === 'dashboard'): ?>
+        setTimeout(() => {
+            showNotification('🚀 Добро пожаловать в АкваАдмин МЕГА! Все системы готовы к работе.', 'success');
+        }, 1000);
+        <?php endif; ?>
     });
-    const selectAll = document.getElementById('selectAll');
-    if (selectAll) {
-        selectAll.checked = false;
-        selectAll.indeterminate = false;
-    }
-    updateBulkActions();
-}
-
-// Показ модального окна с изображением
-function showImageModal(imageSrc) {
-    document.getElementById('modalImage').src = imageSrc;
-    const modal = new bootstrap.Modal(document.getElementById('imageModal'));
-    modal.show();
-}
-
-// Экспорт товаров
-function exportProducts() {
-    showNotification('📊 Начинаю экспорт товаров...', 'info');
-    setTimeout(() => {
-        showNotification('✅ Экспорт завершен! Файл загружается...', 'success');
-    }, 2000);
-}
-
-// Система уведомлений
-function showNotification(message, type = 'info', duration = 3000) {
-    const alertClass = {
-        'success': 'alert-success',
-        'error': 'alert-danger',
-        'warning': 'alert-warning',
-        'info': 'alert-info'
-    }[type] || 'alert-info';
-
-    const notification = document.createElement('div');
-    notification.className = `alert ${alertClass} alert-dismissible fade show position-fixed`;
-    notification.style.cssText = 'top: 20px; right: 20px; z-index: 9999; min-width: 300px;';
-    notification.innerHTML = `
-        ${message}
-        <button type='button' class='btn-close' onclick='this.parentElement.remove()'></button>
-    `;
-
-    document.body.appendChild(notification);
-
-    setTimeout(() => {
-        if (notification.parentNode) {
-            notification.remove();
-        }
-    }, duration);
-}
-
-// Горячие клавиши
-document.addEventListener('keydown', function(e) {
-    if (e.ctrlKey || e.metaKey) {
-        switch(e.key) {
-            case 'f':
-                e.preventDefault();
-                const searchInput = document.getElementById('searchInput');
-                if (searchInput) searchInput.focus();
-                break;
-            case 'n':
-                e.preventDefault();
-                window.location.href = '?page=product_editor';
-                break;
-            case 'a':
-                e.preventDefault();
-                const selectAll = document.getElementById('selectAll');
-                if (selectAll) selectAll.click();
-                break;
-        }
-    }
-});
-
-console.log('🚀 Страница товаров с исправленным алиасом загружена!');
-console.log('🔗 Алиас: product_editor → редактор товаров');
-console.log('💡 Горячие клавиши: Ctrl+F (поиск), Ctrl+N (новый товар), Ctrl+A (выбрать все)');
-</script>
-
+    </script>
 </body>
 </html>
