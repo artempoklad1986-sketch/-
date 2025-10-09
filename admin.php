@@ -1,3345 +1,2415 @@
 <?php
-/**
- * Главная страница сайта Sasha's Sushi
- * Дизайн: Бело-красно-черный брендбук
- * С функционалом как в Dodo Pizza + модальное окно товара
- * 
- * v6.4.0 - ПОЛНОСТЬЮ ПЕРЕРАБОТАН ПОИСК (МАКСИМАЛЬНАЯ ПРОИЗВОДИТЕЛЬНОСТЬ)
- * - ✅ НОВЫЙ алгоритм поиска без зависаний
- * - ✅ Debounce 300ms + кэширование
- * - ✅ Виртуальная фильтрация (batch processing)
- * - ✅ CSS-классы вместо DOM-манипуляций
- * - ✅ Оптимизированная подсветка текста
- * - ✅ Поиск по названию, составу, описанию
- * - ✅ Результаты в реальном времени
- * - ✅ Скрытие категорий при поиске
- * - ✅ Категории = Родитель из 1С (реальные группы)
- * - ✅ Свойства = is_new, is_popular (виртуальные категории)
- * - ✅ Товары НЕ дублируются между виртуальными и реальными
- * - ✅ Пустые категории скрываются автоматически
- * - ✅ Товары с is_closed = true НЕ показываются
- */
+$page_title = 'Настройки';
+$breadcrumbs = ['Главная', 'Настройки'];
 
-// ВАЖНО: Сначала подключаем config.php (он запустит сессию)
-require_once 'config.php';
+require_once 'header.php';
 
-// Проверяем авторизацию
-$isLoggedIn = isset($_SESSION['customer_id']);
-$customerName = $_SESSION['customer_name'] ?? '';
-$customerId = $_SESSION['customer_id'] ?? null;
-
-// Функция для безопасного вывода
-function safe_output($value, $default = '') {
-    return htmlspecialchars($value ?? $default, ENT_QUOTES, 'UTF-8');
-}
-
-// Функция для получения изображения товара
-function getProductImage($product) {
-    // Если есть изображение
-    if (!empty($product['image'])) {
-        $image = $product['image'];
-
-        // Если это URL (начинается с http:// или https://)
-        if (preg_match('/^https?:\/\//i', $image)) {
-            return $image;
-        }
-
-        // Если это относительный путь - проверяем существование файла
-        if ($image[0] === '/') {
-            $filePath = '.' . $image;
-        } else {
-            $filePath = $image;
-        }
-
-        // Проверяем только локальные файлы
-        if (@file_exists($filePath) && @is_file($filePath)) {
-            return $image;
-        }
-    }
-
-    // Заглушка с эмодзи
-    $emoji = '🍣';
-    if (isset($product['category_id'])) {
-        $emojiMap = [
-            1 => '🍣', 2 => '🍱', 3 => '🥢', 4 => '🔥', 
-            5 => '🍲', 6 => '🎁', 7 => '🥤', 8 => '🍜',
-            9 => '🍰', 10 => '🌶️', 11 => '🥡', 12 => '🍛',
-            13 => '🥗', 14 => '🍡', 15 => '🧂'
+// Обработка сохранения настроек
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_settings'])) {
+    try {
+        // Собираем настройки синхронизации 1С
+        $sync_settings = [
+            'products' => isset($_POST['1c_sync_products']),
+            'categories' => isset($_POST['1c_sync_categories']),
+            'prices' => isset($_POST['1c_sync_prices']),
+            'stock' => isset($_POST['1c_sync_stock']),
+            'orders' => isset($_POST['1c_sync_orders']),
+            'customers' => isset($_POST['1c_sync_customers']),
+            'delivery_zones' => isset($_POST['1c_sync_delivery_zones']),
+            'delivery_slots' => isset($_POST['1c_sync_delivery_slots']),
+            'payment_transactions' => isset($_POST['1c_sync_payment_transactions']),
+            'reviews' => isset($_POST['1c_sync_reviews']),
+            'promocodes' => isset($_POST['1c_sync_promocodes'])
         ];
-        $emoji = $emojiMap[$product['category_id']] ?? '🍣';
-    }
 
-    return 'https://via.placeholder.com/300x220/E31E24/ffffff?text=' . urlencode($emoji);
-}
-
-// Проверяем подключение к БД и получаем данные
-try {
-    // ========== 1. ПОЛУЧАЕМ ВСЕ ДАННЫЕ ИЗ БД ==========
-    $allCategoriesRaw = $db->findAll('categories') ?: [];
-    $allProductsRaw = $db->findAll('products') ?: [];
-
-    // ========== 2. ФИЛЬТРУЕМ АКТИВНЫЕ ТОВАРЫ ==========
-    // Только товары: активные, с ценой, НЕ закрытые к заказу, в наличии
-    $allProducts = array_filter($allProductsRaw, function($p) {
-        $isActive = ($p['status'] ?? 'active') === 'active';
-        $hasPrice = ($p['price'] ?? 0) > 0;
-        $notClosed = !($p['is_closed'] ?? false); // ✅ ключевое условие из ТЗ
-        $inStock = ($p['unlimited_stock'] ?? false) || ($p['stock'] ?? 1) > 0;
-        return $isActive && $hasPrice && $notClosed && $inStock;
-    });
-    $allProducts = array_values($allProducts);
-
-    // ========== 3. ВИРТУАЛЬНЫЕ КАТЕГОРИИ (ПО СВОЙСТВАМ) ==========
-
-    // НОВИНКИ (is_new = true)
-    $newProducts = array_filter($allProducts, function($product) {
-        return ($product['is_new'] ?? false) === true;
-    });
-    $newProducts = array_values($newProducts);
-    $newProducts = array_slice($newProducts, 0, 8);
-
-    // ПОПУЛЯРНЫЕ (is_popular = true)
-    $popularProducts = array_filter($allProducts, function($product) {
-        return ($product['is_popular'] ?? false) === true;
-    });
-    $popularProducts = array_values($popularProducts);
-    $popularProducts = array_slice($popularProducts, 0, 12);
-
-    // Если популярных нет - берём самые дорогие (исключая новинки)
-    if (empty($popularProducts)) {
-        $newProductIds = array_column($newProducts, 'id');
-        $popularProducts = array_filter($allProducts, function($product) use ($newProductIds) {
-            return !in_array($product['id'], $newProductIds);
-        });
-
-        usort($popularProducts, function($a, $b) {
-            return ($b['price'] ?? 0) - ($a['price'] ?? 0);
-        });
-        $popularProducts = array_values($popularProducts);
-        $popularProducts = array_slice($popularProducts, 0, 12);
-    }
-
-    // ========== 4. РЕАЛЬНЫЕ КАТЕГОРИИ (ПО РОДИТЕЛЮ ИЗ 1С) ==========
-    // Показываем только категории с открытыми товарами
-    $categories = [];
-
-    foreach ($allCategoriesRaw as $cat) {
-        // Пропускаем неактивные и специальные категории
-        if (($cat['status'] ?? 'active') !== 'active') {
-            continue;
+        // Получаем текущие настройки для сохранения last_sync
+        $current_settings = $db->find('settings', 'main');
+        $last_sync = null;
+        if ($current_settings && isset($current_settings['1c_integration']['last_sync'])) {
+            $last_sync = $current_settings['1c_integration']['last_sync'];
         }
 
-        if ($cat['is_special'] ?? false) {
-            continue;
-        }
+        $settings_to_save = [
+            // Основные настройки
+            'site_name' => trim($_POST['site_name'] ?? ''),
+            'site_description' => trim($_POST['site_description'] ?? ''),
+            'site_keywords' => trim($_POST['site_keywords'] ?? ''),
+            'site_logo' => trim($_POST['site_logo'] ?? ''),
+            'site_favicon' => trim($_POST['site_favicon'] ?? ''),
 
-        // Считаем количество товаров в категории
-        $categoryProductCount = 0;
-        foreach ($allProducts as $product) {
-            if (($product['category_id'] ?? 0) == $cat['id']) {
-                $categoryProductCount++;
+            // Контактная информация
+            'phones' => array_filter(array_map('trim', explode("\n", $_POST['phones'] ?? ''))),
+            'email' => trim($_POST['email'] ?? ''),
+            'support_email' => trim($_POST['support_email'] ?? ''),
+            'address' => trim($_POST['address'] ?? ''),
+            'coordinates' => [
+                'lat' => trim($_POST['coord_lat'] ?? ''),
+                'lng' => trim($_POST['coord_lng'] ?? '')
+            ],
+
+            // График работы
+            'work_hours' => [
+                'start' => $_POST['work_start'] ?? '10:00',
+                'end' => $_POST['work_end'] ?? '23:00'
+            ],
+            'work_schedule' => $_POST['work_schedule'] ?? [],
+
+            // Социальные сети
+            'social_networks' => [
+                'vk' => trim($_POST['social_vk'] ?? ''),
+                'instagram' => trim($_POST['social_instagram'] ?? ''),
+                'telegram' => trim($_POST['social_telegram'] ?? ''),
+                'whatsapp' => trim($_POST['social_whatsapp'] ?? ''),
+                'youtube' => trim($_POST['social_youtube'] ?? ''),
+                'facebook' => trim($_POST['social_facebook'] ?? '')
+            ],
+
+            // Баннер "Требуются работники"
+            'jobs_banner' => [
+                'enabled' => isset($_POST['jobs_banner_enabled']),
+                'title' => trim($_POST['jobs_banner_title'] ?? 'Требуются работники'),
+                'description' => trim($_POST['jobs_banner_description'] ?? 'Присоединяйтесь к нашей команде'),
+                'link' => trim($_POST['jobs_banner_link'] ?? '#'),
+                'button_text' => trim($_POST['jobs_banner_button'] ?? 'Подробнее'),
+                'background_color' => trim($_POST['jobs_banner_bg_color'] ?? '#10b981'),
+                'text_color' => trim($_POST['jobs_banner_text_color'] ?? '#ffffff'),
+                'icon' => trim($_POST['jobs_banner_icon'] ?? 'fa-briefcase'),
+                'image' => trim($_POST['jobs_banner_image'] ?? ''),
+                'use_image' => isset($_POST['jobs_banner_use_image'])
+            ],
+
+            // Настройки доставки
+            'delivery_cost' => (float)($_POST['delivery_cost'] ?? 0),
+            'free_delivery_from' => (float)($_POST['free_delivery_from'] ?? 0),
+            'min_order_amount' => (float)($_POST['min_order_amount'] ?? 0),
+            'max_delivery_distance' => (float)($_POST['max_delivery_distance'] ?? 0),
+            'delivery_time' => trim($_POST['delivery_time'] ?? '60-90'),
+            'delivery_zones' => [],
+            'pickup_enabled' => isset($_POST['pickup_enabled']),
+            'pickup_discount' => (float)($_POST['pickup_discount'] ?? 0),
+
+            // Способы оплаты
+            'payment_methods' => $_POST['payment_methods'] ?? [],
+
+            // ЮKassa
+            'yookassa' => [
+                'enabled' => isset($_POST['yookassa_enabled']),
+                'shop_id' => trim($_POST['yookassa_shop_id'] ?? ''),
+                'secret_key' => trim($_POST['yookassa_secret_key'] ?? ''),
+                'test_mode' => isset($_POST['yookassa_test_mode']),
+                'auto_capture' => isset($_POST['yookassa_auto_capture']),
+                'description_template' => trim($_POST['yookassa_description'] ?? 'Оплата заказа #{order_id}'),
+                'success_url' => trim($_POST['yookassa_success_url'] ?? ''),
+                'fail_url' => trim($_POST['yookassa_fail_url'] ?? '')
+            ],
+
+            // Сбербанк
+            'sberbank' => [
+                'enabled' => isset($_POST['sberbank_enabled']),
+                'username' => trim($_POST['sberbank_username'] ?? ''),
+                'password' => trim($_POST['sberbank_password'] ?? ''),
+                'test_mode' => isset($_POST['sberbank_test_mode']),
+                'two_stage' => isset($_POST['sberbank_two_stage']),
+                'success_url' => trim($_POST['sberbank_success_url'] ?? ''),
+                'fail_url' => trim($_POST['sberbank_fail_url'] ?? '')
+            ],
+
+            // Интеграция 1С
+            '1c_integration' => [
+                'enabled' => isset($_POST['1c_enabled']),
+                'server' => trim($_POST['1c_server'] ?? ''),
+                'database' => trim($_POST['1c_database'] ?? ''),
+                'username' => trim($_POST['1c_username'] ?? ''),
+                'password' => trim($_POST['1c_password'] ?? ''),
+                'exchange_path' => trim($_POST['1c_exchange_path'] ?? './1c_exchange/'),
+                'auto_sync' => isset($_POST['1c_auto_sync']),
+                'sync_interval' => (int)($_POST['1c_sync_interval'] ?? 300),
+                'sync_settings' => $sync_settings,
+                'last_sync' => $last_sync
+            ],
+
+            // Уведомления
+            'notifications' => [
+                'email_enabled' => isset($_POST['notif_email_enabled']),
+                'sms_enabled' => isset($_POST['notif_sms_enabled']),
+                'telegram_enabled' => isset($_POST['notif_telegram_enabled']),
+                'telegram_bot_token' => trim($_POST['notif_telegram_token'] ?? ''),
+                'telegram_chat_id' => trim($_POST['notif_telegram_chat'] ?? ''),
+                'new_order_notification' => isset($_POST['notif_new_order']),
+                'status_change_notification' => isset($_POST['notif_status_change'])
+            ],
+
+            // SEO настройки
+            'seo' => [
+                'meta_title' => trim($_POST['seo_title'] ?? ''),
+                'meta_description' => trim($_POST['seo_description'] ?? ''),
+                'meta_keywords' => trim($_POST['seo_keywords'] ?? ''),
+                'og_image' => trim($_POST['seo_og_image'] ?? ''),
+                'robots_txt' => trim($_POST['seo_robots'] ?? ''),
+                'sitemap_enabled' => isset($_POST['seo_sitemap']),
+                'google_analytics' => trim($_POST['seo_google_analytics'] ?? ''),
+                'yandex_metrika' => trim($_POST['seo_yandex_metrika'] ?? '')
+            ],
+
+            // Внешний вид
+            'appearance' => [
+                'theme' => $_POST['appearance_theme'] ?? 'light',
+                'primary_color' => $_POST['appearance_primary_color'] ?? '#000000',
+                'secondary_color' => $_POST['appearance_secondary_color'] ?? '#10b981',
+                'accent_color' => $_POST['appearance_accent_color'] ?? '#ffffff',
+                'font_family' => $_POST['appearance_font'] ?? 'Inter',
+                'show_prices' => isset($_POST['appearance_show_prices']),
+                'show_availability' => isset($_POST['appearance_show_availability']),
+                'catalog_view' => $_POST['appearance_catalog_view'] ?? 'grid',
+                'products_per_page' => (int)($_POST['appearance_products_per_page'] ?? 12)
+            ],
+
+            // Бонусная система
+            'bonus_system' => [
+                'enabled' => isset($_POST['bonus_enabled']),
+                'percent' => (float)($_POST['bonus_percent'] ?? 5),
+                'min_order_for_bonus' => (float)($_POST['bonus_min_order'] ?? 1000),
+                'max_bonus_payment' => (float)($_POST['bonus_max_payment'] ?? 30),
+                'bonus_expiration_days' => (int)($_POST['bonus_expiration'] ?? 365)
+            ],
+
+            // Email настройки
+            'email_settings' => [
+                'smtp_enabled' => isset($_POST['smtp_enabled']),
+                'smtp_host' => trim($_POST['smtp_host'] ?? ''),
+                'smtp_port' => (int)($_POST['smtp_port'] ?? 587),
+                'smtp_username' => trim($_POST['smtp_username'] ?? ''),
+                'smtp_password' => trim($_POST['smtp_password'] ?? ''),
+                'smtp_encryption' => $_POST['smtp_encryption'] ?? 'tls',
+                'from_email' => trim($_POST['smtp_from_email'] ?? ''),
+                'from_name' => trim($_POST['smtp_from_name'] ?? '')
+            ]
+        ];
+
+        // Обработка зон доставки
+        $delivery_zones = [];
+        foreach ($_POST as $key => $value) {
+            if (preg_match('/^delivery_zone_name_(\d+)$/', $key, $matches)) {
+                $index = $matches[1];
+                if (!empty($value)) {
+                    $delivery_zones[] = [
+                        'name' => trim($value),
+                        'cost' => (float)($_POST['delivery_zone_cost_' . $index] ?? 0),
+                        'time' => (int)($_POST['delivery_zone_time_' . $index] ?? 0)
+                    ];
+                }
             }
         }
+        $settings_to_save['delivery_zones'] = $delivery_zones;
 
-        // ✅ Если есть хоть один товар - показываем категорию
-        if ($categoryProductCount > 0) {
-            $categories[] = $cat;
+        // Сохраняем настройки
+        $result = $db->save('settings', $settings_to_save, 'main');
+
+        if ($result) {
+            $success_message = 'Настройки успешно сохранены!';
+            if (method_exists($db, 'log')) {
+                $db->log('Settings updated by admin: ' . ($_SESSION['admin_name'] ?? 'Unknown'));
+            }
+
+            // Перезагружаем настройки после сохранения
+            $settings = $db->find('settings', 'main');
+        } else {
+            throw new Exception('Ошибка при сохранении в базу данных');
+        }
+
+    } catch (Exception $e) {
+        $error_message = 'Ошибка сохранения настроек: ' . $e->getMessage();
+        if (method_exists($db, 'log')) {
+            $db->log('Settings save error: ' . $e->getMessage(), 'error');
         }
     }
-
-    // Сортируем по порядку
-    usort($categories, function($a, $b) {
-        return ($a['sort_order'] ?? 999) - ($b['sort_order'] ?? 999);
-    });
-
-    // ========== 5. НАСТРОЙКИ САЙТА ==========
-    $siteSettingsData = $db->find('settings', 'main');
-
-    // Базовые настройки по умолчанию
-    $defaultSettings = [
-        'site_name' => "Sasha's Sushi",
-        'site_description' => 'Лучшие суши и роллы в городе с доставкой',
-        'delivery_cost' => 200,
-        'free_delivery_from' => 999,
-        'min_order_amount' => 800,
-        'phones' => ['+7 999 123-45-67'],
-        'work_hours' => ['start' => '10:00', 'end' => '23:00'],
-        'vk_link' => 'https://vk.com/sasha_s_sushi',
-        'telegram_link' => '',
-        'email' => 'ledybag47@bk.ru',
-        'site_logo' => '',
-        'show_jobs_banner' => true,
-        'jobs_banner_title' => 'Требуются работники',
-        'jobs_banner_text' => 'Официальное оформление. Стабильная зарплата!',
-        'jobs_banner_link' => 'https://forms.yandex.ru/cloud/65d07d1ac09c024b01bf6adb/'
-    ];
-
-    // Объединяем настройки из БД с дефолтными
-    if ($siteSettingsData && is_array($siteSettingsData)) {
-        $siteSettings = array_merge($defaultSettings, $siteSettingsData);
-    } else {
-        $siteSettings = $defaultSettings;
-    }
-
-    // Проверяем ссылку VK (всегда используем правильную)
-    $siteSettings['vk_link'] = 'https://vk.com/sasha_s_sushi';
-
-    // Статистика
-    $stats = [
-        'products' => count($allProducts),
-        'categories' => count($categories),
-        'orders' => count($db->findAll('orders') ?: [])
-    ];
-
-    $dbConnected = true;
-
-} catch (Exception $e) {
-    error_log('Database connection error: ' . $e->getMessage());
-    $categories = [];
-    $newProducts = [];
-    $popularProducts = [];
-    $allProducts = [];
-    $stats = ['products' => 0, 'categories' => 0, 'orders' => 0];
-    $siteSettings = [
-        'site_name' => "Sasha's Sushi",
-        'site_description' => 'Лучшие суши и роллы в городе с доставкой',
-        'delivery_cost' => 200,
-        'free_delivery_from' => 999,
-        'min_order_amount' => 800,
-        'phones' => ['+7 999 123-45-67'],
-        'work_hours' => ['start' => '10:00', 'end' => '23:00'],
-        'vk_link' => 'https://vk.com/sasha_s_sushi',
-        'telegram_link' => '',
-        'email' => 'ledybag47@bk.ru',
-        'site_logo' => '',
-        'show_jobs_banner' => true,
-        'jobs_banner_title' => 'Требуются работники',
-        'jobs_banner_text' => 'Официальное оформление. Стабильная зарплата!',
-        'jobs_banner_link' => 'https://forms.yandex.ru/cloud/65d07d1ac09c024b01bf6adb/'
-    ];
-    $dbConnected = false;
 }
 
-$logoUrl = $siteSettings['site_logo'] ?? null;
+// Получаем текущие настройки
+$settings = $db->find('settings', 'main');
+if (!$settings) {
+    $settings = [];
+}
 
-// Преобразуем массивы товаров в JSON для JavaScript
-$allProductsJson = json_encode(array_values(array_map(function($p) {
-    return [
-        'id' => $p['id'],
-        'name' => $p['name'],
-        'price' => $p['price'],
-        'image' => getProductImage($p),
-        'category_id' => $p['category_id'] ?? 0,
-        'is_new' => $p['is_new'] ?? false,
-        'is_popular' => $p['is_popular'] ?? false,
-        'stock' => $p['stock'] ?? null,
-        'unlimited_stock' => $p['unlimited_stock'] ?? false,
-        'description' => $p['description'] ?? '',
-        'weight' => $p['weight'] ?? '',
-        'composition' => $p['composition'] ?? '',
-        'nutrition' => $p['nutrition'] ?? '',
-        'external_id' => $p['external_id'] ?? ''
-    ];
-}, $allProducts)), JSON_UNESCAPED_UNICODE);
+// Устанавливаем значения по умолчанию
+$defaults = [
+    'site_name' => "Sasha's Sushi",
+    'site_description' => 'Лучшие суши и роллы в городе',
+    'site_keywords' => 'суши, роллы, доставка еды',
+    'site_logo' => '/assets/logo.png',
+    'site_favicon' => '/assets/favicon.ico',
+    'delivery_cost' => 200,
+    'free_delivery_from' => 1500,
+    'min_order_amount' => 800,
+    'max_delivery_distance' => 10,
+    'delivery_time' => '60-90',
+    'delivery_zones' => [],
+    'pickup_enabled' => true,
+    'pickup_discount' => 10,
+    'work_hours' => ['start' => '10:00', 'end' => '23:00'],
+    'work_schedule' => ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'],
+    'phones' => ['+7 999 123-45-67'],
+    'email' => 'info@sashas-sushi.ru',
+    'support_email' => 'support@sashas-sushi.ru',
+    'address' => 'г. Москва, ул. Примерная, 123',
+    'coordinates' => ['lat' => '55.751244', 'lng' => '37.618423'],
+    'payment_methods' => ['cash', 'card', 'online'],
+    'social_networks' => [
+        'vk' => '', 'instagram' => '', 'telegram' => '',
+        'whatsapp' => '', 'youtube' => '', 'facebook' => ''
+    ],
+    'jobs_banner' => [
+        'enabled' => true,
+        'title' => 'Требуются работники',
+        'description' => 'Присоединяйтесь к нашей команде',
+        'link' => '#',
+        'button_text' => 'Подробнее',
+        'background_color' => '#10b981',
+        'text_color' => '#ffffff',
+        'icon' => 'fa-briefcase',
+        'image' => '',
+        'use_image' => false
+    ],
+    'yookassa' => [
+        'enabled' => false, 'shop_id' => '', 'secret_key' => '',
+        'test_mode' => true, 'auto_capture' => true,
+        'description_template' => 'Оплата заказа #{order_id}',
+        'success_url' => '', 'fail_url' => ''
+    ],
+    'sberbank' => [
+        'enabled' => false, 'username' => '', 'password' => '',
+        'test_mode' => true, 'two_stage' => false,
+        'success_url' => '', 'fail_url' => ''
+    ],
+    '1c_integration' => [
+        'enabled' => false, 'server' => '192.168.1.100:1541',
+        'database' => 'SushiRestaurant', 'username' => 'WebExchange',
+        'password' => '', 'exchange_path' => './1c_exchange/',
+        'auto_sync' => true, 'sync_interval' => 300,
+        'sync_settings' => [
+            'products' => true, 'categories' => true, 'prices' => true,
+            'stock' => true, 'orders' => true, 'customers' => true,
+            'delivery_zones' => true, 'delivery_slots' => true,
+            'payment_transactions' => true, 'reviews' => false, 'promocodes' => false
+        ],
+        'last_sync' => null
+    ],
+    'notifications' => [
+        'email_enabled' => true, 'sms_enabled' => false,
+        'telegram_enabled' => false, 'telegram_bot_token' => '',
+        'telegram_chat_id' => '', 'new_order_notification' => true,
+        'status_change_notification' => true
+    ],
+    'seo' => [
+        'meta_title' => '', 'meta_description' => '', 'meta_keywords' => '',
+        'og_image' => '', 'robots_txt' => '', 'sitemap_enabled' => true,
+        'google_analytics' => '', 'yandex_metrika' => ''
+    ],
+    'appearance' => [
+        'theme' => 'light', 'primary_color' => '#000000',
+        'secondary_color' => '#10b981', 'accent_color' => '#ffffff',
+        'font_family' => 'Inter', 'show_prices' => true,
+        'show_availability' => true, 'catalog_view' => 'grid',
+        'products_per_page' => 12
+    ],
+    'bonus_system' => [
+        'enabled' => false, 'percent' => 5, 'min_order_for_bonus' => 1000,
+        'max_bonus_payment' => 30, 'bonus_expiration_days' => 365
+    ],
+    'email_settings' => [
+        'smtp_enabled' => false, 'smtp_host' => '', 'smtp_port' => 587,
+        'smtp_username' => '', 'smtp_password' => '', 'smtp_encryption' => 'tls',
+        'from_email' => '', 'from_name' => ''
+    ]
+];
 
-$newProductsJson = json_encode(array_values(array_map(function($p) {
-    return ['id' => $p['id']];
-}, $newProducts)), JSON_UNESCAPED_UNICODE);
+// Объединяем с дефолтными значениями
+$settings = array_replace_recursive($defaults, $settings);
 
-$popularProductsJson = json_encode(array_values(array_map(function($p) {
-    return ['id' => $p['id']];
-}, $popularProducts)), JSON_UNESCAPED_UNICODE);
+// Получаем статус синхронизации 1С
+$sync_status = null;
+if (method_exists($db, 'get1CSyncStatus')) {
+    $sync_status = $db->get1CSyncStatus();
+}
+
+// Функция для безопасного получения значения
+function getSetting($settings, $keys, $default = '') {
+    $value = $settings;
+    foreach ((array)$keys as $key) {
+        if (is_array($value) && isset($value[$key])) {
+            $value = $value[$key];
+        } else {
+            return $default;
+        }
+    }
+    return $value;
+}
 ?>
-<!DOCTYPE html>
-<html lang="ru">
-<head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title><?= safe_output($siteSettings['site_name']) ?> - Доставка суши и роллов</title>
-    <meta name="description" content="<?= safe_output($siteSettings['site_description']) ?>">
-    <meta name="theme-color" content="#E31E24">
 
-    <!-- Favicon -->
-    <?php if ($logoUrl): ?>
-    <link rel="icon" href="<?= safe_output($logoUrl) ?>">
-    <?php else: ?>
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🍣</text></svg>">
-    <?php endif; ?>
+<?php if (isset($success_message)): ?>
+    <div class="alert alert-success">
+        <i class="fas fa-check-circle"></i>
+        <?= htmlspecialchars($success_message) ?>
+    </div>
+<?php endif; ?>
 
-    <!-- Fonts -->
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<?php if (isset($error_message)): ?>
+    <div class="alert alert-error">
+        <i class="fas fa-exclamation-circle"></i>
+        <?= htmlspecialchars($error_message) ?>
+    </div>
+<?php endif; ?>
 
-    <!-- Icons -->
-    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+<form method="POST" action="" class="settings-form" id="settingsForm">
+    <input type="hidden" name="save_settings" value="1">
+
+    <div class="settings-tabs">
+        <div class="tab-list">
+            <button type="button" class="tab-button active" data-tab="general">
+                <i class="fas fa-cog"></i> Общие
+            </button>
+            <button type="button" class="tab-button" data-tab="appearance">
+                <i class="fas fa-palette"></i> Внешний вид
+            </button>
+            <button type="button" class="tab-button" data-tab="banner">
+                <i class="fas fa-bullhorn"></i> Баннер
+            </button>
+            <button type="button" class="tab-button" data-tab="delivery">
+                <i class="fas fa-truck"></i> Доставка
+            </button>
+            <button type="button" class="tab-button" data-tab="payments">
+                <i class="fas fa-credit-card"></i> Платежи
+            </button>
+            <button type="button" class="tab-button" data-tab="1c">
+                <i class="fas fa-sync-alt"></i> 1С
+                <?php if ($sync_status && isset($sync_status['status']) && $sync_status['status'] === 'recent'): ?>
+                    <span class="badge badge-success">●</span>
+                <?php endif; ?>
+            </button>
+            <button type="button" class="tab-button" data-tab="notifications">
+                <i class="fas fa-bell"></i> Уведомления
+            </button>
+            <button type="button" class="tab-button" data-tab="seo">
+                <i class="fas fa-search"></i> SEO
+            </button>
+            <button type="button" class="tab-button" data-tab="bonus">
+                <i class="fas fa-gift"></i> Бонусы
+            </button>
+            <button type="button" class="tab-button" data-tab="email">
+                <i class="fas fa-envelope"></i> Email
+            </button>
+        </div>
+
+        <!-- Общие настройки -->
+        <div id="general" class="tab-content active">
+            <div class="card">
+                <div class="card-header">
+                    <h3 class="card-title"><i class="fas fa-info-circle"></i> Основная информация</h3>
+                </div>
+                <div class="card-body">
+                    <div class="row">
+                        <div class="col-6">
+                            <div class="form-group">
+                                <label class="form-label">Название сайта *</label>
+                                <input type="text" class="form-input" name="site_name" 
+                                       value="<?= htmlspecialchars(getSetting($settings, 'site_name')) ?>" required>
+                            </div>
+                        </div>
+                        <div class="col-6">
+                            <div class="form-group">
+                                <label class="form-label">Email</label>
+                                <input type="email" class="form-input" name="email" 
+                                       value="<?= htmlspecialchars(getSetting($settings, 'email')) ?>">
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="row">
+                        <div class="col-6">
+                            <div class="form-group">
+                                <label class="form-label">Логотип (URL)</label>
+                                <input type="text" class="form-input" name="site_logo" 
+                                       value="<?= htmlspecialchars(getSetting($settings, 'site_logo')) ?>">
+                            </div>
+                        </div>
+                        <div class="col-6">
+                            <div class="form-group">
+                                <label class="form-label">Favicon (URL)</label>
+                                <input type="text" class="form-input" name="site_favicon" 
+                                       value="<?= htmlspecialchars(getSetting($settings, 'site_favicon')) ?>">
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">Описание</label>
+                        <textarea class="form-textarea" name="site_description" rows="3"><?= htmlspecialchars(getSetting($settings, 'site_description')) ?></textarea>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">Ключевые слова</label>
+                        <input type="text" class="form-input" name="site_keywords" 
+                               value="<?= htmlspecialchars(getSetting($settings, 'site_keywords')) ?>">
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">Адрес</label>
+                        <input type="text" class="form-input" name="address" 
+                               value="<?= htmlspecialchars(getSetting($settings, 'address')) ?>">
+                    </div>
+
+                    <div class="row">
+                        <div class="col-6">
+                            <div class="form-group">
+                                <label class="form-label">Координаты (широта)</label>
+                                <input type="text" class="form-input" name="coord_lat" 
+                                       value="<?= htmlspecialchars(getSetting($settings, ['coordinates', 'lat'])) ?>"
+                                       placeholder="55.751244">
+                            </div>
+                        </div>
+                        <div class="col-6">
+                            <div class="form-group">
+                                <label class="form-label">Координаты (долгота)</label>
+                                <input type="text" class="form-input" name="coord_lng" 
+                                       value="<?= htmlspecialchars(getSetting($settings, ['coordinates', 'lng'])) ?>"
+                                       placeholder="37.618423">
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">Телефоны (каждый с новой строки)</label>
+                        <textarea class="form-textarea" name="phones" rows="3"><?= htmlspecialchars(implode("\n", getSetting($settings, 'phones', []))) ?></textarea>
+                    </div>
+
+                    <div class="row">
+                        <div class="col-4">
+                            <div class="form-group">
+                                <label class="form-label">Время работы: начало</label>
+                                <input type="time" class="form-input" name="work_start" 
+                                       value="<?= htmlspecialchars(getSetting($settings, ['work_hours', 'start'], '10:00')) ?>">
+                            </div>
+                        </div>
+                        <div class="col-4">
+                            <div class="form-group">
+                                <label class="form-label">Время работы: конец</label>
+                                <input type="time" class="form-input" name="work_end" 
+                                       value="<?= htmlspecialchars(getSetting($settings, ['work_hours', 'end'], '23:00')) ?>">
+                            </div>
+                        </div>
+                        <div class="col-4">
+                            <div class="form-group">
+                                <label class="form-label">Среднее время доставки</label>
+                                <input type="text" class="form-input" name="delivery_time" 
+                                       value="<?= htmlspecialchars(getSetting($settings, 'delivery_time', '60-90')) ?>"
+                                       placeholder="60-90">
+                                <small class="form-hint">В минутах (например: 60-90)</small>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">Рабочие дни</label>
+                        <div class="checkbox-group-inline">
+                            <?php
+                            $days = [
+                                'mon' => 'Пн', 'tue' => 'Вт', 'wed' => 'Ср',
+                                'thu' => 'Чт', 'fri' => 'Пт', 'sat' => 'Сб', 'sun' => 'Вс'
+                            ];
+                            $work_schedule = getSetting($settings, 'work_schedule', []);
+                            foreach ($days as $key => $label):
+                            ?>
+                            <label class="checkbox-label">
+                                <input type="checkbox" name="work_schedule[]" value="<?= $key ?>" 
+                                       <?= in_array($key, $work_schedule) ? 'checked' : '' ?>>
+                                <?= $label ?>
+                            </label>
+                            <?php endforeach; ?>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <h3 class="card-title"><i class="fas fa-share-alt"></i> Социальные сети</h3>
+                </div>
+                <div class="card-body">
+                    <div class="row">
+                        <div class="col-6">
+                            <div class="form-group">
+                                <label class="form-label"><i class="fab fa-vk"></i> ВКонтакте</label>
+                                <input type="url" class="form-input" name="social_vk" 
+                                       value="<?= htmlspecialchars(getSetting($settings, ['social_networks', 'vk'])) ?>"
+                                       placeholder="https://vk.com/...">
+                            </div>
+                        </div>
+                        <div class="col-6">
+                            <div class="form-group">
+                                <label class="form-label"><i class="fab fa-instagram"></i> Instagram</label>
+                                <input type="url" class="form-input" name="social_instagram" 
+                                       value="<?= htmlspecialchars(getSetting($settings, ['social_networks', 'instagram'])) ?>"
+                                       placeholder="https://instagram.com/...">
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="row">
+                        <div class="col-6">
+                            <div class="form-group">
+                                <label class="form-label"><i class="fab fa-telegram"></i> Telegram</label>
+                                <input type="url" class="form-input" name="social_telegram" 
+                                       value="<?= htmlspecialchars(getSetting($settings, ['social_networks', 'telegram'])) ?>"
+                                       placeholder="https://t.me/...">
+                            </div>
+                        </div>
+                        <div class="col-6">
+                            <div class="form-group">
+                                <label class="form-label"><i class="fab fa-whatsapp"></i> WhatsApp</label>
+                                <input type="tel" class="form-input" name="social_whatsapp" 
+                                       value="<?= htmlspecialchars(getSetting($settings, ['social_networks', 'whatsapp'])) ?>"
+                                       placeholder="+79991234567">
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="row">
+                        <div class="col-6">
+                            <div class="form-group">
+                                <label class="form-label"><i class="fab fa-youtube"></i> YouTube</label>
+                                <input type="url" class="form-input" name="social_youtube" 
+                                       value="<?= htmlspecialchars(getSetting($settings, ['social_networks', 'youtube'])) ?>"
+                                       placeholder="https://youtube.com/...">
+                            </div>
+                        </div>
+                        <div class="col-6">
+                            <div class="form-group">
+                                <label class="form-label"><i class="fab fa-facebook"></i> Facebook</label>
+                                <input type="url" class="form-input" name="social_facebook" 
+                                       value="<?= htmlspecialchars(getSetting($settings, ['social_networks', 'facebook'])) ?>"
+                                       placeholder="https://facebook.com/...">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+<!-- Внешний вид -->
+        <div id="appearance" class="tab-content">
+            <div class="card">
+                <div class="card-header">
+                    <h3 class="card-title"><i class="fas fa-paint-brush"></i> Настройки внешнего вида</h3>
+                </div>
+                <div class="card-body">
+                    <div class="row">
+                        <div class="col-3">
+                            <div class="form-group">
+                                <label class="form-label">Тема</label>
+                                <select class="form-input" name="appearance_theme">
+                                    <option value="light" <?= getSetting($settings, ['appearance', 'theme'], 'light') == 'light' ? 'selected' : '' ?>>Светлая</option>
+                                    <option value="dark" <?= getSetting($settings, ['appearance', 'theme']) == 'dark' ? 'selected' : '' ?>>Темная</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="col-3">
+                            <div class="form-group">
+                                <label class="form-label">Основной цвет</label>
+                                <input type="color" class="form-input color-input" name="appearance_primary_color" 
+                                       value="<?= htmlspecialchars(getSetting($settings, ['appearance', 'primary_color'], '#000000')) ?>">
+                            </div>
+                        </div>
+                        <div class="col-3">
+                            <div class="form-group">
+                                <label class="form-label">Цвет акцента</label>
+                                <input type="color" class="form-input color-input" name="appearance_secondary_color" 
+                                       value="<?= htmlspecialchars(getSetting($settings, ['appearance', 'secondary_color'], '#10b981')) ?>">
+                            </div>
+                        </div>
+                        <div class="col-3">
+                            <div class="form-group">
+                                <label class="form-label">Цвет фона</label>
+                                <input type="color" class="form-input color-input" name="appearance_accent_color" 
+                                       value="<?= htmlspecialchars(getSetting($settings, ['appearance', 'accent_color'], '#ffffff')) ?>">
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="row">
+                        <div class="col-4">
+                            <div class="form-group">
+                                <label class="form-label">Шрифт</label>
+                                <select class="form-input" name="appearance_font">
+                                    <option value="Inter" <?= getSetting($settings, ['appearance', 'font_family'], 'Inter') == 'Inter' ? 'selected' : '' ?>>Inter</option>
+                                    <option value="Roboto" <?= getSetting($settings, ['appearance', 'font_family']) == 'Roboto' ? 'selected' : '' ?>>Roboto</option>
+                                    <option value="Open Sans" <?= getSetting($settings, ['appearance', 'font_family']) == 'Open Sans' ? 'selected' : '' ?>>Open Sans</option>
+                                    <option value="Montserrat" <?= getSetting($settings, ['appearance', 'font_family']) == 'Montserrat' ? 'selected' : '' ?>>Montserrat</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="col-4">
+                            <div class="form-group">
+                                <label class="form-label">Вид каталога</label>
+                                <select class="form-input" name="appearance_catalog_view">
+                                    <option value="grid" <?= getSetting($settings, ['appearance', 'catalog_view'], 'grid') == 'grid' ? 'selected' : '' ?>>Сетка</option>
+                                    <option value="list" <?= getSetting($settings, ['appearance', 'catalog_view']) == 'list' ? 'selected' : '' ?>>Список</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="col-4">
+                            <div class="form-group">
+                                <label class="form-label">Товаров на странице</label>
+                                <input type="number" class="form-input" name="appearance_products_per_page" 
+                                       value="<?= getSetting($settings, ['appearance', 'products_per_page'], 12) ?>" min="6" max="48">
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <div class="checkbox-group">
+                            <label class="checkbox-label">
+                                <input type="checkbox" name="appearance_show_prices" 
+                                       <?= getSetting($settings, ['appearance', 'show_prices'], true) ? 'checked' : '' ?>>
+                                Показывать цены на товары
+                            </label>
+                            <label class="checkbox-label">
+                                <input type="checkbox" name="appearance_show_availability" 
+                                       <?= getSetting($settings, ['appearance', 'show_availability'], true) ? 'checked' : '' ?>>
+                                Показывать наличие товаров
+                            </label>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <h3 class="card-title"><i class="fas fa-eye"></i> Предпросмотр цветовой схемы</h3>
+                </div>
+                <div class="card-body">
+                    <div class="color-preview" id="colorPreview">
+                        <div class="preview-header">Заголовок</div>
+                        <div class="preview-content">
+                            <button class="preview-button" type="button">Кнопка</button>
+                            <div class="preview-text">Пример текста</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Баннер "Требуются работники" -->
+        <div id="banner" class="tab-content">
+            <div class="card">
+                <div class="card-header">
+                    <h3 class="card-title"><i class="fas fa-bullhorn"></i> Баннер на главной странице</h3>
+                    <label class="toggle-switch">
+                        <input type="checkbox" name="jobs_banner_enabled" 
+                               <?= getSetting($settings, ['jobs_banner', 'enabled'], true) ? 'checked' : '' ?>>
+                        <span class="toggle-slider"></span>
+                    </label>
+                </div>
+                <div class="card-body">
+                    <div class="form-group">
+                        <label class="form-label">Заголовок баннера</label>
+                        <input type="text" class="form-input" name="jobs_banner_title" 
+                               value="<?= htmlspecialchars(getSetting($settings, ['jobs_banner', 'title'], 'Требуются работники')) ?>"
+                               placeholder="Требуются работники">
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">Описание</label>
+                        <textarea class="form-textarea" name="jobs_banner_description" rows="2"><?= htmlspecialchars(getSetting($settings, ['jobs_banner', 'description'], 'Присоединяйтесь к нашей команде')) ?></textarea>
+                    </div>
+
+                    <div class="row">
+                        <div class="col-6">
+                            <div class="form-group">
+                                <label class="form-label">Ссылка</label>
+                                <input type="text" class="form-input" name="jobs_banner_link" 
+                                       value="<?= htmlspecialchars(getSetting($settings, ['jobs_banner', 'link'], '#')) ?>"
+                                       placeholder="https://example.com/vacancies или #">
+                                <small class="form-hint">URL страницы вакансий или # для модального окна</small>
+                            </div>
+                        </div>
+                        <div class="col-6">
+                            <div class="form-group">
+                                <label class="form-label">Текст кнопки</label>
+                                <input type="text" class="form-input" name="jobs_banner_button" 
+                                       value="<?= htmlspecialchars(getSetting($settings, ['jobs_banner', 'button_text'], 'Подробнее')) ?>"
+                                       placeholder="Подробнее">
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="row">
+                        <div class="col-6">
+                            <div class="form-group">
+                                <label class="form-label">Цвет фона</label>
+                                <input type="color" class="form-input color-input" name="jobs_banner_bg_color" 
+                                       value="<?= htmlspecialchars(getSetting($settings, ['jobs_banner', 'background_color'], '#10b981')) ?>"
+                                       id="bannerBgColor">
+                            </div>
+                        </div>
+                        <div class="col-6">
+                            <div class="form-group">
+                                <label class="form-label">Цвет текста</label>
+                                <input type="color" class="form-input color-input" name="jobs_banner_text_color" 
+                                       value="<?= htmlspecialchars(getSetting($settings, ['jobs_banner', 'text_color'], '#ffffff')) ?>"
+                                       id="bannerTextColor">
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" name="jobs_banner_use_image" id="bannerUseImage"
+                                   <?= getSetting($settings, ['jobs_banner', 'use_image'], false) ? 'checked' : '' ?>>
+                            Использовать изображение вместо иконки
+                        </label>
+                    </div>
+
+                    <div class="row">
+                        <div class="col-6">
+                            <div class="form-group" id="iconGroup">
+                                <label class="form-label">Иконка FontAwesome</label>
+                                <div class="icon-input-wrapper">
+                                    <i class="fas <?= htmlspecialchars(getSetting($settings, ['jobs_banner', 'icon'], 'fa-briefcase')) ?>" id="iconPreview"></i>
+                                    <input type="text" class="form-input" name="jobs_banner_icon" 
+                                           value="<?= htmlspecialchars(getSetting($settings, ['jobs_banner', 'icon'], 'fa-briefcase')) ?>"
+                                           id="bannerIcon"
+                                           placeholder="fa-briefcase">
+                                </div>
+                                <small class="form-hint">
+                                    <a href="https://fontawesome.com/icons" target="_blank">Посмотреть все иконки</a>
+                                    (например: fa-briefcase, fa-users, fa-handshake)
+                                </small>
+                            </div>
+                        </div>
+                        <div class="col-6">
+                            <div class="form-group" id="imageGroup">
+                                <label class="form-label">URL изображения</label>
+                                <input type="text" class="form-input" name="jobs_banner_image" 
+                                       value="<?= htmlspecialchars(getSetting($settings, ['jobs_banner', 'image'], '')) ?>"
+                                       placeholder="https://example.com/banner-image.jpg">
+                                <small class="form-hint">Рекомендуемый размер: 80x80px, формат PNG с прозрачностью</small>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <h3 class="card-title"><i class="fas fa-eye"></i> Предпросмотр баннера</h3>
+                </div>
+                <div class="card-body">
+                    <div class="banner-preview" id="bannerPreview">
+                        <div class="banner-preview-icon" id="previewIcon">
+                            <i class="fas <?= htmlspecialchars(getSetting($settings, ['jobs_banner', 'icon'], 'fa-briefcase')) ?>"></i>
+                        </div>
+                        <div class="banner-preview-image" id="previewImage" style="display: none;">
+                            <img src="" alt="Banner" id="previewImageSrc">
+                        </div>
+                        <div class="banner-preview-content">
+                            <h4 id="previewTitle"><?= htmlspecialchars(getSetting($settings, ['jobs_banner', 'title'], 'Требуются работники')) ?></h4>
+                            <p id="previewDesc"><?= htmlspecialchars(getSetting($settings, ['jobs_banner', 'description'], 'Присоединяйтесь к нашей команде')) ?></p>
+                        </div>
+                        <div class="banner-preview-button">
+                            <button type="button" id="previewButton"><?= htmlspecialchars(getSetting($settings, ['jobs_banner', 'button_text'], 'Подробнее')) ?></button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Настройки доставки -->
+        <div id="delivery" class="tab-content">
+            <div class="card">
+                <div class="card-header">
+                    <h3 class="card-title"><i class="fas fa-shipping-fast"></i> Параметры доставки</h3>
+                </div>
+                <div class="card-body">
+                    <div class="row">
+                        <div class="col-3">
+                            <div class="form-group">
+                                <label class="form-label">Стоимость доставки (₽)</label>
+                                <input type="number" class="form-input" name="delivery_cost" 
+                                       value="<?= getSetting($settings, 'delivery_cost', 0) ?>" min="0" step="0.01">
+                            </div>
+                        </div>
+                        <div class="col-3">
+                            <div class="form-group">
+                                <label class="form-label">Бесплатная доставка от (₽)</label>
+                                <input type="number" class="form-input" name="free_delivery_from" 
+                                       value="<?= getSetting($settings, 'free_delivery_from', 0) ?>" min="0" step="0.01">
+                            </div>
+                        </div>
+                        <div class="col-3">
+                            <div class="form-group">
+                                <label class="form-label">Минимальная сумма заказа (₽)</label>
+                                <input type="number" class="form-input" name="min_order_amount" 
+                                       value="<?= getSetting($settings, 'min_order_amount', 0) ?>" min="0" step="0.01">
+                            </div>
+                        </div>
+                        <div class="col-3">
+                            <div class="form-group">
+                                <label class="form-label">Макс. расстояние доставки (км)</label>
+                                <input type="number" class="form-input" name="max_delivery_distance" 
+                                       value="<?= getSetting($settings, 'max_delivery_distance', 10) ?>" min="0" step="0.1">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <h3 class="card-title"><i class="fas fa-map-marked-alt"></i> Зоны доставки</h3>
+                    <button type="button" class="btn btn-sm btn-primary" onclick="addDeliveryZone()">
+                        <i class="fas fa-plus"></i> Добавить зону
+                    </button>
+                </div>
+                <div class="card-body">
+                    <div id="deliveryZones">
+                        <?php 
+                        $delivery_zones = getSetting($settings, 'delivery_zones', []);
+                        if (!empty($delivery_zones)): ?>
+                            <?php foreach ($delivery_zones as $index => $zone): ?>
+                            <div class="delivery-zone-item" data-zone="<?= $index ?>">
+                                <div class="row">
+                                    <div class="col-5">
+                                        <input type="text" class="form-input" 
+                                               name="delivery_zone_name_<?= $index ?>" 
+                                               value="<?= htmlspecialchars($zone['name'] ?? '') ?>"
+                                               placeholder="Название зоны">
+                                    </div>
+                                    <div class="col-3">
+                                        <input type="number" class="form-input" 
+                                               name="delivery_zone_cost_<?= $index ?>" 
+                                               value="<?= $zone['cost'] ?? 0 ?>"
+                                               placeholder="Стоимость" step="0.01">
+                                    </div>
+                                    <div class="col-3">
+                                        <input type="number" class="form-input" 
+                                               name="delivery_zone_time_<?= $index ?>" 
+                                               value="<?= $zone['time'] ?? 0 ?>"
+                                               placeholder="Время (мин)">
+                                    </div>
+                                    <div class="col-1">
+                                        <button type="button" class="btn btn-danger btn-sm" onclick="removeDeliveryZone(this)">
+                                            <i class="fas fa-trash"></i>
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                            <?php endforeach; ?>
+                        <?php endif; ?>
+                    </div>
+                    <small class="form-hint">
+                        <i class="fas fa-info-circle"></i> Зоны доставки синхронизируются с 1С или добавляются вручную
+                    </small>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <h3 class="card-title"><i class="fas fa-store"></i> Самовывоз</h3>
+                </div>
+                <div class="card-body">
+                    <div class="form-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" name="pickup_enabled" 
+                                   <?= getSetting($settings, 'pickup_enabled', true) ? 'checked' : '' ?>>
+                            Разрешить самовывоз
+                        </label>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Скидка при самовывозе (%)</label>
+                        <input type="number" class="form-input" name="pickup_discount" 
+                               value="<?= getSetting($settings, 'pickup_discount', 0) ?>" min="0" max="100" step="0.01">
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Способы оплаты -->
+        <div id="payments" class="tab-content">
+            <div class="card">
+                <div class="card-header">
+                    <h3 class="card-title"><i class="fas fa-money-bill-wave"></i> Способы оплаты</h3>
+                </div>
+                <div class="card-body">
+                    <div class="form-group">
+                        <label class="form-label">Доступные способы оплаты</label>
+                        <div class="checkbox-group">
+                            <?php $payment_methods = getSetting($settings, 'payment_methods', []); ?>
+                            <label class="checkbox-label">
+                                <input type="checkbox" name="payment_methods[]" value="cash" 
+                                       <?= in_array('cash', $payment_methods) ? 'checked' : '' ?>>
+                                <i class="fas fa-money-bill-alt"></i> Наличными при получении
+                            </label>
+                            <label class="checkbox-label">
+                                <input type="checkbox" name="payment_methods[]" value="card" 
+                                       <?= in_array('card', $payment_methods) ? 'checked' : '' ?>>
+                                <i class="fas fa-credit-card"></i> Картой при получении
+                            </label>
+                            <label class="checkbox-label">
+                                <input type="checkbox" name="payment_methods[]" value="online" 
+                                       <?= in_array('online', $payment_methods) ? 'checked' : '' ?>>
+                                <i class="fas fa-laptop"></i> Онлайн-оплата
+                            </label>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ЮKassa -->
+            <div class="card">
+                <div class="card-header">
+                    <h3 class="card-title">
+                        <img src="https://yookassa.ru/favicon.ico" alt="ЮKassa" style="width: 20px; height: 20px; margin-right: 8px;" onerror="this.style.display='none'">
+                        ЮKassa (Яндекс.Касса)
+                    </h3>
+                    <label class="toggle-switch">
+                        <input type="checkbox" name="yookassa_enabled" 
+                               <?= getSetting($settings, ['yookassa', 'enabled'], false) ? 'checked' : '' ?>>
+                        <span class="toggle-slider"></span>
+                    </label>
+                </div>
+                <div class="card-body">
+                    <div class="row">
+                        <div class="col-6">
+                            <div class="form-group">
+                                <label class="form-label">Shop ID</label>
+                                <input type="text" class="form-input" name="yookassa_shop_id" 
+                                       value="<?= htmlspecialchars(getSetting($settings, ['yookassa', 'shop_id'])) ?>"
+                                       placeholder="123456">
+                            </div>
+                        </div>
+                        <div class="col-6">
+                            <div class="form-group">
+                                <label class="form-label">Secret Key</label>
+                                <input type="password" class="form-input" name="yookassa_secret_key" 
+                                       value="<?= htmlspecialchars(getSetting($settings, ['yookassa', 'secret_key'])) ?>"
+                                       placeholder="live_...">
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">Шаблон описания платежа</label>
+                        <input type="text" class="form-input" name="yookassa_description" 
+                               value="<?= htmlspecialchars(getSetting($settings, ['yookassa', 'description_template'], 'Оплата заказа #{order_id}')) ?>"
+                               placeholder="Оплата заказа #{order_id}">
+                        <small class="form-hint">Доступные переменные: {order_id}, {customer_name}</small>
+                    </div>
+
+                    <div class="row">
+                        <div class="col-6">
+                            <div class="form-group">
+                                <label class="form-label">URL успешной оплаты</label>
+                                <input type="url" class="form-input" name="yookassa_success_url" 
+                                       value="<?= htmlspecialchars(getSetting($settings, ['yookassa', 'success_url'])) ?>"
+                                       placeholder="https://example.com/payment/success">
+                            </div>
+                        </div>
+                        <div class="col-6">
+                            <div class="form-group">
+                                <label class="form-label">URL неуспешной оплаты</label>
+                                <input type="url" class="form-input" name="yookassa_fail_url" 
+                                       value="<?= htmlspecialchars(getSetting($settings, ['yookassa', 'fail_url'])) ?>"
+                                       placeholder="https://example.com/payment/fail">
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="checkbox-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" name="yookassa_test_mode" 
+                                   <?= getSetting($settings, ['yookassa', 'test_mode'], false) ? 'checked' : '' ?>>
+                            Тестовый режим
+                        </label>
+                        <label class="checkbox-label">
+                            <input type="checkbox" name="yookassa_auto_capture" 
+                                   <?= getSetting($settings, ['yookassa', 'auto_capture'], false) ? 'checked' : '' ?>>
+                            Автоматическое подтверждение платежа
+                        </label>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Сбербанк -->
+            <div class="card">
+                <div class="card-header">
+                    <h3 class="card-title">
+                        <i class="fas fa-university"></i> Сбербанк Эквайринг
+                    </h3>
+                    <label class="toggle-switch">
+                        <input type="checkbox" name="sberbank_enabled" 
+                               <?= getSetting($settings, ['sberbank', 'enabled'], false) ? 'checked' : '' ?>>
+                        <span class="toggle-slider"></span>
+                    </label>
+                </div>
+                <div class="card-body">
+                    <div class="row">
+                        <div class="col-6">
+                            <div class="form-group">
+                                <label class="form-label">Логин</label>
+                                <input type="text" class="form-input" name="sberbank_username" 
+                                       value="<?= htmlspecialchars(getSetting($settings, ['sberbank', 'username'])) ?>"
+                                       placeholder="merchant_username">
+                            </div>
+                        </div>
+                        <div class="col-6">
+                            <div class="form-group">
+                                <label class="form-label">Пароль</label>
+                                <input type="password" class="form-input" name="sberbank_password" 
+                                       value="<?= htmlspecialchars(getSetting($settings, ['sberbank', 'password'])) ?>"
+                                       placeholder="merchant_password">
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="row">
+                        <div class="col-6">
+                            <div class="form-group">
+                                <label class="form-label">URL успешной оплаты</label>
+                                <input type="url" class="form-input" name="sberbank_success_url" 
+                                       value="<?= htmlspecialchars(getSetting($settings, ['sberbank', 'success_url'])) ?>"
+                                       placeholder="https://example.com/payment/success">
+                            </div>
+                        </div>
+                        <div class="col-6">
+                            <div class="form-group">
+                                <label class="form-label">URL неуспешной оплаты</label>
+                                <input type="url" class="form-input" name="sberbank_fail_url" 
+                                       value="<?= htmlspecialchars(getSetting($settings, ['sberbank', 'fail_url'])) ?>"
+                                       placeholder="https://example.com/payment/fail">
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="checkbox-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" name="sberbank_test_mode" 
+                                   <?= getSetting($settings, ['sberbank', 'test_mode'], false) ? 'checked' : '' ?>>
+                            Тестовый режим
+                        </label>
+                        <label class="checkbox-label">
+                            <input type="checkbox" name="sberbank_two_stage" 
+                                   <?= getSetting($settings, ['sberbank', 'two_stage'], false) ? 'checked' : '' ?>>
+                            Двухстадийная оплата (с холдированием)
+                        </label>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Интеграция 1С -->
+        <div id="1c" class="tab-content">
+            <div class="card">
+                <div class="card-header">
+                    <h3 class="card-title"><i class="fas fa-database"></i> Подключение к 1С</h3>
+                    <label class="toggle-switch">
+                        <input type="checkbox" name="1c_enabled" 
+                               <?= getSetting($settings, ['1c_integration', 'enabled'], false) ? 'checked' : '' ?>>
+                        <span class="toggle-slider"></span>
+                    </label>
+                </div>
+                <div class="card-body">
+                    <div class="row">
+                        <div class="col-6">
+                            <div class="form-group">
+                                <label class="form-label">Сервер 1С</label>
+                                <input type="text" class="form-input" name="1c_server" 
+                                       value="<?= htmlspecialchars(getSetting($settings, ['1c_integration', 'server'])) ?>"
+                                       placeholder="192.168.1.100:1541">
+                            </div>
+                        </div>
+                        <div class="col-6">
+                            <div class="form-group">
+                                <label class="form-label">База данных</label>
+                                <input type="text" class="form-input" name="1c_database" 
+                                       value="<?= htmlspecialchars(getSetting($settings, ['1c_integration', 'database'])) ?>"
+                                       placeholder="SushiRestaurant">
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="row">
+                        <div class="col-6">
+                            <div class="form-group">
+                                <label class="form-label">Пользователь</label>
+                                <input type="text" class="form-input" name="1c_username" 
+                                       value="<?= htmlspecialchars(getSetting($settings, ['1c_integration', 'username'])) ?>"
+                                       placeholder="WebExchange">
+                            </div>
+                        </div>
+                        <div class="col-6">
+                            <div class="form-group">
+                                <label class="form-label">Пароль</label>
+                                <input type="password" class="form-input" name="1c_password" 
+                                       value="<?= htmlspecialchars(getSetting($settings, ['1c_integration', 'password'])) ?>"
+                                       placeholder="••••••••">
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">Путь к файлам обмена</label>
+                        <input type="text" class="form-input" name="1c_exchange_path" 
+                               value="<?= htmlspecialchars(getSetting($settings, ['1c_integration', 'exchange_path'], './1c_exchange/')) ?>">
+                    </div>
+
+                    <?php if ($sync_status): ?>
+                    <div class="sync-status-block status-<?= htmlspecialchars($sync_status['status'] ?? 'normal') ?>">
+                        <i class="fas fa-clock"></i>
+                        <div>
+                            <strong>Последняя синхронизация:</strong> 
+                            <?php if (isset($sync_status['last_sync'])): ?>
+                                <?= date('d.m.Y H:i:s', strtotime($sync_status['last_sync'])) ?>
+                                <br>
+                                <small>(<?= $sync_status['minutes_ago'] ?? 0 ?> минут назад)</small>
+                            <?php else: ?>
+                                Никогда
+                            <?php endif; ?>
+                        </div>
+                    </div>
+                    <?php endif; ?>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <h3 class="card-title"><i class="fas fa-list-check"></i> Что синхронизировать с 1С</h3>
+                </div>
+                <div class="card-body">
+                    <div class="form-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" name="1c_auto_sync" 
+                                   <?= getSetting($settings, ['1c_integration', 'auto_sync'], false) ? 'checked' : '' ?>>
+                            <strong>Автоматическая синхронизация</strong>
+                        </label>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">Интервал синхронизации (секунд)</label>
+                        <input type="number" class="form-input" name="1c_sync_interval" 
+                               value="<?= getSetting($settings, ['1c_integration', 'sync_interval'], 300) ?>" min="60">
+                        <small class="form-hint">Рекомендуется не менее 300 секунд (5 минут)</small>
+                    </div>
+
+                    <div class="sync-options-grid">
+                        <?php 
+                        $sync_options = [
+                            'products' => ['icon' => 'shopping-bag', 'title' => 'Товары', 'desc' => 'Номенклатура и характеристики'],
+                            'categories' => ['icon' => 'folder-open', 'title' => 'Категории', 'desc' => 'Группы товаров'],
+                            'prices' => ['icon' => 'ruble-sign', 'title' => 'Цены', 'desc' => 'Актуальные цены'],
+                            'stock' => ['icon' => 'boxes', 'title' => 'Остатки', 'desc' => 'Количество на складе'],
+                            'orders' => ['icon' => 'receipt', 'title' => 'Заказы', 'desc' => 'Передача заказов в 1С'],
+                            'customers' => ['icon' => 'users', 'title' => 'Клиенты', 'desc' => 'Контрагенты'],
+                            'delivery_zones' => ['icon' => 'map-marked-alt', 'title' => 'Зоны доставки', 'desc' => 'Тарифы и районы'],
+                            'delivery_slots' => ['icon' => 'clock', 'title' => 'Слоты доставки', 'desc' => 'Временные интервалы'],
+                            'payment_transactions' => ['icon' => 'money-bill-transfer', 'title' => 'Платежи', 'desc' => 'Транзакции оплаты'],
+                            'reviews' => ['icon' => 'star', 'title' => 'Отзывы', 'desc' => 'Отзывы клиентов'],
+                            'promocodes' => ['icon' => 'ticket-alt', 'title' => 'Промокоды', 'desc' => 'Акции и скидки']
+                        ];
+
+                        foreach ($sync_options as $key => $option):
+                            $checked = getSetting($settings, ['1c_integration', 'sync_settings', $key], false);
+                        ?>
+                        <div class="sync-option-card">
+                            <label class="checkbox-label">
+                                <input type="checkbox" name="1c_sync_<?= $key ?>" <?= $checked ? 'checked' : '' ?>>
+                                <div>
+                                    <i class="fas fa-<?= $option['icon'] ?>"></i>
+                                    <strong><?= $option['title'] ?></strong>
+                                    <small><?= $option['desc'] ?></small>
+                                </div>
+                            </label>
+                        </div>
+                        <?php endforeach; ?>
+                    </div>
+
+                    <div class="form-group" style="margin-top: 2rem;">
+                        <button type="button" class="btn btn-primary" onclick="manualSync()">
+                            <i class="fas fa-sync-alt"></i> Запустить синхронизацию вручную
+                        </button>
+                        <button type="button" class="btn btn-secondary" onclick="viewSyncLogs()">
+                            <i class="fas fa-file-alt"></i> Просмотреть логи
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Уведомления -->
+        <div id="notifications" class="tab-content">
+            <div class="card">
+                <div class="card-header">
+                    <h3 class="card-title"><i class="fas fa-envelope"></i> Email уведомления</h3>
+                    <label class="toggle-switch">
+                        <input type="checkbox" name="notif_email_enabled" 
+                               <?= getSetting($settings, ['notifications', 'email_enabled'], false) ? 'checked' : '' ?>>
+                        <span class="toggle-slider"></span>
+                    </label>
+                </div>
+                <div class="card-body">
+                    <div class="checkbox-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" name="notif_new_order" 
+                                   <?= getSetting($settings, ['notifications', 'new_order_notification'], false) ? 'checked' : '' ?>>
+                            Уведомлять о новых заказах
+                        </label>
+                        <label class="checkbox-label">
+                            <input type="checkbox" name="notif_status_change" 
+                                   <?= getSetting($settings, ['notifications', 'status_change_notification'], false) ? 'checked' : '' ?>>
+                            Уведомлять об изменении статуса заказа
+                        </label>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <h3 class="card-title"><i class="fas fa-sms"></i> SMS уведомления</h3>
+                    <label class="toggle-switch">
+                        <input type="checkbox" name="notif_sms_enabled" 
+                               <?= getSetting($settings, ['notifications', 'sms_enabled'], false) ? 'checked' : '' ?>>
+                        <span class="toggle-slider"></span>
+                    </label>
+                </div>
+                <div class="card-body">
+                    <p class="text-muted">SMS уведомления требуют подключения SMS-шлюза</p>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <h3 class="card-title"><i class="fab fa-telegram"></i> Telegram уведомления</h3>
+                    <label class="toggle-switch">
+                        <input type="checkbox" name="notif_telegram_enabled" 
+                               <?= getSetting($settings, ['notifications', 'telegram_enabled'], false) ? 'checked' : '' ?>>
+                        <span class="toggle-slider"></span>
+                    </label>
+                </div>
+                <div class="card-body">
+                    <div class="row">
+                        <div class="col-6">
+                            <div class="form-group">
+                                <label class="form-label">Bot Token</label>
+                                <input type="text" class="form-input" name="notif_telegram_token" 
+                                       value="<?= htmlspecialchars(getSetting($settings, ['notifications', 'telegram_bot_token'])) ?>"
+                                       placeholder="123456789:ABCdefGHIjklMNOpqrsTUVwxyz">
+                            </div>
+                        </div>
+                        <div class="col-6">
+                            <div class="form-group">
+                                <label class="form-label">Chat ID</label>
+                                <input type="text" class="form-input" name="notif_telegram_chat" 
+                                       value="<?= htmlspecialchars(getSetting($settings, ['notifications', 'telegram_chat_id'])) ?>"
+                                       placeholder="-123456789">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- SEO -->
+        <div id="seo" class="tab-content">
+            <div class="card">
+                <div class="card-header">
+                    <h3 class="card-title"><i class="fas fa-chart-line"></i> Основные SEO настройки</h3>
+                </div>
+                <div class="card-body">
+                    <div class="form-group">
+                        <label class="form-label">Meta Title</label>
+                        <input type="text" class="form-input" name="seo_title" 
+                               value="<?= htmlspecialchars(getSetting($settings, ['seo', 'meta_title'])) ?>"
+                               placeholder="<?= htmlspecialchars(getSetting($settings, 'site_name')) ?>">
+                        <small class="form-hint">Рекомендуемая длина: 50-60 символов</small>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">Meta Description</label>
+                        <textarea class="form-textarea" name="seo_description" rows="3" 
+                                  placeholder="Описание сайта для поисковых систем"><?= htmlspecialchars(getSetting($settings, ['seo', 'meta_description'])) ?></textarea>
+                        <small class="form-hint">Рекомендуемая длина: 150-160 символов</small>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">Meta Keywords</label>
+                        <input type="text" class="form-input" name="seo_keywords" 
+                               value="<?= htmlspecialchars(getSetting($settings, ['seo', 'meta_keywords'])) ?>"
+                               placeholder="ключевое слово 1, ключевое слово 2">
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">OG Image (URL)</label>
+                        <input type="url" class="form-input" name="seo_og_image" 
+                               value="<?= htmlspecialchars(getSetting($settings, ['seo', 'og_image'])) ?>"
+                               placeholder="https://example.com/og-image.jpg">
+                        <small class="form-hint">Изображение для социальных сетей (рекомендуемый размер: 1200x630)</small>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" name="seo_sitemap" 
+                                   <?= getSetting($settings, ['seo', 'sitemap_enabled'], true) ? 'checked' : '' ?>>
+                            Автоматически генерировать sitemap.xml
+                        </label>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <h3 class="card-title"><i class="fas fa-robot"></i> Robots.txt</h3>
+                </div>
+                <div class="card-body">
+                    <div class="form-group">
+                        <label class="form-label">Содержимое robots.txt</label>
+                        <textarea class="form-textarea" name="seo_robots" rows="10" 
+                                  placeholder="User-agent: *&#10;Disallow: /admin/&#10;Sitemap: https://example.com/sitemap.xml"><?= htmlspecialchars(getSetting($settings, ['seo', 'robots_txt'])) ?></textarea>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <h3 class="card-title"><i class="fas fa-chart-bar"></i> Аналитика</h3>
+                </div>
+                <div class="card-body">
+                    <div class="form-group">
+                        <label class="form-label">Google Analytics ID</label>
+                        <input type="text" class="form-input" name="seo_google_analytics" 
+                               value="<?= htmlspecialchars(getSetting($settings, ['seo', 'google_analytics'])) ?>"
+                               placeholder="G-XXXXXXXXXX или UA-XXXXXXXXX-X">
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">Яндекс.Метрика ID</label>
+                        <input type="text" class="form-input" name="seo_yandex_metrika" 
+                               value="<?= htmlspecialchars(getSetting($settings, ['seo', 'yandex_metrika'])) ?>"
+                               placeholder="12345678">
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Бонусная система -->
+        <div id="bonus" class="tab-content">
+            <div class="card">
+                <div class="card-header">
+                    <h3 class="card-title"><i class="fas fa-gift"></i> Бонусная программа</h3>
+                    <label class="toggle-switch">
+                        <input type="checkbox" name="bonus_enabled" 
+                               <?= getSetting($settings, ['bonus_system', 'enabled'], false) ? 'checked' : '' ?>>
+                        <span class="toggle-slider"></span>
+                    </label>
+                </div>
+                <div class="card-body">
+                    <div class="row">
+                        <div class="col-6">
+                            <div class="form-group">
+                                <label class="form-label">Процент начисления бонусов</label>
+                                <input type="number" class="form-input" name="bonus_percent" 
+                                       value="<?= getSetting($settings, ['bonus_system', 'percent'], 5) ?>" 
+                                       min="0" max="100" step="0.1">
+                                <small class="form-hint">От суммы заказа</small>
+                            </div>
+                        </div>
+                        <div class="col-6">
+                            <div class="form-group">
+                                <label class="form-label">Минимальная сумма для начисления</label>
+                                <input type="number" class="form-input" name="bonus_min_order" 
+                                       value="<?= getSetting($settings, ['bonus_system', 'min_order_for_bonus'], 1000) ?>" 
+                                       min="0" step="0.01">
+                                <small class="form-hint">Рублей</small>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="row">
+                        <div class="col-6">
+                            <div class="form-group">
+                                <label class="form-label">Максимальная оплата бонусами</label>
+                                <input type="number" class="form-input" name="bonus_max_payment" 
+                                       value="<?= getSetting($settings, ['bonus_system', 'max_bonus_payment'], 30) ?>" 
+                                       min="0" max="100" step="0.1">
+                                <small class="form-hint">Процент от суммы заказа</small>
+                            </div>
+                        </div>
+                        <div class="col-6">
+                            <div class="form-group">
+                                <label class="form-label">Срок действия бонусов</label>
+                                <input type="number" class="form-input" name="bonus_expiration" 
+                                       value="<?= getSetting($settings, ['bonus_system', 'bonus_expiration_days'], 365) ?>" 
+                                       min="30">
+                                <small class="form-hint">Дней</small>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="info-block">
+                        <i class="fas fa-info-circle"></i>
+                        <div>
+                            <strong>Как работает:</strong>
+                            <ul style="margin: 0.5rem 0 0 1.5rem;">
+                                <li>Клиент получает <?= getSetting($settings, ['bonus_system', 'percent'], 5) ?>% бонусов от суммы заказа</li>
+                                <li>Минимальная сумма заказа для начисления: <?= getSetting($settings, ['bonus_system', 'min_order_for_bonus'], 1000) ?> ₽</li>
+                                <li>Можно оплатить бонусами до <?= getSetting($settings, ['bonus_system', 'max_bonus_payment'], 30) ?>% от суммы заказа</li>
+                                <li>Бонусы сгорают через <?= getSetting($settings, ['bonus_system', 'bonus_expiration_days'], 365) ?> дней</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Email настройки -->
+        <div id="email" class="tab-content">
+            <div class="card">
+                <div class="card-header">
+                    <h3 class="card-title"><i class="fas fa-server"></i> SMTP настройки</h3>
+                    <label class="toggle-switch">
+                        <input type="checkbox" name="smtp_enabled" 
+                               <?= getSetting($settings, ['email_settings', 'smtp_enabled'], false) ? 'checked' : '' ?>>
+                        <span class="toggle-slider"></span>
+                    </label>
+                </div>
+                <div class="card-body">
+                    <div class="row">
+                        <div class="col-8">
+                            <div class="form-group">
+                                <label class="form-label">SMTP сервер</label>
+                                <input type="text" class="form-input" name="smtp_host" 
+                                       value="<?= htmlspecialchars(getSetting($settings, ['email_settings', 'smtp_host'])) ?>"
+                                       placeholder="smtp.gmail.com">
+                            </div>
+                        </div>
+                        <div class="col-4">
+                            <div class="form-group">
+                                <label class="form-label">Порт</label>
+                                <input type="number" class="form-input" name="smtp_port" 
+                                       value="<?= getSetting($settings, ['email_settings', 'smtp_port'], 587) ?>"
+                                       placeholder="587">
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="row">
+                        <div class="col-6">
+                            <div class="form-group">
+                                <label class="form-label">Имя пользователя</label>
+                                <input type="text" class="form-input" name="smtp_username" 
+                                       value="<?= htmlspecialchars(getSetting($settings, ['email_settings', 'smtp_username'])) ?>"
+                                       placeholder="user@example.com">
+                            </div>
+                        </div>
+                        <div class="col-6">
+                            <div class="form-group">
+                                <label class="form-label">Пароль</label>
+                                <input type="password" class="form-input" name="smtp_password" 
+                                       value="<?= htmlspecialchars(getSetting($settings, ['email_settings', 'smtp_password'])) ?>"
+                                       placeholder="••••••••">
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="row">
+                        <div class="col-4">
+                            <div class="form-group">
+                                <label class="form-label">Шифрование</label>
+                                <select class="form-input" name="smtp_encryption">
+                                    <option value="tls" <?= getSetting($settings, ['email_settings', 'smtp_encryption'], 'tls') == 'tls' ? 'selected' : '' ?>>TLS</option>
+                                    <option value="ssl" <?= getSetting($settings, ['email_settings', 'smtp_encryption']) == 'ssl' ? 'selected' : '' ?>>SSL</option>
+                                    <option value="" <?= getSetting($settings, ['email_settings', 'smtp_encryption']) == '' ? 'selected' : '' ?>>Нет</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="col-4">
+                            <div class="form-group">
+                                <label class="form-label">Email отправителя</label>
+                                <input type="email" class="form-input" name="smtp_from_email" 
+                                       value="<?= htmlspecialchars(getSetting($settings, ['email_settings', 'from_email'])) ?>"
+                                       placeholder="noreply@example.com">
+                            </div>
+                        </div>
+                        <div class="col-4">
+                            <div class="form-group">
+                                <label class="form-label">Имя отправителя</label>
+                                <input type="text" class="form-input" name="smtp_from_name" 
+                                       value="<?= htmlspecialchars(getSetting($settings, ['email_settings', 'from_name'])) ?>"
+                                       placeholder="<?= htmlspecialchars(getSetting($settings, 'site_name')) ?>">
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <button type="button" class="btn btn-secondary" onclick="testEmail()">
+                            <i class="fas fa-paper-plane"></i> Отправить тестовое письмо
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
 
     <style>
-        /* ========== БАЗОВЫЕ СТИЛИ ========== */
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-
-        :root {
-            --primary-red: #E31E24;
-            --primary-red-hover: #C41A1F;
-            --primary-red-light: #FF4046;
-            --black: #1A1A1A;
-            --white: #FFFFFF;
-            --gray-50: #F9FAFB;
-            --gray-100: #F3F4F6;
-            --gray-200: #E5E7EB;
-            --gray-300: #D1D5DB;
-            --gray-400: #9CA3AF;
-            --gray-500: #6B7280;
-            --gray-600: #4B5563;
-            --gray-700: #374151;
-            --gray-800: #1F2937;
-            --gray-900: #111827;
-            --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
-            --shadow-md: 0 4px 6px rgba(0, 0, 0, 0.07);
-            --shadow-lg: 0 10px 15px rgba(0, 0, 0, 0.1);
-            --shadow-xl: 0 20px 25px rgba(0, 0, 0, 0.15);
-            --radius-sm: 6px;
-            --radius-md: 10px;
-            --radius-lg: 14px;
-            --radius-xl: 18px;
-            --header-height: 70px;
-            --category-nav-height: 60px;
-            --transition: all 0.2s ease;
-        }
-
-        body {
-            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-            line-height: 1.6;
-            color: var(--gray-900);
-            background: var(--gray-50);
-            -webkit-font-smoothing: antialiased;
-            -moz-osx-font-smoothing: grayscale;
-            scroll-behavior: smooth;
-        }
-
-        body.modal-open {
-            overflow: hidden;
-        }
-
-        .container {
-            max-width: 1280px;
-            margin: 0 auto;
-            padding: 0 20px;
-        }
-
-        /* ==================== HEADER ==================== */
-        .header {
-            background: var(--white);
-            box-shadow: var(--shadow-sm);
-            position: sticky;
-            top: 0;
-            z-index: 100;
-            height: var(--header-height);
-            transition: var(--transition);
-        }
-
-        .header-wrapper {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            height: var(--header-height);
-            gap: 16px;
-        }
-
-        .header-logo .logo {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            text-decoration: none;
-            transition: var(--transition);
-        }
-
-        .header-logo .logo:hover {
-            opacity: 0.8;
-        }
-
-        .logo-image {
-            height: 40px;
-            width: 40px;
-            object-fit: contain;
-        }
-
-        .logo-emoji {
-            font-size: 32px;
-            line-height: 1;
-        }
-
-        .logo-text {
-            font-size: 20px;
-            font-weight: 700;
-            color: var(--black);
-            white-space: nowrap;
-        }
-
-        /* Navigation */
-        .header-nav {
-            display: flex;
-            gap: 8px;
-        }
-
-        .nav-link {
-            padding: 8px 14px;
-            color: var(--gray-700);
-            text-decoration: none;
-            font-size: 14px;
-            font-weight: 500;
-            border-radius: var(--radius-sm);
-            transition: var(--transition);
-            white-space: nowrap;
-        }
-
-        .nav-link:hover {
-            background: var(--gray-100);
-            color: var(--gray-900);
-        }
-
-        .nav-link.active {
-            color: var(--primary-red);
-            background: rgba(227, 30, 36, 0.08);
-        }
-
-        /* Header Actions */
-        .header-actions {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-        }
-
-        .header-social {
-            display: flex;
-            gap: 6px;
-        }
-
-        .header-social a {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            width: 36px;
-            height: 36px;
-            color: var(--gray-600);
-            background: var(--gray-100);
-            border-radius: var(--radius-sm);
-            transition: var(--transition);
-            text-decoration: none;
-        }
-
-        .header-social a:hover {
-            background: var(--primary-red);
-            color: var(--white);
-        }
-
-        /* Search */
-        .search-container {
-            position: relative;
-        }
-
-        .search-input {
-            width: 240px;
-            padding: 8px 36px 8px 12px;
-            border: 1px solid var(--gray-200);
-            border-radius: var(--radius-md);
-            font-size: 14px;
-            transition: var(--transition);
-        }
-
-        .search-input:focus {
-            outline: none;
-            border-color: var(--primary-red);
-            box-shadow: 0 0 0 3px rgba(227, 30, 36, 0.1);
-        }
-
-        .search-input.has-value {
-            border-color: var(--primary-red);
-            background: rgba(227, 30, 36, 0.02);
-        }
-
-        .search-icon {
-            position: absolute;
-            right: 12px;
-            top: 50%;
-            transform: translateY(-50%);
-            color: var(--gray-400);
-            pointer-events: none;
-            transition: var(--transition);
-        }
-
-        .search-input:focus ~ .search-icon,
-        .search-input.has-value ~ .search-icon {
-            color: var(--primary-red);
-        }
-
-        .search-clear {
-            position: absolute;
-            right: 36px;
-            top: 50%;
-            transform: translateY(-50%);
-            width: 20px;
-            height: 20px;
-            display: none;
-            align-items: center;
-            justify-content: center;
-            background: var(--gray-300);
-            color: var(--white);
-            border-radius: 50%;
-            cursor: pointer;
-            font-size: 10px;
-            transition: var(--transition);
-        }
-
-        .search-clear:hover {
-            background: var(--primary-red);
-        }
-
-        .search-input.has-value ~ .search-clear {
-            display: flex;
-        }
-
-        /* Auth Button / User Profile */
-        .auth-btn, .user-profile {
-            display: flex;
-            align-items: center;
-            gap: 6px;
-            padding: 8px 14px;
-            background: var(--gray-100);
-            color: var(--gray-700);
-            text-decoration: none;
-            font-size: 14px;
-            font-weight: 500;
-            border-radius: var(--radius-md);
-            transition: var(--transition);
-            white-space: nowrap;
-            border: none;
-            cursor: pointer;
-        }
-
-        .auth-btn:hover, .user-profile:hover {
-            background: var(--gray-200);
-            color: var(--gray-900);
-        }
-
-        .user-profile {
-            position: relative;
-        }
-
-        .user-avatar {
-            width: 24px;
-            height: 24px;
-            border-radius: 50%;
-            background: var(--primary-red);
-            color: var(--white);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 12px;
-            font-weight: 700;
-        }
-
-        .user-name {
-            max-width: 120px;
-            overflow: hidden;
-            text-overflow: ellipsis;
-        }
-
-        .user-dropdown {
-            display: none;
-            position: absolute;
-            top: calc(100% + 8px);
-            right: 0;
-            background: var(--white);
-            border-radius: var(--radius-md);
-            box-shadow: var(--shadow-lg);
-            min-width: 200px;
-            overflow: hidden;
-            z-index: 1000;
-        }
-
-        .user-profile:hover .user-dropdown,
-        .user-profile:focus-within .user-dropdown {
-            display: block;
-        }
-
-        .dropdown-item {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            padding: 12px 16px;
-            color: var(--gray-700);
-            text-decoration: none;
-            font-size: 14px;
-            transition: var(--transition);
-            border: none;
-            background: transparent;
-            width: 100%;
-            text-align: left;
-            cursor: pointer;
-        }
-
-        .dropdown-item:hover {
-            background: var(--gray-100);
-            color: var(--gray-900);
-        }
-
-        .dropdown-item i {
-            width: 16px;
-            text-align: center;
-        }
-
-        .dropdown-divider {
-            height: 1px;
-            background: var(--gray-200);
-            margin: 4px 0;
-        }
-
-        /* Cart Button */
-        .cart-btn {
-            position: relative;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            padding: 8px 14px;
-            background: var(--primary-red);
-            color: var(--white);
-            border: none;
-            border-radius: var(--radius-md);
-            font-size: 14px;
-            font-weight: 600;
-            cursor: pointer;
-            transition: var(--transition);
-            white-space: nowrap;
-        }
-
-        .cart-btn:hover {
-            background: var(--primary-red-hover);
-            transform: translateY(-1px);
-            box-shadow: var(--shadow-md);
-        }
-
-        .cart-btn i {
-            font-size: 16px;
-        }
-
-        .cart-badge {
-            display: none;
-            align-items: center;
-            justify-content: center;
-            min-width: 20px;
-            height: 20px;
-            padding: 0 5px;
-            background: var(--white);
-            color: var(--primary-red);
-            font-size: 11px;
-            font-weight: 700;
-            border-radius: 10px;
-        }
-
-        .cart-badge.show {
-            display: flex;
-        }
-
-        .cart-info {
-            display: flex;
-            align-items: center;
-        }
-
-        .cart-total {
-            font-weight: 600;
-        }
-
-        /* Mobile Menu Toggle */
-        .mobile-toggle {
-            display: none;
-            flex-direction: column;
-            gap: 4px;
-            width: 36px;
-            height: 36px;
-            padding: 8px;
-            background: var(--gray-100);
-            border: none;
-            border-radius: var(--radius-sm);
-            cursor: pointer;
-        }
-
-        .mobile-toggle span {
-            display: block;
-            height: 2px;
-            background: var(--gray-700);
-            border-radius: 2px;
-            transition: var(--transition);
-        }
-
-        .mobile-toggle.active span:nth-child(1) {
-            transform: rotate(45deg) translate(5px, 5px);
-        }
-
-        .mobile-toggle.active span:nth-child(2) {
-            opacity: 0;
-        }
-
-        .mobile-toggle.active span:nth-child(3) {
-            transform: rotate(-45deg) translate(5px, -5px);
-        }
-
-        /* Mobile Menu */
-        .mobile-menu {
-            display: none;
-            position: fixed;
-            top: var(--header-height);
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background: var(--white);
-            z-index: 99;
-            overflow-y: auto;
-            animation: slideDown 0.3s ease;
-        }
-
-        @keyframes slideDown {
-            from {
-                opacity: 0;
-                transform: translateY(-20px);
+:root {
+    --bg-color: #f8f9fa;
+    --border-color: #e5e7eb;
+    --text-color: #111827;
+    --text-light: #6b7280;
+    --primary-color: #000000;
+    --secondary-color: #10b981;
+}
+
+.settings-form {
+    max-width: 1400px;
+    margin: 0 auto;
+}
+
+.settings-tabs {
+    background: white;
+    border-radius: 12px;
+    box-shadow: 0 1px 3px 0 rgb(0 0 0 / 0.1);
+    border: 1px solid var(--border-color);
+    overflow: hidden;
+}
+
+.tab-list {
+    display: flex;
+    flex-wrap: wrap;
+    border-bottom: 2px solid var(--border-color);
+    background: var(--bg-color);
+    padding: 0.5rem;
+    gap: 0.25rem;
+}
+
+.tab-button {
+    background: none;
+    border: none;
+    padding: 0.75rem 1.5rem;
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: var(--text-light);
+    cursor: pointer;
+    border-radius: 8px;
+    transition: all 0.2s;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    position: relative;
+}
+
+.tab-button i {
+    font-size: 1rem;
+}
+
+.tab-button:hover {
+    color: var(--text-color);
+    background: rgba(0, 0, 0, 0.05);
+}
+
+.tab-button.active {
+    color: white;
+    background: var(--primary-color);
+}
+
+.badge {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    margin-left: 4px;
+}
+
+.badge-success {
+    background: var(--secondary-color);
+    box-shadow: 0 0 8px var(--secondary-color);
+}
+
+.tab-content {
+    display: none;
+    padding: 2rem;
+}
+
+.tab-content.active {
+    display: block;
+}
+
+.card {
+    background: white;
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    margin-bottom: 1.5rem;
+    overflow: hidden;
+}
+
+.card-header {
+    padding: 1.25rem 1.5rem;
+    background: var(--bg-color);
+    border-bottom: 1px solid var(--border-color);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.card-title {
+    font-size: 1.125rem;
+    font-weight: 700;
+    color: var(--text-color);
+    margin: 0;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.card-body {
+    padding: 1.5rem;
+}
+
+.form-group {
+    margin-bottom: 1.5rem;
+}
+
+.form-label {
+    display: block;
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: var(--text-color);
+    margin-bottom: 0.5rem;
+}
+
+.form-input,
+.form-textarea {
+    width: 100%;
+    padding: 0.625rem 0.875rem;
+    font-size: 0.875rem;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    transition: all 0.2s;
+    font-family: inherit;
+    box-sizing: border-box;
+}
+
+.form-input:focus,
+.form-textarea:focus {
+    outline: none;
+    border-color: var(--primary-color);
+    box-shadow: 0 0 0 3px rgba(0, 0, 0, 0.05);
+}
+
+.color-input {
+    height: 42px;
+    padding: 0.25rem;
+    cursor: pointer;
+}
+
+.form-hint {
+    display: block;
+    font-size: 0.75rem;
+    color: var(--text-light);
+    margin-top: 0.25rem;
+}
+
+.checkbox-group {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.checkbox-group-inline {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem;
+}
+
+.checkbox-label {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.875rem;
+    cursor: pointer;
+    color: var(--text-color);
+}
+
+.checkbox-label input[type="checkbox"] {
+    width: 18px;
+    height: 18px;
+    cursor: pointer;
+    accent-color: var(--primary-color);
+    flex-shrink: 0;
+}
+
+.checkbox-label i {
+    color: var(--text-light);
+}
+
+/* Toggle Switch */
+.toggle-switch {
+    position: relative;
+    display: inline-block;
+    width: 48px;
+    height: 24px;
+}
+
+.toggle-switch input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+
+.toggle-slider {
+    position: absolute;
+    cursor: pointer;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: #ccc;
+    transition: 0.3s;
+    border-radius: 24px;
+}
+
+.toggle-slider:before {
+    position: absolute;
+    content: "";
+    height: 18px;
+    width: 18px;
+    left: 3px;
+    bottom: 3px;
+    background-color: white;
+    transition: 0.3s;
+    border-radius: 50%;
+}
+
+.toggle-switch input:checked + .toggle-slider {
+    background-color: var(--secondary-color);
+}
+
+.toggle-switch input:checked + .toggle-slider:before {
+    transform: translateX(24px);
+}
+
+/* Icon Input */
+.icon-input-wrapper {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+}
+
+.icon-input-wrapper i {
+    font-size: 2rem;
+    color: var(--primary-color);
+    width: 40px;
+    text-align: center;
+}
+
+/* Banner Preview */
+.banner-preview {
+    display: flex;
+    align-items: center;
+    gap: 1.5rem;
+    padding: 2rem;
+    border-radius: 12px;
+    background: <?= getSetting($settings, ['jobs_banner', 'background_color'], '#10b981') ?>;
+    color: <?= getSetting($settings, ['jobs_banner', 'text_color'], '#ffffff') ?>;
+}
+
+.banner-preview-icon {
+    font-size: 3rem;
+    flex-shrink: 0;
+}
+
+.banner-preview-image {
+    flex-shrink: 0;
+}
+
+.banner-preview-image img {
+    width: 80px;
+    height: 80px;
+    object-fit: contain;
+}
+
+.banner-preview-content {
+    flex: 1;
+}
+
+.banner-preview-content h4 {
+    margin: 0 0 0.5rem 0;
+    font-size: 1.5rem;
+    font-weight: 700;
+}
+
+.banner-preview-content p {
+    margin: 0;
+    opacity: 0.9;
+}
+
+.banner-preview-button button {
+    padding: 0.75rem 1.5rem;
+    font-size: 0.875rem;
+    font-weight: 600;
+    background: rgba(255, 255, 255, 0.2);
+    color: inherit;
+    border: 2px solid currentColor;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.banner-preview-button button:hover {
+    background: rgba(255, 255, 255, 0.3);
+}
+
+/* Sync Options Grid */
+.sync-options-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+    gap: 1rem;
+    margin-top: 1rem;
+}
+
+.sync-option-card {
+    padding: 1rem;
+    border: 2px solid var(--border-color);
+    border-radius: 10px;
+    transition: all 0.2s;
+}
+
+.sync-option-card:hover {
+    border-color: var(--primary-color);
+    background: var(--bg-color);
+}
+
+.sync-option-card .checkbox-label {
+    display: block;
+}
+
+.sync-option-card i {
+    font-size: 1.5rem;
+    margin-bottom: 0.5rem;
+    color: var(--primary-color);
+    display: block;
+}
+
+.sync-option-card strong {
+    display: block;
+    margin-bottom: 0.25rem;
+}
+
+.sync-option-card small {
+    display: block;
+    color: var(--text-light);
+    font-size: 0.75rem;
+}
+
+/* Sync Status Block */
+.sync-status-block {
+    padding: 1rem;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    margin-top: 1rem;
+}
+
+.sync-status-block.status-recent {
+    background: #d1fae5;
+    border: 1px solid var(--secondary-color);
+    color: #065f46;
+}
+
+.sync-status-block.status-normal {
+    background: #fef3c7;
+    border: 1px solid #f59e0b;
+    color: #92400e;
+}
+
+.sync-status-block.status-outdated {
+    background: #fee2e2;
+    border: 1px solid #dc2626;
+    color: #991b1b;
+}
+
+.sync-status-block i {
+    font-size: 1.5rem;
+}
+
+/* Delivery Zones */
+.delivery-zone-item {
+    padding: 1rem;
+    background: var(--bg-color);
+    border-radius: 8px;
+    margin-bottom: 0.75rem;
+}
+
+/* Color Preview */
+.color-preview {
+    padding: 2rem;
+    border-radius: 8px;
+    border: 2px dashed var(--border-color);
+}
+
+.preview-header {
+    font-size: 1.5rem;
+    font-weight: 700;
+    margin-bottom: 1rem;
+    padding-bottom: 1rem;
+    border-bottom: 2px solid;
+}
+
+.preview-button {
+    padding: 0.75rem 1.5rem;
+    font-weight: 600;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    margin-right: 1rem;
+}
+
+.preview-text {
+    margin-top: 1rem;
+    font-size: 0.875rem;
+}
+
+/* Info Block */
+.info-block {
+    padding: 1rem;
+    background: #f0f9ff;
+    border-left: 4px solid #0284c7;
+    border-radius: 8px;
+    display: flex;
+    gap: 1rem;
+    margin-top: 1rem;
+}
+
+.info-block i {
+    color: #0284c7;
+    font-size: 1.25rem;
+}
+
+/* Form Actions */
+.form-actions {
+    margin-top: 2rem;
+    padding: 1.5rem 2rem;
+    background: white;
+    border-radius: 12px;
+    border: 1px solid var(--border-color);
+    display: flex;
+    gap: 1rem;
+    box-shadow: 0 1px 3px 0 rgb(0 0 0 / 0.1);
+}
+
+/* Buttons */
+.btn {
+    padding: 0.625rem 1.25rem;
+    font-size: 0.875rem;
+    font-weight: 600;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.2s;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    text-decoration: none;
+}
+
+.btn-primary {
+    background: var(--primary-color);
+    color: white;
+}
+
+.btn-primary:hover:not(:disabled) {
+    background: #1f2937;
+    transform: translateY(-1px);
+    box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);
+}
+
+.btn-primary:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+.btn-secondary {
+    background: white;
+    color: var(--text-color);
+    border: 1px solid var(--border-color);
+}
+
+.btn-secondary:hover {
+    background: var(--bg-color);
+}
+
+.btn-danger {
+    background: #dc2626;
+    color: white;
+}
+
+.btn-danger:hover {
+    background: #b91c1c;
+}
+
+.btn-lg {
+    padding: 0.875rem 1.75rem;
+    font-size: 1rem;
+}
+
+.btn-sm {
+    padding: 0.375rem 0.75rem;
+    font-size: 0.8125rem;
+}
+
+/* Alert */
+.alert {
+    padding: 1rem 1.25rem;
+    border-radius: 12px;
+    margin-bottom: 1.5rem;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    font-weight: 500;
+    animation: slideDown 0.3s ease-out;
+}
+
+@keyframes slideDown {
+    from {
+        opacity: 0;
+        transform: translateY(-10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.alert-success {
+    background: #d1fae5;
+    color: #065f46;
+    border: 1px solid #10b981;
+}
+
+.alert-success i {
+    color: #10b981;
+    font-size: 1.25rem;
+}
+
+.alert-error {
+    background: #fee2e2;
+    color: #991b1b;
+    border: 1px solid #dc2626;
+}
+
+.alert-error i {
+    color: #dc2626;
+    font-size: 1.25rem;
+}
+
+/* Grid System */
+.row {
+    display: flex;
+    margin: 0 -0.5rem;
+    flex-wrap: wrap;
+}
+
+.col-3,
+.col-4,
+.col-5,
+.col-6,
+.col-8,
+.col-1 {
+    padding: 0 0.5rem;
+}
+
+.col-1 { flex: 0 0 8.333%; max-width: 8.333%; }
+.col-3 { flex: 0 0 25%; max-width: 25%; }
+.col-4 { flex: 0 0 33.333%; max-width: 33.333%; }
+.col-5 { flex: 0 0 41.666%; max-width: 41.666%; }
+.col-6 { flex: 0 0 50%; max-width: 50%; }
+.col-8 { flex: 0 0 66.666%; max-width: 66.666%; }
+
+@media (max-width: 768px) {
+    .col-3,
+    .col-4,
+    .col-5,
+    .col-6,
+    .col-8,
+    .col-1 {
+        flex: 0 0 100%;
+        max-width: 100%;
+    }
+
+    .tab-list {
+        overflow-x: auto;
+    }
+
+    .tab-button {
+        white-space: nowrap;
+    }
+
+    .form-actions {
+        flex-direction: column;
+    }
+
+    .sync-options-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .banner-preview {
+        flex-direction: column;
+        text-align: center;
+    }
+}
+
+.text-muted {
+    color: var(--text-light);
+    font-size: 0.875rem;
+}
+</style>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    // Tab switching
+    const tabButtons = document.querySelectorAll('.tab-button');
+    const tabContents = document.querySelectorAll('.tab-content');
+
+    tabButtons.forEach(button => {
+        button.addEventListener('click', function() {
+            const tabId = this.dataset.tab;
+
+            tabButtons.forEach(btn => btn.classList.remove('active'));
+            tabContents.forEach(content => content.classList.remove('active'));
+
+            this.classList.add('active');
+            const targetContent = document.getElementById(tabId);
+            if (targetContent) {
+                targetContent.classList.add('active');
             }
-            to {
-                opacity: 1;
-                transform: translateY(0);
-            }
-        }
-
-        .mobile-menu.active {
-            display: block;
-        }
-
-        .mobile-menu-section {
-            padding: 20px;
-            border-bottom: 1px solid var(--gray-200);
-        }
-
-        .mobile-menu-section h3 {
-            font-size: 14px;
-            font-weight: 600;
-            color: var(--gray-500);
-            text-transform: uppercase;
-            margin-bottom: 12px;
-        }
-
-        .mobile-nav-link {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            padding: 12px;
-            color: var(--gray-700);
-            text-decoration: none;
-            font-size: 16px;
-            font-weight: 500;
-            border-radius: var(--radius-md);
-            transition: var(--transition);
-        }
-
-        .mobile-nav-link:hover,
-        .mobile-nav-link.active {
-            background: var(--gray-100);
-            color: var(--primary-red);
-        }
-
-        .mobile-nav-link i {
-            width: 20px;
-            text-align: center;
-        }
-
-        /* ==================== JOBS BANNER ==================== */
-        .jobs-banner {
-            background: linear-gradient(135deg, rgba(227, 30, 36, 0.03) 0%, rgba(227, 30, 36, 0.06) 100%);
-            border: 1px solid rgba(227, 30, 36, 0.15);
-            border-radius: var(--radius-lg);
-            margin: 16px 20px;
-            padding: 14px 20px;
-            transition: var(--transition);
-        }
-
-        .jobs-banner:hover {
-            background: linear-gradient(135deg, rgba(227, 30, 36, 0.05) 0%, rgba(227, 30, 36, 0.08) 100%);
-            border-color: rgba(227, 30, 36, 0.25);
-        }
-
-        .jobs-content {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 20px;
-        }
-
-        .jobs-text h3 {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            color: var(--gray-700);
-            font-size: 16px;
-            font-weight: 600;
-            margin-bottom: 2px;
-        }
-
-        .jobs-text h3 i {
-            color: rgba(227, 30, 36, 0.7);
-            font-size: 18px;
-        }
-
-        .jobs-text p {
-            color: var(--gray-600);
-            font-size: 13px;
-        }
-
-        .jobs-btn {
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-            padding: 8px 16px;
-            background: rgba(227, 30, 36, 0.1);
-            color: var(--primary-red);
-            text-decoration: none;
-            font-size: 13px;
-            font-weight: 600;
-            border-radius: var(--radius-md);
-            transition: var(--transition);
-            white-space: nowrap;
-            border: 1px solid rgba(227, 30, 36, 0.2);
-        }
-
-        .jobs-btn:hover {
-            background: var(--primary-red);
-            color: var(--white);
-            border-color: var(--primary-red);
-        }
-
-        /* ==================== STICKY CATEGORY NAV ==================== */
-        .category-nav-wrapper {
-            position: sticky;
-            top: var(--header-height);
-            z-index: 90;
-            background: var(--white);
-            border-bottom: 1px solid var(--gray-200);
-            box-shadow: var(--shadow-sm);
-            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-            transform-origin: top;
-        }
-
-        .category-nav-wrapper.scrolled {
-            background: rgba(255, 255, 255, 0.85);
-            backdrop-filter: blur(10px);
-            -webkit-backdrop-filter: blur(10px);
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
-        }
-
-        .category-nav {
-            display: flex;
-            gap: 8px;
-            overflow-x: auto;
-            padding: 12px 20px;
-            scroll-behavior: smooth;
-            -webkit-overflow-scrolling: touch;
-            scrollbar-width: none;
-        }
-
-        .category-nav::-webkit-scrollbar {
-            display: none;
-        }
-
-        .category-nav-item {
-            padding: 10px 18px;
-            background: var(--white);
-            border: 1px solid var(--gray-200);
-            color: var(--gray-700);
-            font-size: 14px;
-            font-weight: 500;
-            border-radius: var(--radius-md);
-            cursor: pointer;
-            transition: var(--transition);
-            white-space: nowrap;
-            flex-shrink: 0;
-        }
-
-        .category-nav-item:hover {
-            border-color: var(--primary-red);
-            color: var(--primary-red);
-        }
-
-        .category-nav-item.active {
-            background: var(--primary-red);
-            border-color: var(--primary-red);
-            color: var(--white);
-        }
-
-        /* ==================== SEARCH RESULTS ==================== */
-        .search-results-header {
-            display: none;
-            align-items: center;
-            justify-content: space-between;
-            padding: 24px 20px 16px;
-            background: rgba(227, 30, 36, 0.03);
-            border-radius: var(--radius-lg);
-            margin: 24px 20px 0;
-        }
-
-        .search-results-header.active {
-            display: flex;
-        }
-
-        .search-results-info {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-        }
-
-        .search-results-icon {
-            width: 40px;
-            height: 40px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            background: var(--primary-red);
-            color: var(--white);
-            border-radius: 50%;
-            font-size: 18px;
-        }
-
-        .search-results-text h3 {
-            font-size: 18px;
-            font-weight: 700;
-            color: var(--gray-900);
-            margin-bottom: 4px;
-        }
-
-        .search-results-text p {
-            font-size: 14px;
-            color: var(--gray-600);
-        }
-
-        .search-results-text .search-query {
-            color: var(--primary-red);
-            font-weight: 600;
-        }
-
-        .search-clear-btn {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            padding: 8px 16px;
-            background: var(--white);
-            color: var(--gray-700);
-            border: 1px solid var(--gray-200);
-            border-radius: var(--radius-md);
-            font-size: 14px;
-            font-weight: 500;
-            cursor: pointer;
-            transition: var(--transition);
-        }
-
-        .search-clear-btn:hover {
-            background: var(--gray-100);
-            border-color: var(--gray-300);
-        }
-
-        .search-highlight {
-            background: rgba(227, 30, 36, 0.15);
-            color: var(--primary-red);
-            font-weight: 600;
-            padding: 1px 2px;
-            border-radius: 2px;
-        }
-
-        /* ==================== PRODUCTS SECTIONS ==================== */
-        .products-wrapper {
-            padding: 24px 0 60px;
-        }
-
-        .category-section {
-            margin-bottom: 48px;
-            scroll-margin-top: calc(var(--header-height) + var(--category-nav-height) + 20px);
-        }
-
-        .category-section.hidden {
-            display: none;
-        }
-
-        .category-section-title {
-            font-size: 32px;
-            font-weight: 700;
-            color: var(--black);
-            margin-bottom: 24px;
-            padding: 0 20px;
-        }
-
-        .products-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-            gap: 20px;
-            padding: 0 20px;
-        }
-
-        .product-card {
-            background: var(--white);
-            border-radius: var(--radius-lg);
-            overflow: hidden;
-            box-shadow: var(--shadow-sm);
-            transition: var(--transition);
-            display: flex;
-            flex-direction: column;
-            opacity: 0;
-            animation: fadeInUp 0.4s ease-out forwards;
-            cursor: pointer;
-        }
-
-        .product-card.search-hidden {
-            display: none !important;
-        }
-
-        @keyframes fadeInUp {
-            from {
-                opacity: 0;
-                transform: translateY(20px);
-            }
-            to {
-                opacity: 1;
-                transform: translateY(0);
-            }
-        }
-
-        .product-card:hover {
-            transform: translateY(-4px);
-            box-shadow: var(--shadow-md);
-        }
-
-        .product-badges {
-            position: absolute;
-            top: 10px;
-            left: 10px;
-            z-index: 10;
-            display: flex;
-            flex-direction: column;
-            gap: 6px;
-        }
-
-        .badge {
-            display: inline-flex;
-            align-items: center;
-            padding: 4px 10px;
-            font-size: 11px;
-            font-weight: 700;
-            border-radius: 6px;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }
-
-        .badge-new {
-            background: #10B981;
-            color: var(--white);
-        }
-
-        .badge-hit {
-            background: #F59E0B;
-            color: var(--white);
-        }
-
-        .product-image {
-            position: relative;
-            width: 100%;
-            height: 200px;
-            overflow: hidden;
-            background: var(--gray-100);
-        }
-
-        .product-image img {
-            width: 100%;
-            height: 100%;
-            object-fit: cover;
-            transition: var(--transition);
-        }
-
-        .product-card:hover .product-image img {
-            transform: scale(1.05);
-        }
-
-        .product-content {
-            padding: 16px;
-            flex: 1;
-            display: flex;
-            flex-direction: column;
-        }
-
-        .product-title {
-            font-size: 16px;
-            font-weight: 600;
-            color: var(--gray-900);
-            margin-bottom: 6px;
-            line-height: 1.3;
-        }
-
-        .product-description {
-            font-size: 13px;
-            color: var(--gray-600);
-            margin-bottom: 8px;
-            line-height: 1.4;
-        }
-
-        .product-weight {
-            font-size: 13px;
-            color: var(--gray-500);
-            margin-bottom: 8px;
-        }
-
-        .product-footer {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 12px;
-            margin-top: auto;
-        }
-
-        .product-price {
-            display: flex;
-            flex-direction: column;
-        }
-
-        .current-price {
-            font-size: 20px;
-            font-weight: 700;
-            color: var(--black);
-        }
-
-        .add-btn {
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            gap: 6px;
-            padding: 10px 16px;
-            background: var(--primary-red);
-            color: var(--white);
-            border: none;
-            border-radius: var(--radius-md);
-            font-size: 14px;
-            font-weight: 600;
-            cursor: pointer;
-            transition: var(--transition);
-            white-space: nowrap;
-            position: relative;
-            overflow: hidden;
-        }
-
-        .add-btn:hover:not(:disabled) {
-            background: var(--primary-red-hover);
-            transform: translateY(-1px);
-        }
-
-        .add-btn:disabled {
-            background: var(--gray-300);
-            color: var(--gray-500);
-            cursor: not-allowed;
-        }
-
-        .add-btn i {
-            font-size: 12px;
-        }
-
-        /* ==================== PRODUCT MODAL ==================== */
-        .product-modal {
-            display: none;
-            position: fixed;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            z-index: 1001;
-            align-items: center;
-            justify-content: center;
-            padding: 20px;
-            animation: fadeIn 0.3s ease;
-        }
-
-        .product-modal.active {
-            display: flex;
-        }
-
-        @keyframes fadeIn {
-            from {
-                opacity: 0;
-            }
-            to {
-                opacity: 1;
-            }
-        }
-
-        .modal-overlay {
-            position: absolute;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background: rgba(0, 0, 0, 0.6);
-            backdrop-filter: blur(5px);
-            -webkit-backdrop-filter: blur(5px);
-        }
-
-        .modal-content {
-            position: relative;
-            background: var(--white);
-            border-radius: var(--radius-xl);
-            max-width: 800px;
-            width: 100%;
-            max-height: 90vh;
-            overflow-y: auto;
-            box-shadow: var(--shadow-xl);
-            animation: slideUp 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
-            z-index: 1;
-        }
-
-        @keyframes slideUp {
-            from {
-                opacity: 0;
-                transform: translateY(50px) scale(0.9);
-            }
-            to {
-                opacity: 1;
-                transform: translateY(0) scale(1);
-            }
-        }
-
-        .modal-close {
-            position: absolute;
-            top: 16px;
-            right: 16px;
-            width: 40px;
-            height: 40px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            background: rgba(0, 0, 0, 0.5);
-            backdrop-filter: blur(10px);
-            -webkit-backdrop-filter: blur(10px);
-            border: none;
-            border-radius: 50%;
-            color: var(--white);
-            font-size: 20px;
-            cursor: pointer;
-            transition: var(--transition);
-            z-index: 10;
-        }
-
-        .modal-close:hover {
-            background: rgba(0, 0, 0, 0.7);
-            transform: rotate(90deg);
-        }
-
-        .modal-image-wrapper {
-            position: relative;
-            width: 100%;
-            height: 400px;
-            overflow: hidden;
-            border-radius: var(--radius-xl) var(--radius-xl) 0 0;
-            background: var(--gray-100);
-        }
-
-        .modal-image-wrapper img {
-            width: 100%;
-            height: 100%;
-            object-fit: cover;
-        }
-
-        .modal-badges {
-            position: absolute;
-            top: 16px;
-            left: 16px;
-            display: flex;
-            flex-direction: column;
-            gap: 8px;
-        }
-
-        .modal-body {
-            padding: 32px;
-        }
-
-        .modal-title {
-            font-size: 28px;
-            font-weight: 700;
-            color: var(--black);
-            margin-bottom: 12px;
-            line-height: 1.3;
-        }
-
-        .modal-description {
-            font-size: 16px;
-            color: var(--gray-700);
-            line-height: 1.6;
-            margin-bottom: 20px;
-        }
-
-        .modal-specs {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 16px;
-            padding: 20px;
-            background: var(--gray-50);
-            border-radius: var(--radius-lg);
-            margin-bottom: 24px;
-        }
-
-        .spec-item {
-            display: flex;
-            flex-direction: column;
-            gap: 4px;
-        }
-
-        .spec-label {
-            font-size: 13px;
-            color: var(--gray-500);
-            font-weight: 500;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }
-
-        .spec-value {
-            font-size: 16px;
-            color: var(--gray-900);
-            font-weight: 600;
-        }
-
-        .modal-quantity {
-            display: flex;
-            align-items: center;
-            gap: 16px;
-            margin-bottom: 24px;
-            padding: 20px;
-            background: var(--gray-50);
-            border-radius: var(--radius-lg);
-        }
-
-        .quantity-label {
-            font-size: 16px;
-            font-weight: 600;
-            color: var(--gray-900);
-        }
-
-        .quantity-controls {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-        }
-
-        .quantity-btn {
-            width: 36px;
-            height: 36px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            background: var(--white);
-            border: 2px solid var(--gray-200);
-            border-radius: var(--radius-md);
-            cursor: pointer;
-            transition: var(--transition);
-            font-size: 18px;
-            font-weight: 600;
-            color: var(--gray-700);
-        }
-
-        .quantity-btn:hover {
-            border-color: var(--primary-red);
-            color: var(--primary-red);
-            background: var(--white);
-        }
-
-        .quantity-btn:active {
-            transform: scale(0.95);
-        }
-
-        .quantity-value {
-            min-width: 60px;
-            text-align: center;
-            font-size: 20px;
-            font-weight: 700;
-            color: var(--gray-900);
-        }
-
-        .modal-footer {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 20px;
-            padding-top: 24px;
-            border-top: 2px solid var(--gray-200);
-        }
-
-        .modal-price-wrapper {
-            display: flex;
-            flex-direction: column;
-            gap: 4px;
-        }
-
-        .modal-price-label {
-            font-size: 13px;
-            color: var(--gray-500);
-            font-weight: 500;
-        }
-
-        .modal-price {
-            font-size: 32px;
-            font-weight: 700;
-            color: var(--primary-red);
-        }
-
-        .modal-add-btn {
-            flex: 1;
-            max-width: 300px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 10px;
-            padding: 16px 32px;
-            background: var(--primary-red);
-            color: var(--white);
-            border: none;
-            border-radius: var(--radius-lg);
-            font-size: 16px;
-            font-weight: 700;
-            cursor: pointer;
-            transition: var(--transition);
-        }
-
-        .modal-add-btn:hover:not(:disabled) {
-            background: var(--primary-red-hover);
-            transform: translateY(-2px);
-            box-shadow: var(--shadow-lg);
-        }
-
-        .modal-add-btn:disabled {
-            background: var(--gray-300);
-            color: var(--gray-500);
-            cursor: not-allowed;
-        }
-
-        .modal-add-btn i {
-            font-size: 18px;
-        }
-
-        /* No Products */
-        .no-products {
-            text-align: center;
-            padding: 60px 20px;
-        }
-
-        .no-products-icon {
-            font-size: 64px;
-            margin-bottom: 20px;
-        }
-
-        .no-products h3 {
-            font-size: 24px;
-            font-weight: 700;
-            color: var(--gray-900);
-            margin-bottom: 12px;
-        }
-
-        .no-products p {
-            font-size: 16px;
-            color: var(--gray-600);
-            margin-bottom: 24px;
-            line-height: 1.6;
-        }
-
-        .retry-btn {
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-            padding: 12px 24px;
-            background: var(--primary-red);
-            color: var(--white);
-            border: none;
-            border-radius: var(--radius-md);
-            font-size: 15px;
-            font-weight: 600;
-            cursor: pointer;
-            transition: var(--transition);
-            text-decoration: none;
-        }
-
-        .retry-btn:hover {
-            background: var(--primary-red-hover);
-            transform: translateY(-2px);
-        }
-
-        /* ==================== CART SIDEBAR ==================== */
-        .cart-sidebar {
-            position: fixed;
-            top: 0;
-            right: 0;
-            bottom: 0;
-            width: 100%;
-            max-width: 440px;
-            z-index: 1000;
-            pointer-events: none;
-        }
-
-        .cart-sidebar.active {
-            pointer-events: all;
-        }
-
-        .cart-overlay {
-            position: fixed;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background: rgba(0, 0, 0, 0.5);
-            opacity: 0;
-            transition: opacity 0.3s ease;
-            pointer-events: none;
-        }
-
-        .cart-sidebar.active .cart-overlay {
-            opacity: 1;
-            pointer-events: all;
-        }
-
-        .cart-panel {
-            position: absolute;
-            top: 0;
-            right: 0;
-            bottom: 0;
-            width: 100%;
-            background: var(--white);
-            display: flex;
-            flex-direction: column;
-            transform: translateX(100%);
-            transition: transform 0.3s ease;
-            box-shadow: var(--shadow-xl);
-        }
-
-        .cart-sidebar.active .cart-panel {
-            transform: translateX(0);
-        }
-
-        .cart-header {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 20px;
-            border-bottom: 1px solid var(--gray-200);
-        }
-
-        .cart-header h3 {
-            font-size: 20px;
-            font-weight: 700;
-            color: var(--black);
-        }
-
-        .cart-close {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            width: 36px;
-            height: 36px;
-            background: var(--gray-100);
-            border: none;
-            border-radius: var(--radius-sm);
-            color: var(--gray-600);
-            cursor: pointer;
-            transition: var(--transition);
-        }
-
-        .cart-close:hover {
-            background: var(--gray-200);
-            color: var(--gray-900);
-        }
-
-        .cart-body {
-            flex: 1;
-            overflow-y: auto;
-            padding: 20px;
-        }
-
-        .cart-empty {
-            text-align: center;
-            padding: 40px 20px;
-        }
-
-        .empty-icon {
-            font-size: 64px;
-            margin-bottom: 16px;
-        }
-
-        .cart-empty h4 {
-            font-size: 20px;
-            font-weight: 700;
-            color: var(--gray-900);
-            margin-bottom: 8px;
-        }
-
-        .cart-empty p {
-            font-size: 15px;
-            color: var(--gray-600);
-            margin-bottom: 24px;
-        }
-
-        .continue-btn {
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-            padding: 10px 20px;
-            background: var(--gray-100);
-            color: var(--gray-700);
-            border: none;
-            border-radius: var(--radius-md);
-            font-size: 14px;
-            font-weight: 600;
-            cursor: pointer;
-            transition: var(--transition);
-        }
-
-        .continue-btn:hover {
-            background: var(--gray-200);
-        }
-
-        .cart-items {
-            display: flex;
-            flex-direction: column;
-            gap: 12px;
-        }
-
-        .cart-item {
-            display: flex;
-            gap: 12px;
-            padding: 12px;
-            background: var(--gray-50);
-            border-radius: var(--radius-md);
-        }
-
-        .cart-item-image {
-            width: 70px;
-            height: 70px;
-            border-radius: var(--radius-sm);
-            object-fit: cover;
-            flex-shrink: 0;
-        }
-
-        .cart-item-details {
-            flex: 1;
-            display: flex;
-            flex-direction: column;
-            gap: 4px;
-        }
-
-        .cart-item-name {
-            font-size: 14px;
-            font-weight: 600;
-            color: var(--gray-900);
-        }
-
-        .cart-item-price {
-            font-size: 15px;
-            font-weight: 700;
-            color: var(--primary-red);
-        }
-
-        .cart-item-controls {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            margin-top: auto;
-        }
-
-        .qty-btn {
-            width: 28px;
-            height: 28px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            background: var(--white);
-            border: 1px solid var(--gray-200);
-            border-radius: 6px;
-            cursor: pointer;
-            transition: var(--transition);
-            font-size: 14px;
-            font-weight: 600;
-            color: var(--gray-700);
-        }
-
-        .qty-btn:hover {
-            border-color: var(--primary-red);
-            color: var(--primary-red);
-        }
-
-        .qty-input {
-            width: 40px;
-            height: 28px;
-            text-align: center;
-            border: 1px solid var(--gray-200);
-            border-radius: 6px;
-            font-weight: 600;
-            font-size: 14px;
-        }
-
-        .cart-item-remove {
-            margin-left: auto;
-            width: 28px;
-            height: 28px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            background: transparent;
-            border: none;
-            color: var(--gray-400);
-            cursor: pointer;
-            transition: var(--transition);
-            font-size: 16px;
-        }
-
-        .cart-item-remove:hover {
-            color: var(--primary-red);
-        }
-
-        .cart-item-total {
-            font-size: 16px;
-            font-weight: 700;
-            color: var(--gray-900);
-            white-space: nowrap;
-        }
-
-        .cart-footer {
-            border-top: 1px solid var(--gray-200);
-            padding: 20px;
-        }
-
-        .cart-summary {
-            margin-bottom: 16px;
-        }
-
-        .summary-row {
-            display: flex;
-            justify-content: space-between;
-            padding: 8px 0;
-            font-size: 14px;
-            color: var(--gray-700);
-        }
-
-        .summary-row.total {
-            padding-top: 12px;
-            border-top: 2px solid var(--gray-200);
-            font-size: 18px;
-            font-weight: 700;
-            color: var(--black);
-        }
-
-        .delivery-info {
-            margin-top: 12px;
-            padding: 10px;
-            background: rgba(227, 30, 36, 0.05);
-            border-radius: var(--radius-sm);
-            text-align: center;
-        }
-
-        .delivery-info small {
-            font-size: 13px;
-            color: var(--primary-red);
-            font-weight: 500;
-        }
-
-        .cart-actions {
-            display: flex;
-            gap: 10px;
-        }
-
-        .clear-cart-btn {
-            flex: 1;
-            padding: 12px;
-            background: var(--gray-100);
-            color: var(--gray-700);
-            border: none;
-            border-radius: var(--radius-md);
-            font-size: 14px;
-            font-weight: 600;
-            cursor: pointer;
-            transition: var(--transition);
-        }
-
-        .clear-cart-btn:hover {
-            background: var(--gray-200);
-        }
-
-        .checkout-btn {
-            flex: 2;
-            padding: 12px;
-            background: var(--primary-red);
-            color: var(--white);
-            border: none;
-            border-radius: var(--radius-md);
-            font-size: 14px;
-            font-weight: 600;
-            cursor: pointer;
-            transition: var(--transition);
-        }
-
-        .checkout-btn:hover {
-            background: var(--primary-red-hover);
-            transform: translateY(-1px);
-        }
-
-        /* ==================== FOOTER ==================== */
-        .footer {
-            background: var(--gray-900);
-            color: var(--gray-300);
-            padding: 48px 0 24px;
-        }
-
-        .footer-content {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-            gap: 32px;
-            margin-bottom: 32px;
-        }
-
-        .footer-section h4 {
-            font-size: 16px;
-            font-weight: 700;
-            color: var(--white);
-            margin-bottom: 16px;
-        }
-
-        .footer-logo {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            margin-bottom: 12px;
-        }
-
-        .footer-logo .logo-image {
-            height: 36px;
-            width: 36px;
-        }
-
-        .footer-logo .logo-emoji {
-            font-size: 28px;
-        }
-
-        .footer-logo .logo-text {
-            font-size: 18px;
-            font-weight: 700;
-            color: var(--white);
-        }
-
-        .footer-description {
-            font-size: 14px;
-            line-height: 1.6;
-            margin-bottom: 12px;
-        }
-
-        .footer-address {
-            display: flex;
-            gap: 8px;
-            font-size: 14px;
-            line-height: 1.6;
-        }
-
-        .footer-links {
-            list-style: none;
-        }
-
-        .footer-links li {
-            margin-bottom: 10px;
-        }
-
-        .footer-links a {
-            color: var(--gray-300);
-            text-decoration: none;
-            font-size: 14px;
-            transition: var(--transition);
-        }
-
-        .footer-links a:hover {
-            color: var(--white);
-        }
-
-        .social-links {
-            display: flex;
-            gap: 10px;
-        }
-
-        .social-link {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            width: 40px;
-            height: 40px;
-            background: var(--gray-800);
-            color: var(--gray-300);
-            border-radius: var(--radius-md);
-            transition: var(--transition);
-            text-decoration: none;
-        }
-
-        .social-link:hover {
-            background: var(--primary-red);
-            color: var(--white);
-        }
-
-        .contact-info {
-            display: flex;
-            flex-direction: column;
-            gap: 12px;
-        }
-
-        .contact-item {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            font-size: 14px;
-        }
-
-        .contact-item i {
-            width: 18px;
-            color: var(--primary-red);
-        }
-
-        .contact-item a {
-            color: var(--gray-300);
-            text-decoration: none;
-            transition: var(--transition);
-        }
-
-        .contact-item a:hover {
-            color: var(--white);
-        }
-
-        .vk-widget-container {
-            margin-top: 16px;
-        }
-
-        .delivery-zones {
-            margin-top: 32px;
-            padding-top: 32px;
-            border-top: 1px solid var(--gray-800);
-        }
-
-        .delivery-zones h4 {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            font-size: 18px;
-            font-weight: 700;
-            color: var(--white);
-            margin-bottom: 20px;
-        }
-
-        .zone-map {
-            margin-bottom: 20px;
-            border-radius: var(--radius-lg);
-            overflow: hidden;
-        }
-
-        .zones-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-            gap: 16px;
-        }
-
-        .zone-card {
-            padding: 16px;
-            border-radius: var(--radius-md);
-            border-left: 4px solid;
-        }
-
-        .zone-card.green {
-            background: rgba(16, 185, 129, 0.1);
-            border-color: #10B981;
-        }
-
-        .zone-card.yellow {
-            background: rgba(245, 158, 11, 0.1);
-            border-color: #F59E0B;
-        }
-
-        .zone-card.red {
-            background: rgba(239, 68, 68, 0.1);
-            border-color: #EF4444;
-        }
-
-        .zone-card h5 {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            font-size: 15px;
-            font-weight: 700;
-            color: var(--white);
-            margin-bottom: 8px;
-        }
-
-        .zone-card.green h5 i {
-            color: #10B981;
-        }
-
-        .zone-card.yellow h5 i {
-            color: #F59E0B;
-        }
-
-        .zone-card.red h5 i {
-            color: #EF4444;
-        }
-
-        .zone-card p {
-            font-size: 13px;
-            line-height: 1.5;
-        }
-
-        .footer-bottom {
-            padding-top: 24px;
-            border-top: 1px solid var(--gray-800);
-            text-align: center;
-        }
-
-        .footer-bottom p {
-            font-size: 13px;
-            color: var(--gray-400);
-        }
-
-        /* ==================== RESPONSIVE ==================== */
-        @media (max-width: 1024px) {
-            .header-nav {
-                display: none;
-            }
-
-            .search-input {
-                width: 180px;
-            }
-
-            .products-grid {
-                grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-                gap: 16px;
-            }
-        }
-
-        @media (max-width: 768px) {
-            :root {
-                --header-height: 60px;
-            }
-
-            .container {
-                padding: 0 16px;
-            }
-
-            .header-wrapper {
-                gap: 10px;
-            }
-
-            .logo-text {
-                font-size: 18px;
-            }
-
-            .header-social,
-            .search-container {
-                display: none;
-            }
-
-            .mobile-toggle {
-                display: flex;
-            }
-
-            .header-actions {
-                gap: 8px;
-            }
-
-            .user-name {
-                max-width: 80px;
-            }
-
-            .cart-btn {
-                padding: 8px 12px;
-                font-size: 13px;
-            }
-
-            .cart-info {
-                display: none;
-            }
-
-            .jobs-banner {
-                margin: 12px 16px;
-                padding: 12px 16px;
-            }
-
-            .jobs-content {
-                flex-direction: column;
-                text-align: center;
-                gap: 12px;
-            }
-
-            .jobs-text h3 {
-                font-size: 15px;
-                justify-content: center;
-            }
-
-            .jobs-text p {
-                font-size: 12px;
-            }
-
-            .jobs-btn {
-                width: 100%;
-                justify-content: center;
-                font-size: 12px;
-            }
-
-            .search-results-header {
-                flex-direction: column;
-                align-items: stretch;
-                gap: 12px;
-            }
-
-            .search-results-info {
-                flex-direction: column;
-                align-items: flex-start;
-            }
-
-            .category-section-title {
-                font-size: 24px;
-                padding: 0 16px;
-            }
-
-            .products-grid {
-                grid-template-columns: 1fr;
-                gap: 12px;
-                padding: 0 16px;
-            }
-
-            .product-card {
-                display: flex;
-                flex-direction: row;
-                border-radius: var(--radius-md);
-                width: 100%;
-            }
-
-            .product-image {
-                width: 110px;
-                height: 110px;
-                flex-shrink: 0;
-            }
-
-            .product-content {
-                padding: 12px;
-                width: 100%;
-            }
-
-            .product-title {
-                font-size: 14px;
-                margin-bottom: 4px;
-            }
-
-            .product-description {
-                font-size: 12px;
-                margin-bottom: 4px;
-            }
-
-            .product-weight {
-                font-size: 11px;
-                margin-bottom: 4px;
-            }
-
-            .product-footer {
-                flex-direction: row;
-                align-items: center;
-                gap: 8px;
-            }
-
-            .current-price {
-                font-size: 16px;
-            }
-
-            .add-btn {
-                padding: 6px 12px;
-                font-size: 12px;
-                flex-shrink: 0;
-            }
-
-            .product-badges {
-                top: 6px;
-                left: 6px;
-                gap: 4px;
-            }
-
-            .badge {
-                padding: 2px 6px;
-                font-size: 9px;
-            }
-
-            .modal-image-wrapper {
-                height: 300px;
-            }
-
-            .modal-body {
-                padding: 24px 20px;
-            }
-
-            .modal-title {
-                font-size: 24px;
-            }
-
-            .modal-description {
-                font-size: 15px;
-            }
-
-            .modal-specs {
-                grid-template-columns: 1fr 1fr;
-                gap: 12px;
-                padding: 16px;
-            }
-
-            .modal-quantity {
-                padding: 16px;
-            }
-
-            .modal-footer {
-                flex-direction: column;
-                align-items: stretch;
-            }
-
-            .modal-add-btn {
-                max-width: 100%;
-            }
-
-            .cart-sidebar {
-                max-width: 100%;
-            }
-
-            .cart-panel {
-                max-width: 100%;
-            }
-
-            .cart-item {
-                padding: 10px;
-            }
-
-            .cart-item-image {
-                width: 60px;
-                height: 60px;
-            }
-
-            .cart-item-name {
-                font-size: 13px;
-            }
-
-            .cart-item-price {
-                font-size: 14px;
-            }
-
-            .footer-content {
-                grid-template-columns: 1fr;
-                gap: 24px;
-            }
-
-            .zones-grid {
-                grid-template-columns: 1fr;
-                gap: 12px;
-            }
-        }
-
-        @media (max-width: 480px) {
-            .logo-text {
-                display: none;
-            }
-
-            .cart-btn {
-                padding: 8px 10px;
-            }
-
-            .cart-badge {
-                min-width: 18px;
-                height: 18px;
-                font-size: 10px;
-            }
-
-            .jobs-text h3 {
-                font-size: 14px;
-            }
-
-            .category-section-title {
-                font-size: 20px;
-            }
-
-            .product-image {
-                width: 90px;
-                height: 90px;
-            }
-
-            .product-title {
-                font-size: 13px;
-            }
-
-            .current-price {
-                font-size: 15px;
-            }
-
-            .modal-image-wrapper {
-                height: 250px;
-            }
-
-            .modal-body {
-                padding: 20px 16px;
-            }
-
-            .modal-title {
-                font-size: 20px;
-            }
-
-            .modal-specs {
-                grid-template-columns: 1fr;
-            }
-
-            .modal-price {
-                font-size: 28px;
-            }
-        }
-    </style>
-</head>
-<body>
-    <!-- Header -->
-    <header class="header" id="mainHeader">
-        <div class="container">
-            <div class="header-wrapper">
-                <!-- Logo -->
-                <div class="header-logo">
-                    <a href="/" class="logo">
-                        <?php if ($logoUrl): ?>
-                        <img src="<?= safe_output($logoUrl) ?>?v=<?= time() ?>" alt="<?= safe_output($siteSettings['site_name']) ?>" class="logo-image">
-                        <?php else: ?>
-                        <span class="logo-emoji">🍣</span>
-                        <?php endif; ?>
-                        <span class="logo-text"><?= safe_output($siteSettings['site_name']) ?></span>
-                    </a>
-                </div>
-
-                <!-- Navigation -->
-                <nav class="header-nav">
-                    <a href="/" class="nav-link active">Меню</a>
-                    <a href="/pages/promotions.php" class="nav-link">Акции</a>
-                    <a href="/pages/delivery.php" class="nav-link">Доставка</a>
-                    <a href="/pages/payment.php" class="nav-link">Оплата</a>
-                    <a href="/pages/contacts.php" class="nav-link">Контакты</a>
-                </nav>
-
-                <!-- Actions -->
-                <div class="header-actions">
-                    <!-- Social Links -->
-                    <div class="header-social">
-                        <a href="<?= safe_output($siteSettings['vk_link']) ?>" target="_blank" rel="noopener" aria-label="VK">
-                            <i class="fab fa-vk"></i>
-                        </a>
-                        <?php if (!empty($siteSettings['telegram_link'])): ?>
-                        <a href="<?= safe_output($siteSettings['telegram_link']) ?>" target="_blank" rel="noopener" aria-label="Telegram">
-                            <i class="fab fa-telegram"></i>
-                        </a>
-                        <?php endif; ?>
-                    </div>
-
-                    <!-- Search -->
-                    <div class="search-container">
-                        <input type="text" class="search-input" placeholder="Поиск..." id="searchInput" autocomplete="off">
-                        <span class="search-clear" id="searchClear">×</span>
-                        <i class="fas fa-search search-icon"></i>
-                    </div>
-
-                    <!-- Auth Button / User Profile -->
-                    <?php if ($isLoggedIn): ?>
-                    <div class="user-profile" tabindex="0">
-                        <div class="user-avatar">
-                            <?= strtoupper(mb_substr($customerName, 0, 1)) ?>
-                        </div>
-                        <span class="user-name"><?= safe_output($customerName) ?></span>
-                        <i class="fas fa-chevron-down" style="font-size: 12px;"></i>
-
-                        <div class="user-dropdown">
-                            <a href="/pages/account.php" class="dropdown-item">
-                                <i class="fas fa-user"></i>
-                                <span>Личный кабинет</span>
-                            </a>
-                            <a href="/pages/account.php?tab=orders" class="dropdown-item">
-                                <i class="fas fa-shopping-bag"></i>
-                                <span>Мои заказы</span>
-                            </a>
-                            <a href="/pages/account.php?tab=bonuses" class="dropdown-item">
-                                <i class="fas fa-star"></i>
-                                <span>Бонусы</span>
-                            </a>
-                            <div class="dropdown-divider"></div>
-                            <a href="/pages/login.php?action=logout" class="dropdown-item">
-                                <i class="fas fa-sign-out-alt"></i>
-                                <span>Выйти</span>
-                            </a>
-                        </div>
-                    </div>
-                    <?php else: ?>
-                    <a href="/pages/login.php" class="auth-btn">
-                        <i class="fas fa-user"></i>
-                        <span>Войти</span>
-                    </a>
-                    <?php endif; ?>
-
-                    <!-- Cart -->
-                    <button class="cart-btn" id="cartBtn">
-                        <i class="fas fa-shopping-cart"></i>
-                        <span class="cart-badge" id="cartCount">0</span>
-                        <div class="cart-info">
-                            <span class="cart-total" id="cartTotal">0 ₽</span>
-                        </div>
-                    </button>
-
-                    <!-- Mobile menu toggle -->
-                    <button class="mobile-toggle" id="mobileToggle">
-                        <span></span>
-                        <span></span>
-                        <span></span>
-                    </button>
-                </div>
-            </div>
-        </div>
-    </header>
-
-    <!-- Mobile Menu -->
-    <div class="mobile-menu" id="mobileMenu">
-        <div class="mobile-menu-section">
-            <h3>Меню</h3>
-            <a href="/" class="mobile-nav-link active">
-                <i class="fas fa-utensils"></i>
-                <span>Все меню</span>
-            </a>
-            <a href="/pages/promotions.php" class="mobile-nav-link">
-                <i class="fas fa-gift"></i>
-                <span>Акции</span>
-            </a>
-            <a href="/pages/delivery.php" class="mobile-nav-link">
-                <i class="fas fa-truck"></i>
-                <span>Доставка</span>
-            </a>
-            <a href="/pages/payment.php" class="mobile-nav-link">
-                <i class="fas fa-credit-card"></i>
-                <span>Оплата</span>
-            </a>
-            <a href="/pages/contacts.php" class="mobile-nav-link">
-                <i class="fas fa-phone"></i>
-                <span>Контакты</span>
-            </a>
-        </div>
-
-        <div class="mobile-menu-section">
-            <h3>Аккаунт</h3>
-            <?php if ($isLoggedIn): ?>
-            <a href="/pages/account.php" class="mobile-nav-link">
-                <i class="fas fa-user"></i>
-                <span><?= safe_output($customerName) ?></span>
-            </a>
-            <a href="/pages/account.php?tab=orders" class="mobile-nav-link">
-                <i class="fas fa-shopping-bag"></i>
-                <span>Мои заказы</span>
-            </a>
-            <a href="/pages/account.php?tab=bonuses" class="mobile-nav-link">
-                <i class="fas fa-star"></i>
-                <span>Бонусы</span>
-            </a>
-            <a href="/pages/login.php?action=logout" class="mobile-nav-link">
-                <i class="fas fa-sign-out-alt"></i>
-                <span>Выйти</span>
-            </a>
-            <?php else: ?>
-            <a href="/pages/login.php" class="mobile-nav-link">
-                <i class="fas fa-sign-in-alt"></i>
-                <span>Войти</span>
-            </a>
-            <?php endif; ?>
-        </div>
-
-        <div class="mobile-menu-section">
-            <h3>Социальные сети</h3>
-            <a href="<?= safe_output($siteSettings['vk_link']) ?>" target="_blank" class="mobile-nav-link">
-                <i class="fab fa-vk"></i>
-                <span>ВКонтакте</span>
-            </a>
-            <?php if (!empty($siteSettings['telegram_link'])): ?>
-            <a href="<?= safe_output($siteSettings['telegram_link']) ?>" target="_blank" class="mobile-nav-link">
-                <i class="fab fa-telegram"></i>
-                <span>Telegram</span>
-            </a>
-            <?php endif; ?>
-        </div>
-    </div>
-
-    <!-- Jobs Banner (управляемый из админки) -->
-    <?php if ($siteSettings['show_jobs_banner'] ?? true): ?>
-    <section class="container">
-        <div class="jobs-banner">
-            <div class="jobs-content">
-                <div class="jobs-text">
-                    <h3>
-                        <i class="fas fa-users"></i>
-                        <?= safe_output($siteSettings['jobs_banner_title'] ?? 'Требуются работники') ?>
-                    </h3>
-                    <p><?= safe_output($siteSettings['jobs_banner_text'] ?? 'Официальное оформление. Стабильная зарплата!') ?></p>
-                </div>
-                <a href="<?= safe_output($siteSettings['jobs_banner_link'] ?? 'https://forms.yandex.ru/cloud/65d07d1ac09c024b01bf6adb/') ?>" target="_blank" class="jobs-btn">
-                    <i class="fas fa-file-alt"></i>
-                    Заполнить анкету
-                </a>
-            </div>
-        </div>
-    </section>
-    <?php endif; ?>
-
-    <!-- Sticky Category Navigation -->
-    <div class="category-nav-wrapper" id="categoryNav">
-        <div class="container">
-            <nav class="category-nav" id="categoryNavScroll">
-                <button class="category-nav-item active" data-category="all">
-                    Все
-                </button>
-                <?php if (!empty($newProducts)): ?>
-                <button class="category-nav-item" data-category="new">
-                    ✨ Новинки
-                </button>
-                <?php endif; ?>
-                <?php if (!empty($popularProducts)): ?>
-                <button class="category-nav-item" data-category="popular">
-                    🔥 Популярное
-                </button>
-                <?php endif; ?>
-                <?php foreach ($categories as $category): ?>
-                <button class="category-nav-item" data-category="<?= $category['id'] ?>">
-                    <?= safe_output($category['name']) ?>
-                </button>
-                <?php endforeach; ?>
-            </nav>
-        </div>
-    </div>
-
-    <!-- Search Results Header -->
-    <div class="search-results-header" id="searchResultsHeader">
-        <div class="search-results-info">
-            <div class="search-results-icon">
-                <i class="fas fa-search"></i>
-            </div>
-            <div class="search-results-text">
-                <h3>Результаты поиска</h3>
-                <p>Найдено товаров: <span id="searchResultsCount">0</span> по запросу "<span class="search-query" id="searchQueryText"></span>"</p>
-            </div>
-        </div>
-        <button class="search-clear-btn" id="searchClearResults">
-            <i class="fas fa-times"></i>
-            Очистить поиск
-        </button>
-    </div>
-
-    <!-- Products by Categories -->
-    <div class="products-wrapper">
-        <div class="container">
-            <?php if (!empty($allProducts)): ?>
-
-                <?php
-                // ✅ ID товаров, показанных в виртуальных категориях
-                $shownInVirtual = [];
-                ?>
-
-                <!-- ✨ НОВИНКИ (ВИРТУАЛЬНАЯ КАТЕГОРИЯ) -->
-                <?php if (!empty($newProducts)): ?>
-                <section class="category-section" id="section-new" data-category="new">
-                    <h2 class="category-section-title">✨ Новинки</h2>
-                    <div class="products-grid">
-                        <?php foreach ($newProducts as $product): 
-                            $shownInVirtual[] = $product['id']; // Запоминаем ID
-                        ?>
-                        <div class="product-card" 
-                             data-product-id="<?= safe_output($product['id']) ?>"
-                             data-product-name="<?= safe_output($product['name']) ?>"
-                             data-product-price="<?= safe_output($product['price']) ?>"
-                             data-product-image="<?= getProductImage($product) ?>"
-                             data-product-description="<?= safe_output($product['description'] ?? '') ?>"
-                             data-product-weight="<?= safe_output($product['weight'] ?? '') ?>"
-                             data-product-composition="<?= safe_output($product['composition'] ?? '') ?>"
-                             data-product-stock="<?= safe_output($product['stock'] ?? '') ?>"
-                             data-product-unlimited-stock="<?= ($product['unlimited_stock'] ?? false) ? '1' : '0' ?>"
-                             data-product-is-new="1"
-                             data-product-external-id="<?= safe_output($product['external_id'] ?? '') ?>"
-                             data-search-text="<?= strtolower(safe_output($product['name'] . ' ' . ($product['composition'] ?? '') . ' ' . ($product['description'] ?? ''))) ?>">
-                            <div class="product-image">
-                                <div class="product-badges">
-                                    <span class="badge badge-new">Новинка</span>
-                                </div>
-                                <img src="<?= getProductImage($product) ?>" alt="<?= safe_output($product['name']) ?>" loading="lazy">
-                            </div>
-                            <div class="product-content">
-                                <h3 class="product-title"><?= safe_output($product['name']) ?></h3>
-                                <?php if (!empty($product['composition'])): ?>
-                                <p class="product-description"><?= safe_output(mb_substr($product['composition'], 0, 60)) ?><?= mb_strlen($product['composition']) > 60 ? '...' : '' ?></p>
-                                <?php elseif (!empty($product['description'])): ?>
-                                <p class="product-description"><?= safe_output(mb_substr($product['description'], 0, 60)) ?><?= mb_strlen($product['description']) > 60 ? '...' : '' ?></p>
-                                <?php endif; ?>
-                                <?php if (!empty($product['weight'])): ?>
-                                <div class="product-weight"><?= safe_output($product['weight']) ?> г</div>
-                                <?php endif; ?>
-                                <div class="product-footer">
-                                    <div class="product-price">
-                                        <span class="current-price"><?= number_format($product['price'], 0, ',', ' ') ?> ₽</span>
-                                    </div>
-                                    <button class="add-btn add-to-cart-btn" 
-                                            data-product-id="<?= safe_output($product['id']) ?>"
-                                            data-product-name="<?= safe_output($product['name']) ?>"
-                                            data-product-price="<?= safe_output($product['price']) ?>"
-                                            data-product-image="<?= getProductImage($product) ?>"
-                                            onclick="event.stopPropagation()">
-                                        <i class="fas fa-plus"></i> В корзину
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
-                        <?php endforeach; ?>
-                    </div>
-                </section>
-                <?php endif; ?>
-
-                <!-- 🔥 ПОПУЛЯРНОЕ (ВИРТУАЛЬНАЯ КАТЕГОРИЯ) -->
-                <?php if (!empty($popularProducts)): ?>
-                <section class="category-section" id="section-popular" data-category="popular">
-                    <h2 class="category-section-title">🔥 Популярное</h2>
-                    <div class="products-grid">
-                        <?php foreach ($popularProducts as $product): 
-                            $shownInVirtual[] = $product['id']; // Запоминаем ID
-                        ?>
-                        <div class="product-card" 
-                             data-product-id="<?= safe_output($product['id']) ?>"
-                             data-product-name="<?= safe_output($product['name']) ?>"
-                             data-product-price="<?= safe_output($product['price']) ?>"
-                             data-product-image="<?= getProductImage($product) ?>"
-                             data-product-description="<?= safe_output($product['description'] ?? '') ?>"
-                             data-product-weight="<?= safe_output($product['weight'] ?? '') ?>"
-                             data-product-composition="<?= safe_output($product['composition'] ?? '') ?>"
-                             data-product-stock="<?= safe_output($product['stock'] ?? '') ?>"
-                             data-product-unlimited-stock="<?= ($product['unlimited_stock'] ?? false) ? '1' : '0' ?>"
-                             data-product-is-popular="1"
-                             data-product-external-id="<?= safe_output($product['external_id'] ?? '') ?>"
-                             data-search-text="<?= strtolower(safe_output($product['name'] . ' ' . ($product['composition'] ?? '') . ' ' . ($product['description'] ?? ''))) ?>">
-                            <div class="product-image">
-                                <div class="product-badges">
-                                    <span class="badge badge-hit">Хит</span>
-                                </div>
-                                <img src="<?= getProductImage($product) ?>" alt="<?= safe_output($product['name']) ?>" loading="lazy">
-                            </div>
-                            <div class="product-content">
-                                <h3 class="product-title"><?= safe_output($product['name']) ?></h3>
-                                <?php if (!empty($product['composition'])): ?>
-                                <p class="product-description"><?= safe_output(mb_substr($product['composition'], 0, 60)) ?><?= mb_strlen($product['composition']) > 60 ? '...' : '' ?></p>
-                                <?php elseif (!empty($product['description'])): ?>
-                                <p class="product-description"><?= safe_output(mb_substr($product['description'], 0, 60)) ?><?= mb_strlen($product['description']) > 60 ? '...' : '' ?></p>
-                                <?php endif; ?>
-                                <?php if (!empty($product['weight'])): ?>
-                                <div class="product-weight"><?= safe_output($product['weight']) ?> г</div>
-                                <?php endif; ?>
-                                <div class="product-footer">
-                                    <div class="product-price">
-                                        <span class="current-price"><?= number_format($product['price'], 0, ',', ' ') ?> ₽</span>
-                                    </div>
-                                    <button class="add-btn add-to-cart-btn" 
-                                            data-product-id="<?= safe_output($product['id']) ?>"
-                                            data-product-name="<?= safe_output($product['name']) ?>"
-                                            data-product-price="<?= safe_output($product['price']) ?>"
-                                            data-product-image="<?= getProductImage($product) ?>"
-                                            onclick="event.stopPropagation()">
-                                        <i class="fas fa-plus"></i> В корзину
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
-                        <?php endforeach; ?>
-                    </div>
-                </section>
-                <?php endif; ?>
-
-                <!-- 📁 РЕАЛЬНЫЕ КАТЕГОРИИ (ПО РОДИТЕЛЮ ИЗ 1С) -->
-                <?php foreach ($categories as $category): 
-                    // ✅ Берём только товары этой категории, которые НЕ были показаны выше
-                    $categoryProducts = array_filter($allProducts, function($p) use ($category, $shownInVirtual) {
-                        $belongsToCategory = ($p['category_id'] ?? 0) == $category['id'];
-                        $notShownYet = !in_array($p['id'], $shownInVirtual);
-                        return $belongsToCategory && $notShownYet;
-                    });
-
-                    // Если нет товаров - пропускаем категорию
-                    if (empty($categoryProducts)) continue;
-
-                    $categoryProducts = array_values($categoryProducts);
-                ?>
-                <section class="category-section" id="section-<?= $category['id'] ?>" data-category="<?= $category['id'] ?>">
-                    <h2 class="category-section-title"><?= safe_output($category['name']) ?></h2>
-                    <div class="products-grid">
-                        <?php foreach ($categoryProducts as $product): ?>
-                        <div class="product-card" 
-                             data-product-id="<?= safe_output($product['id']) ?>"
-                             data-product-name="<?= safe_output($product['name']) ?>"
-                             data-product-price="<?= safe_output($product['price']) ?>"
-                             data-product-image="<?= getProductImage($product) ?>"
-                             data-product-description="<?= safe_output($product['description'] ?? '') ?>"
-                             data-product-weight="<?= safe_output($product['weight'] ?? '') ?>"
-                             data-product-composition="<?= safe_output($product['composition'] ?? '') ?>"
-                             data-product-stock="<?= safe_output($product['stock'] ?? '') ?>"
-                             data-product-unlimited-stock="<?= ($product['unlimited_stock'] ?? false) ? '1' : '0' ?>"
-                             data-product-is-new="<?= ($product['is_new'] ?? false) ? '1' : '0' ?>"
-                             data-product-is-popular="<?= ($product['is_popular'] ?? false) ? '1' : '0' ?>"
-                             data-product-external-id="<?= safe_output($product['external_id'] ?? '') ?>"
-                             data-search-text="<?= strtolower(safe_output($product['name'] . ' ' . ($product['composition'] ?? '') . ' ' . ($product['description'] ?? ''))) ?>">
-                            <div class="product-image">
-                                <?php if (($product['is_new'] ?? false) || ($product['is_popular'] ?? false)): ?>
-                                <div class="product-badges">
-                                    <?php if ($product['is_new'] ?? false): ?>
-                                    <span class="badge badge-new">Новинка</span>
-                                    <?php endif; ?>
-                                    <?php if ($product['is_popular'] ?? false): ?>
-                                    <span class="badge badge-hit">Хит</span>
-                                    <?php endif; ?>
-                                </div>
-                                <?php endif; ?>
-                                <img src="<?= getProductImage($product) ?>" alt="<?= safe_output($product['name']) ?>" loading="lazy">
-                            </div>
-                            <div class="product-content">
-                                <h3 class="product-title"><?= safe_output($product['name']) ?></h3>
-                                <?php if (!empty($product['composition'])): ?>
-                                <p class="product-description"><?= safe_output(mb_substr($product['composition'], 0, 60)) ?><?= mb_strlen($product['composition']) > 60 ? '...' : '' ?></p>
-                                <?php elseif (!empty($product['description'])): ?>
-                                <p class="product-description"><?= safe_output(mb_substr($product['description'], 0, 60)) ?><?= mb_strlen($product['description']) > 60 ? '...' : '' ?></p>
-                                <?php endif; ?>
-                                <?php if (!empty($product['weight'])): ?>
-                                <div class="product-weight"><?= safe_output($product['weight']) ?> г</div>
-                                <?php endif; ?>
-                                <div class="product-footer">
-                                    <div class="product-price">
-                                        <span class="current-price"><?= number_format($product['price'], 0, ',', ' ') ?> ₽</span>
-                                    </div>
-                                    <button class="add-btn add-to-cart-btn" 
-                                            data-product-id="<?= safe_output($product['id']) ?>"
-                                            data-product-name="<?= safe_output($product['name']) ?>"
-                                            data-product-price="<?= safe_output($product['price']) ?>"
-                                            data-product-image="<?= getProductImage($product) ?>"
-                                            onclick="event.stopPropagation()">
-                                        <i class="fas fa-plus"></i> В корзину
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
-                        <?php endforeach; ?>
-                    </div>
-                </section>
-                <?php endforeach; ?>
-
-            <?php else: ?>
-            <div class="no-products">
-                <div class="no-products-icon">
-                    <?php if ($dbConnected): ?>
-                    🍱
-                    <?php else: ?>
-                    ⚠️
-                    <?php endif; ?>
-                </div>
-                <h3>
-                    <?php if ($dbConnected): ?>
-                        Товары загружаются из 1С
-                    <?php else: ?>
-                        База данных недоступна
-                    <?php endif; ?>
-                </h3>
-                <p>
-                    <?php if ($dbConnected): ?>
-                        Пожалуйста, подождите. Товары появятся после синхронизации с 1С.<br>
-                        Или перейдите в <a href="/admin/visual1c.php" style="color: var(--primary-red);">панель администратора</a> для загрузки товаров.
-                    <?php else: ?>
-                        Пожалуйста, попробуйте позже
-                    <?php endif; ?>
-                </p>
-                <?php if (!$dbConnected): ?>
-                <button class="retry-btn" onclick="location.reload()">
-                    <i class="fas fa-sync"></i> Попробовать снова
-                </button>
-                <?php else: ?>
-                <a href="/admin/visual1c.php" class="retry-btn">
-                    <i class="fas fa-cog"></i> Панель интеграции 1С
-                </a>
-                <?php endif; ?>
-            </div>
-            <?php endif; ?>
-        </div>
-    </div>
-
-    <!-- Product Modal -->
-    <div class="product-modal" id="productModal">
-        <div class="modal-overlay" onclick="closeProductModal()"></div>
-        <div class="modal-content">
-            <button class="modal-close" onclick="closeProductModal()">
-                <i class="fas fa-times"></i>
-            </button>
-
-            <div class="modal-image-wrapper">
-                <div class="modal-badges" id="modalBadges"></div>
-                <img id="modalImage" src="" alt="">
-            </div>
-
-            <div class="modal-body">
-                <h2 class="modal-title" id="modalTitle"></h2>
-                <p class="modal-description" id="modalDescription"></p>
-
-                <div class="modal-specs">
-                    <div class="spec-item">
-                        <span class="spec-label">Вес</span>
-                        <span class="spec-value" id="modalWeight">—</span>
-                    </div>
-                    <div class="spec-item">
-                        <span class="spec-label">Наличие</span>
-                        <span class="spec-value" id="modalStock">В наличии</span>
-                    </div>
-                </div>
-
-                <!-- Quantity Controls -->
-                <div class="modal-quantity">
-                    <span class="quantity-label">Количество:</span>
-                    <div class="quantity-controls">
-                        <button class="quantity-btn" id="modalQuantityMinus" onclick="changeModalQuantity(-1)">−</button>
-                        <span class="quantity-value" id="modalQuantityValue">1</span>
-                        <button class="quantity-btn" id="modalQuantityPlus" onclick="changeModalQuantity(1)">+</button>
-                    </div>
-                </div>
-
-                <div class="modal-footer">
-                    <div class="modal-price-wrapper">
-                        <span class="modal-price-label">Цена</span>
-                        <div class="modal-price" id="modalPrice"></div>
-                    </div>
-                    <button class="modal-add-btn" id="modalAddBtn" onclick="addModalProductToCart()">
-                        <i class="fas fa-shopping-cart"></i>
-                        <span>В корзину</span>
-                    </button>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- Cart Sidebar -->
-    <div class="cart-sidebar" id="cartSidebar">
-        <div class="cart-overlay" id="cartOverlay"></div>
-        <div class="cart-panel">
-            <div class="cart-header">
-                <h3>Корзина</h3>
-                <button class="cart-close" id="cartClose">
-                    <i class="fas fa-times"></i>
-                </button>
-            </div>
-
-            <div class="cart-body">
-                <div class="cart-empty" id="cartEmpty">
-                    <div class="empty-icon">🛒</div>
-                    <h4>Корзина пуста</h4>
-                    <p>Добавьте товары из меню</p>
-                    <button class="continue-btn" onclick="document.getElementById('cartClose').click()">Продолжить покупки</button>
-                </div>
-
-                <div class="cart-items" id="cartItems" style="display: none;">
-                    <!-- Динамически заполняется JavaScript -->
-                </div>
-            </div>
-
-            <div class="cart-footer" id="cartFooter" style="display: none;">
-                <div class="cart-summary">
-                    <div class="summary-row">
-                        <span>Товаров:</span>
-                        <span id="cartItemsCount">0</span>
-                    </div>
-                    <div class="summary-row">
-                        <span>Сумма:</span>
-                        <span id="cartSubtotal">0 ₽</span>
-                    </div>
-                    <div class="summary-row">
-                        <span>Доставка:</span>
-                        <span id="cartDelivery"><?= number_format($siteSettings['delivery_cost'] ?? 200, 0, ',', ' ') ?> ₽</span>
-                    </div>
-                    <div class="summary-row total">
-                        <span>Итого:</span>
-                        <span id="cartTotalAmount">0 ₽</span>
-                    </div>
-
-                    <?php if (isset($siteSettings['free_delivery_from'])): ?>
-                    <div class="delivery-info" id="deliveryInfo">
-                        <small>Бесплатная доставка от <?= number_format($siteSettings['free_delivery_from'], 0, ',', ' ') ?> ₽</small>
-                    </div>
-                    <?php endif; ?>
-                </div>
-
-                <div class="cart-actions">
-                    <button class="clear-cart-btn" id="clearCartBtn">Очистить</button>
-                    <button class="checkout-btn" onclick="window.location.href='/pages/checkout.php'">
-                        Оформить заказ
-                    </button>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- Footer -->
-    <footer class="footer">
-        <div class="container">
-            <div class="footer-content">
-                <div class="footer-section">
-                    <div class="footer-logo">
-                        <?php if ($logoUrl): ?>
-                        <img src="<?= safe_output($logoUrl) ?>?v=<?= time() ?>" alt="<?= safe_output($siteSettings['site_name']) ?>" class="logo-image">
-                        <?php else: ?>
-                        <span class="logo-emoji">🍣</span>
-                        <?php endif; ?>
-                        <span class="logo-text"><?= safe_output($siteSettings['site_name']) ?></span>
-                    </div>
-                    <p class="footer-description">
-                        <?= safe_output($siteSettings['site_description']) ?>
-                    </p>
-                    <p class="footer-address">
-                        <i class="fas fa-map-marker-alt"></i>
-                        Лен. обл. г. Сосновый Бор, ул. Красных Фортов, 49
-                    </p>
-                    <div class="social-links">
-                        <a href="<?= safe_output($siteSettings['vk_link']) ?>" target="_blank" class="social-link" aria-label="VK">
-                            <i class="fab fa-vk"></i>
-                        </a>
-                        <?php if (!empty($siteSettings['telegram_link'])): ?>
-                        <a href="<?= safe_output($siteSettings['telegram_link']) ?>" target="_blank" class="social-link" aria-label="Telegram">
-                            <i class="fab fa-telegram"></i>
-                        </a>
-                        <?php endif; ?>
-                    </div>
-                </div>
-
-                <div class="footer-section">
-                    <h4>Меню</h4>
-                    <ul class="footer-links">
-                        <li><a href="/">Все меню</a></li>
-                        <?php foreach (array_slice($categories, 0, 4) as $category): ?>
-                        <li><a href="#section-<?= $category['id'] ?>"><?= safe_output($category['name']) ?></a></li>
-                        <?php endforeach; ?>
-                    </ul>
-                </div>
-
-                <div class="footer-section">
-                    <h4>Информация</h4>
-                    <ul class="footer-links">
-                        <li><a href="/pages/promotions.php">Акции</a></li>
-                        <li><a href="/pages/delivery.php">Доставка</a></li>
-                        <li><a href="/pages/payment.php">Оплата на сайте</a></li>
-                        <li><a href="/pages/contacts.php">Контакты</a></li>
-                        <li><a href="/pages/privacy.php">Политика конфиденциальности</a></li>
-                        <li><a href="https://forms.yandex.ru/cloud/65d07d1ac09c024b01bf6adb/" target="_blank">Вакансии</a></li>
-                    </ul>
-                </div>
-
-                <div class="footer-section">
-                    <h4>Контакты</h4>
-                    <div class="contact-info">
-                        <?php if (!empty($siteSettings['phones'])): ?>
-                        <div class="contact-item">
-                            <i class="fas fa-phone"></i>
-                            <a href="tel:<?= str_replace([' ', '(', ')', '-'], '', $siteSettings['phones'][0]) ?>">
-                                <?= safe_output($siteSettings['phones'][0]) ?>
-                            </a>
-                        </div>
-                        <?php endif; ?>
-
-                        <div class="contact-item">
-                            <i class="fas fa-envelope"></i>
-                            <a href="mailto:<?= safe_output($siteSettings['email']) ?>">
-                                <?= safe_output($siteSettings['email']) ?>
-                            </a>
-                        </div>
-
-                        <div class="contact-item">
-                            <i class="fas fa-clock"></i>
-                            <span>
-                                <?= safe_output($siteSettings['work_hours']['start'] ?? '10:00') ?> - 
-                                <?= safe_output($siteSettings['work_hours']['end'] ?? '23:00') ?>
-                            </span>
-                        </div>
-                    </div>
-
-                    <!-- VK Widget -->
-                    <div class="vk-widget-container">
-                        <div id="vk_community_messages"></div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Зоны доставки -->
-            <div class="delivery-zones">
-                <h4>
-                    <i class="fas fa-map-marked-alt"></i>
-                    Зоны доставки
-                </h4>
-
-                <div class="zone-map">
-                    <div style="position:relative;overflow:hidden;border-radius:12px;">
-                        <iframe src="https://yandex.ru/map-widget/v1/?from=mapframe&ll=29.104519%2C59.889521&mode=usermaps&source=mapframe&um=constructor%3A23d7ce2ff1ccd3a5e9e754d578502920ed2790d814c04dedc6d380b0e94cca06&utm_source=mapframe&z=12" 
-                                width="100%" 
-                                height="400" 
-                                frameborder="0" 
-                                allowfullscreen="true" 
-                                style="position:relative;border-radius:12px;">
-                        </iframe>
-                    </div>
-                </div>
-
-                <div class="zones-grid">
-                    <div class="zone-card green">
-                        <h5>
-                            <i class="fas fa-circle"></i>
-                            Зеленая зона
-                        </h5>
-                        <p>Доставка от <strong>1500 руб.</strong></p>
-                    </div>
-
-                    <div class="zone-card yellow">
-                        <h5>
-                            <i class="fas fa-circle"></i>
-                            Желтая зона
-                        </h5>
-                        <p>Доставка от <strong>2500 руб.</strong></p>
-                    </div>
-
-                    <div class="zone-card red">
-                        <h5>
-                            <i class="fas fa-circle"></i>
-                            Красная зона
-                        </h5>
-                        <p>Доставка от <strong>3500 руб.</strong></p>
-                    </div>
-                </div>
-            </div>
-
-            <div class="footer-bottom">
-                <div>
-                    <p>&copy; <?= date('Y') ?> <?= safe_output($siteSettings['site_name']) ?>. Все права защищены.</p>
-                    <p style="margin: 0.5rem 0; color: rgba(255, 255, 255, 0.6); font-size: 13px;">
-                        <strong>ИП Коваленко Александр Анатольевич</strong>
-                    </p>
-                    <p style="margin: 0.25rem 0; color: rgba(255, 255, 255, 0.5); font-size: 12px;">
-                        ИНН: 471420709894
-                    </p>
-                </div>
-            </div>
-        </div>
-    </footer>
-
-    <!-- Data for JavaScript -->
-    <script>
-        window.APP_DATA = {
-            products: <?= $allProductsJson ?>,
-            newProductIds: <?= $newProductsJson ?>,
-            popularProductIds: <?= $popularProductsJson ?>,
-            settings: {
-                deliveryCost: <?= $siteSettings['delivery_cost'] ?? 200 ?>,
-                freeDeliveryFrom: <?= $siteSettings['free_delivery_from'] ?? 999 ?>
-            },
-            user: {
-                isLoggedIn: <?= $isLoggedIn ? 'true' : 'false' ?>,
-                id: <?= $customerId ?? 'null' ?>,
-                name: <?= json_encode($customerName, JSON_UNESCAPED_UNICODE) ?>
-            }
-        };
-
-        let currentModalProduct = null;
-        let modalQuantity = 1;
-    </script>
-
-    <!-- VK SDK -->
-    <script src="https://vk.com/js/api/openapi.js?169" type="text/javascript"></script>
-
-    <!-- Scripts -->
-    <script src="/assets/js/cart.js?v=<?= time() ?>"></script>
-    <script src="/assets/js/modal.js?v=<?= time() ?>"></script>
-
-    <!-- Main Script -->
-    <script>
-        // ============================================
-        // 🔍 SEARCH FUNCTIONALITY v2.0 (ОПТИМИЗИРОВАННЫЙ)
-        // ============================================
-        (function() {
-            const searchInput = document.getElementById('searchInput');
-            const searchClear = document.getElementById('searchClear');
-            const searchClearResults = document.getElementById('searchClearResults');
-            const searchResultsHeader = document.getElementById('searchResultsHeader');
-            const searchQueryText = document.getElementById('searchQueryText');
-            const searchResultsCount = document.getElementById('searchResultsCount');
-            const categoryNav = document.getElementById('categoryNav');
-            const categorySections = document.querySelectorAll('.category-section');
-            const productCards = document.querySelectorAll('.product-card');
-
-            let searchTimeout = null;
-            let isSearchActive = false;
-            let searchCache = new Map();
-
-            // ✅ БЫСТРАЯ функция поиска (используем classList)
-            function performSearch(query) {
-                query = query.trim().toLowerCase();
-
-                if (query.length === 0) {
-                    resetSearch();
-                    return;
-                }
-
-                if (query.length < 2) return;
-
-                // Проверяем кэш
-                if (searchCache.has(query)) {
-                    const cached = searchCache.get(query);
-                    applySearchResults(cached.found, cached.count, query);
-                    return;
-                }
-
-                isSearchActive = true;
-                let foundCount = 0;
-                const foundCards = new Set();
-
-                // Скрываем категории
-                categorySections.forEach(section => {
-                    section.classList.add('hidden');
-                });
-                categoryNav.style.display = 'none';
-
-                // ✅ Один проход по карточкам
-                productCards.forEach(card => {
-                    const searchText = card.getAttribute('data-search-text') || '';
-
-                    if (searchText.includes(query)) {
-                        card.classList.remove('search-hidden');
-                        card.parentElement.parentElement.classList.remove('hidden');
-                        foundCards.add(card);
-                        foundCount++;
-                    } else {
-                        card.classList.add('search-hidden');
-                    }
-                });
-
-                // Сохраняем в кэш
-                searchCache.set(query, { found: foundCards, count: foundCount });
-
-                // Показываем результаты
-                searchResultsHeader.classList.add('active');
-                searchQueryText.textContent = query;
-                searchResultsCount.textContent = foundCount;
-                searchInput.classList.add('has-value');
-            }
-
-            // Применение результатов из кэша
-            function applySearchResults(foundCards, count, query) {
-                categorySections.forEach(section => {
-                    section.classList.add('hidden');
-                });
-                categoryNav.style.display = 'none';
-
-                productCards.forEach(card => {
-                    if (foundCards.has(card)) {
-                        card.classList.remove('search-hidden');
-                        card.parentElement.parentElement.classList.remove('hidden');
-                    } else {
-                        card.classList.add('search-hidden');
-                    }
-                });
-
-                searchResultsHeader.classList.add('active');
-                searchQueryText.textContent = query;
-                searchResultsCount.textContent = count;
-                searchInput.classList.add('has-value');
-            }
-
-            // Сброс поиска
-            function resetSearch() {
-                isSearchActive = false;
-
-                categorySections.forEach(section => {
-                    section.classList.remove('hidden');
-                });
-
-                productCards.forEach(card => {
-                    card.classList.remove('search-hidden');
-                });
-
-                categoryNav.style.display = '';
-                searchResultsHeader.classList.remove('active');
-                searchInput.value = '';
-                searchInput.classList.remove('has-value');
-
-                // Сброс на "Все"
-                const allCategoryBtn = document.querySelector('[data-category="all"]');
-                if (allCategoryBtn) {
-                    document.querySelectorAll('.category-nav-item').forEach(btn => {
-                        btn.classList.remove('active');
-                    });
-                    allCategoryBtn.classList.add('active');
-                }
-            }
-
-            // ✅ Debounce 300ms
-            searchInput.addEventListener('input', function(e) {
-                const query = e.target.value;
-
-                if (query.length > 0) {
-                    searchInput.classList.add('has-value');
-                } else {
-                    searchInput.classList.remove('has-value');
-                }
-
-                clearTimeout(searchTimeout);
-                searchTimeout = setTimeout(() => {
-                    performSearch(query);
-                }, 300);
-            });
-
-            searchInput.addEventListener('keypress', function(e) {
-                if (e.key === 'Enter') {
-                    e.preventDefault();
-                    clearTimeout(searchTimeout);
-                    performSearch(this.value);
-                }
-            });
-
-            searchClear.addEventListener('click', resetSearch);
-            searchClearResults.addEventListener('click', resetSearch);
-
-            // Очистка кэша при большом размере
-            setInterval(() => {
-                if (searchCache.size > 50) {
-                    searchCache.clear();
-                }
-            }, 60000);
-        })();
-
-        // MOBILE MENU
-        document.getElementById('mobileToggle')?.addEventListener('click', function() {
-            this.classList.toggle('active');
-            document.getElementById('mobileMenu').classList.toggle('active');
-            document.body.style.overflow = this.classList.contains('active') ? 'hidden' : '';
         });
+    });
 
-        // STICKY CATEGORY NAV
-        const categoryNav = document.getElementById('categoryNav');
-        const mainHeader = document.getElementById('mainHeader');
-        const categorySections = document.querySelectorAll('.category-section');
-        const categoryNavItems = document.querySelectorAll('.category-nav-item');
+    // Color preview
+    const primaryColor = document.querySelector('[name="appearance_primary_color"]');
+    const secondaryColor = document.querySelector('[name="appearance_secondary_color"]');
+    const accentColor = document.querySelector('[name="appearance_accent_color"]');
+    const preview = document.getElementById('colorPreview');
 
-        let isScrolling = false;
-        let currentActiveCategory = 'all';
-        let lastScrollY = window.scrollY;
-        let isDetached = false;
+    function updatePreview() {
+        if (preview && primaryColor && secondaryColor && accentColor) {
+            preview.style.background = accentColor.value;
+            const header = preview.querySelector('.preview-header');
+            const button = preview.querySelector('.preview-button');
+            const text = preview.querySelector('.preview-text');
 
-        window.addEventListener('scroll', () => {
-            const currentScrollY = window.scrollY;
-            const headerHeight = mainHeader.offsetHeight;
-            const scrollingDown = currentScrollY > lastScrollY;
-
-            if (currentScrollY > headerHeight) {
-                if (!categoryNav.classList.contains('scrolled')) {
-                    categoryNav.classList.add('scrolled');
-                }
-
-                if (scrollingDown && !isDetached) {
-                    isDetached = true;
-                } else if (!scrollingDown && isDetached) {
-                    isDetached = false;
-                }
-            } else {
-                categoryNav.classList.remove('scrolled');
-                isDetached = false;
+            if (header) {
+                header.style.color = primaryColor.value;
+                header.style.borderColor = primaryColor.value;
             }
+            if (button) {
+                button.style.background = primaryColor.value;
+                button.style.color = accentColor.value;
+            }
+            if (text) {
+                text.style.color = primaryColor.value;
+            }
+        }
+    }
 
-            lastScrollY = currentScrollY;
-        });
+    if (primaryColor) primaryColor.addEventListener('input', updatePreview);
+    if (secondaryColor) secondaryColor.addEventListener('input', updatePreview);
+    if (accentColor) accentColor.addEventListener('input', updatePreview);
 
-        const observerOptions = {
-            root: null,
-            rootMargin: '-100px 0px -60% 0px',
-            threshold: 0
-        };
+    updatePreview();
 
-        const sectionObserver = new IntersectionObserver((entries) => {
-            if (isScrolling) return;
+    // Banner Preview
+    const bannerBgColor = document.getElementById('bannerBgColor');
+    const bannerTextColor = document.getElementById('bannerTextColor');
+    const bannerTitle = document.querySelector('[name="jobs_banner_title"]');
+    const bannerDesc = document.querySelector('[name="jobs_banner_description"]');
+    const bannerButton = document.querySelector('[name="jobs_banner_button"]');
+    const bannerIcon = document.getElementById('bannerIcon');
+    const bannerImage = document.querySelector('[name="jobs_banner_image"]');
+    const bannerUseImage = document.getElementById('bannerUseImage');
+    const bannerPreview = document.getElementById('bannerPreview');
+    const previewIcon = document.getElementById('previewIcon');
+    const previewImage = document.getElementById('previewImage');
+    const previewImageSrc = document.getElementById('previewImageSrc');
+    const iconGroup = document.getElementById('iconGroup');
+    const imageGroup = document.getElementById('imageGroup');
 
-            entries.forEach(entry => {
-                if (entry.isIntersecting) {
-                    const sectionId = entry.target.dataset.category;
-                    updateActiveCategory(sectionId);
-                }
-            });
-        }, observerOptions);
+    function updateBannerPreview() {
+        if (!bannerPreview) return;
 
-        categorySections.forEach(section => {
-            sectionObserver.observe(section);
-        });
-
-        function updateActiveCategory(categoryId) {
-            if (currentActiveCategory === categoryId) return;
-            currentActiveCategory = categoryId;
-
-            categoryNavItems.forEach(item => {
-                item.classList.remove('active');
-                if (item.dataset.category == categoryId) {
-                    item.classList.add('active');
-                    item.scrollIntoView({
-                        behavior: 'smooth',
-                        block: 'nearest',
-                        inline: 'center'
-                    });
-                }
-            });
+        // Цвета
+        if (bannerBgColor) {
+            bannerPreview.style.background = bannerBgColor.value;
+        }
+        if (bannerTextColor) {
+            bannerPreview.style.color = bannerTextColor.value;
         }
 
-        categoryNavItems.forEach(item => {
-            item.addEventListener('click', function(e) {
+        // Текст
+        const previewTitle = document.getElementById('previewTitle');
+        const previewDesc = document.getElementById('previewDesc');
+        const previewButton = document.getElementById('previewButton');
+
+        if (previewTitle && bannerTitle) {
+            previewTitle.textContent = bannerTitle.value || 'Требуются работники';
+        }
+        if (previewDesc && bannerDesc) {
+            previewDesc.textContent = bannerDesc.value || 'Присоединяйтесь к нашей команде';
+        }
+        if (previewButton && bannerButton) {
+            previewButton.textContent = bannerButton.value || 'Подробнее';
+        }
+
+        // Иконка или изображение
+        if (bannerUseImage && bannerUseImage.checked) {
+            if (previewIcon) previewIcon.style.display = 'none';
+            if (previewImage) {
+                previewImage.style.display = 'block';
+                if (bannerImage && previewImageSrc) {
+                    previewImageSrc.src = bannerImage.value || '';
+                }
+            }
+            if (iconGroup) iconGroup.style.opacity = '0.5';
+            if (imageGroup) imageGroup.style.opacity = '1';
+        } else {
+            if (previewIcon) {
+                previewIcon.style.display = 'block';
+                const iconElement = previewIcon.querySelector('i');
+                if (iconElement && bannerIcon) {
+                    iconElement.className = 'fas ' + (bannerIcon.value || 'fa-briefcase');
+                }
+            }
+            if (previewImage) previewImage.style.display = 'none';
+            if (iconGroup) iconGroup.style.opacity = '1';
+            if (imageGroup) imageGroup.style.opacity = '0.5';
+        }
+
+        // Обновление preview иконки в input
+        const iconPreview = document.getElementById('iconPreview');
+        if (iconPreview && bannerIcon) {
+            iconPreview.className = 'fas ' + (bannerIcon.value || 'fa-briefcase');
+        }
+    }
+
+    // Слушатели для баннера
+    if (bannerBgColor) bannerBgColor.addEventListener('input', updateBannerPreview);
+    if (bannerTextColor) bannerTextColor.addEventListener('input', updateBannerPreview);
+    if (bannerTitle) bannerTitle.addEventListener('input', updateBannerPreview);
+    if (bannerDesc) bannerDesc.addEventListener('input', updateBannerPreview);
+    if (bannerButton) bannerButton.addEventListener('input', updateBannerPreview);
+    if (bannerIcon) bannerIcon.addEventListener('input', updateBannerPreview);
+    if (bannerImage) bannerImage.addEventListener('input', updateBannerPreview);
+    if (bannerUseImage) bannerUseImage.addEventListener('change', updateBannerPreview);
+
+    updateBannerPreview();
+
+    // Form submit handler
+    const form = document.getElementById('settingsForm');
+    const saveButton = document.getElementById('saveButton');
+
+    if (form && saveButton) {
+        form.addEventListener('submit', function(e) {
+            // Предотвращаем двойную отправку
+            if (saveButton.disabled) {
                 e.preventDefault();
-                const categoryId = this.dataset.category;
-                const targetSection = document.getElementById('section-' + categoryId) || 
-                                      document.querySelector(`[data-category="${categoryId}"]`);
+                return false;
+            }
 
-                if (targetSection) {
-                    isScrolling = true;
-                    targetSection.scrollIntoView({
-                        behavior: 'smooth',
-                        block: 'start'
-                    });
-                    updateActiveCategory(categoryId);
-                    setTimeout(() => {
-                        isScrolling = false;
-                    }, 1000);
+            saveButton.disabled = true;
+            saveButton.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Сохранение...';
+
+            // Если форма не отправится, через 10 секунд разблокируем кнопку
+            setTimeout(function() {
+                if (saveButton.disabled) {
+                    saveButton.disabled = false;
+                    saveButton.innerHTML = '<i class="fas fa-save"></i> Сохранить все настройки';
                 }
-            });
+            }, 10000);
         });
+    }
+});
 
-        // VK WIDGET
-        try {
-            VK.init({apiId: 123456789});
-            VK.Widgets.CommunityMessages("vk_community_messages", 123456789, {
-                expandTimeout: "0",
-                tooltipButtonText: "Есть вопрос?"
-            });
-        } catch(e) {
-            console.log('VK widget error:', e);
-        }
+let deliveryZoneIndex = <?= count(getSetting($settings, 'delivery_zones', [])) ?>;
 
-        // ANIMATION DELAY
-        document.querySelectorAll('.product-card').forEach((card, index) => {
-            card.style.animationDelay = `${(index % 12) * 0.05}s`;
-        });
+function addDeliveryZone() {
+    const container = document.getElementById('deliveryZones');
+    if (!container) return;
 
-        console.log('✅ Sasha\'s Sushi v6.4.0 - SEARCH FULLY OPTIMIZED');
-        console.log('📊 Products:', <?= count($allProducts) ?>);
-        console.log('📁 Categories:', <?= count($categories) ?>);
-        console.log('✨ New:', <?= count($newProducts) ?>);
-        console.log('🔥 Popular:', <?= count($popularProducts) ?>);
-        console.log('🚀 Search: ULTRA FAST with CACHE!');
-    </script>
-</body>
-</html>
+    const zoneHtml = `
+        <div class="delivery-zone-item" data-zone="${deliveryZoneIndex}">
+            <div class="row">
+                <div class="col-5">
+                    <input type="text" class="form-input" 
+                           name="delivery_zone_name_${deliveryZoneIndex}" 
+                           placeholder="Название зоны">
+                </div>
+                <div class="col-3">
+                    <input type="number" class="form-input" 
+                           name="delivery_zone_cost_${deliveryZoneIndex}" 
+                           placeholder="Стоимость" step="0.01">
+                </div>
+                <div class="col-3">
+                    <input type="number" class="form-input" 
+                           name="delivery_zone_time_${deliveryZoneIndex}" 
+                           placeholder="Время (мин)">
+                </div>
+                <div class="col-1">
+                    <button type="button" class="btn btn-danger btn-sm" onclick="removeDeliveryZone(this)">
+                        <i class="fas fa-trash"></i>
+                    </button>
+                </div>
+            </div>
+        </div>
+    `;
+    container.insertAdjacentHTML('beforeend', zoneHtml);
+    deliveryZoneIndex++;
+}
+
+function removeDeliveryZone(button) {
+    if (confirm('Удалить эту зону доставки?')) {
+        button.closest('.delivery-zone-item').remove();
+    }
+}
+
+function manualSync() {
+    if (confirm('Запустить синхронизацию с 1С?')) {
+        alert('Функция синхронизации будет реализована в sync_1c.php');
+        // TODO: Ajax запрос на синхронизацию
+    }
+}
+
+function viewSyncLogs() {
+    alert('Просмотр логов будет реализован в logs_1c.php');
+    // TODO: Открыть страницу логов
+}
+
+function testEmail() {
+    const email = prompt('Введите email для отправки тестового письма:');
+    if (email) {
+        alert('Отправка тестового письма будет реализована в test_email.php');
+        // TODO: Ajax запрос на отправку тестового письма
+    }
+}
+</script>
+
+    <div class="form-actions">
+        <button type="submit" class="btn btn-primary btn-lg" id="saveButton">
+            <i class="fas fa-save"></i>
+            Сохранить все настройки
+        </button>
+        <a href="index.php" class="btn btn-secondary btn-lg">
+            <i class="fas fa-times"></i>
+            Отмена
+        </a>
+    </div>
+</form>
+
+<?php require_once 'footer.php'; ?>
