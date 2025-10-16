@@ -1,2416 +1,3520 @@
 <?php
-$page_title = 'Настройки';
-$breadcrumbs = ['Главная', 'Настройки'];
+mb_internal_encoding('UTF-8');
+date_default_timezone_set('Europe/Moscow');
+session_start();
 
-require_once 'header.php';
+// Простая авторизация
+$adminKey = 'admin123';
+if (!isset($_GET['key']) || $_GET['key'] !== $adminKey) {
+    http_response_code(403);
+    die('
+    <!DOCTYPE html>
+    <html><head><meta charset="UTF-8"><title>Доступ запрещен</title></head>
+    <body style="font-family:Arial;text-align:center;padding:50px;background:#f0f0f0;">
+        <h1>🔒 Доступ запрещен</h1>
+        <p>Неверный ключ доступа к админ панели</p>
+        <p>Используйте: <code>fotoadmin.php?key=admin123</code></p>
+    </body></html>
+    ');
+}
 
-// Обработка сохранения настроек
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_settings'])) {
-    try {
-        // Собираем настройки синхронизации 1С
-        $sync_settings = [
-            'products' => isset($_POST['1c_sync_products']),
-            'categories' => isset($_POST['1c_sync_categories']),
-            'prices' => isset($_POST['1c_sync_prices']),
-            'stock' => isset($_POST['1c_sync_stock']),
-            'orders' => isset($_POST['1c_sync_orders']),
-            'customers' => isset($_POST['1c_sync_customers']),
-            'delivery_zones' => isset($_POST['1c_sync_delivery_zones']),
-            'delivery_slots' => isset($_POST['1c_sync_delivery_slots']),
-            'payment_transactions' => isset($_POST['1c_sync_payment_transactions']),
-            'reviews' => isset($_POST['1c_sync_reviews']),
-            'promocodes' => isset($_POST['1c_sync_promocodes'])
-        ];
+$BASE = __DIR__;
+$ordersLog = $BASE.'/orders.txt';
+$uploadsDir = $BASE.'/uploads';
+$photoConfigFile = $BASE.'/photo_config.json';
+$printOrdersLog = $BASE.'/print_orders.txt';
 
-        // Получаем текущие настройки для сохранения last_sync
-        $current_settings = $db->find('settings', 'main');
-        $last_sync = null;
-        if ($current_settings && isset($current_settings['1c_integration']['last_sync'])) {
-            $last_sync = $current_settings['1c_integration']['last_sync'];
+// Создаём папку uploads если нет
+if (!file_exists($uploadsDir)) {
+    mkdir($uploadsDir, 0755, true);
+}
+
+// Helper функции
+function esc($s) { return htmlspecialchars((string)$s, ENT_QUOTES|ENT_SUBSTITUTE, 'UTF-8'); }
+
+// Функция генерации номера заказа
+function generateOrderNumber($ordersLog, $printOrdersLog) {
+    $maxNum = 0;
+
+    foreach ([$ordersLog, $printOrdersLog] as $file) {
+        if (file_exists($file)) {
+            $lines = file($file, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+            foreach ($lines as $line) {
+                if (preg_match('/print_order_(\d+)/', $line, $matches)) {
+                    $num = (int)$matches[1];
+                    if ($num > $maxNum) $maxNum = $num;
+                }
+            }
         }
+    }
 
-        $settings_to_save = [
-            // Основные настройки
-            'site_name' => trim($_POST['site_name'] ?? ''),
-            'site_description' => trim($_POST['site_description'] ?? ''),
-            'site_keywords' => trim($_POST['site_keywords'] ?? ''),
-            'site_logo' => trim($_POST['site_logo'] ?? ''),
-            'site_favicon' => trim($_POST['site_favicon'] ?? ''),
+    return 'print_order_' . str_pad($maxNum + 1, 4, '0', STR_PAD_LEFT);
+}
 
-            // Контактная информация
-            'phones' => array_filter(array_map('trim', explode("\n", $_POST['phones'] ?? ''))),
-            'email' => trim($_POST['email'] ?? ''),
-            'support_email' => trim($_POST['support_email'] ?? ''),
-            'address' => trim($_POST['address'] ?? ''),
-            'coordinates' => [
-                'lat' => trim($_POST['coord_lat'] ?? ''),
-                'lng' => trim($_POST['coord_lng'] ?? '')
-            ],
+// API: Обновление статуса заказа
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'update_status') {
+    header('Content-Type: application/json; charset=utf-8');
 
-            // График работы
-            'work_hours' => [
-                'start' => $_POST['work_start'] ?? '10:00',
-                'end' => $_POST['work_end'] ?? '23:00'
-            ],
-            'work_schedule' => $_POST['work_schedule'] ?? [],
+    $orderId = trim($_POST['order_id'] ?? '');
+    $newStatus = trim($_POST['status'] ?? '');
 
-            // Социальные сети
-            'social_networks' => [
-                'vk' => trim($_POST['social_vk'] ?? ''),
-                'instagram' => trim($_POST['social_instagram'] ?? ''),
-                'telegram' => trim($_POST['social_telegram'] ?? ''),
-                'whatsapp' => trim($_POST['social_whatsapp'] ?? ''),
-                'youtube' => trim($_POST['social_youtube'] ?? ''),
-                'facebook' => trim($_POST['social_facebook'] ?? '')
-            ],
+    if (empty($orderId) || empty($newStatus)) {
+        echo json_encode(['success' => false, 'error' => 'Не указаны параметры'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
 
-            // Баннер "Требуются работники"
-            'jobs_banner' => [
-                'enabled' => isset($_POST['jobs_banner_enabled']),
-                'title' => trim($_POST['jobs_banner_title'] ?? 'Требуются работники'),
-                'description' => trim($_POST['jobs_banner_description'] ?? 'Присоединяйтесь к нашей команде'),
-                'link' => trim($_POST['jobs_banner_link'] ?? '#'),
-                'button_text' => trim($_POST['jobs_banner_button'] ?? 'Подробнее'),
-                'background_color' => trim($_POST['jobs_banner_bg_color'] ?? '#10b981'),
-                'text_color' => trim($_POST['jobs_banner_text_color'] ?? '#ffffff'),
-                'icon' => trim($_POST['jobs_banner_icon'] ?? 'fa-briefcase'),
-                'image' => trim($_POST['jobs_banner_image'] ?? ''),
-                'use_image' => isset($_POST['jobs_banner_use_image'])
-            ],
+    // Читаем все заказы
+    $allLines = [];
+    $updated = false;
 
-            // Настройки доставки
-            'delivery_cost' => (float)($_POST['delivery_cost'] ?? 0),
-            'free_delivery_from' => (float)($_POST['free_delivery_from'] ?? 0),
-            'min_order_amount' => (float)($_POST['min_order_amount'] ?? 0),
-            'max_delivery_distance' => (float)($_POST['max_delivery_distance'] ?? 0),
-            'delivery_time' => trim($_POST['delivery_time'] ?? '60-90'),
-            'delivery_zones' => [],
-            'pickup_enabled' => isset($_POST['pickup_enabled']),
-            'pickup_discount' => (float)($_POST['pickup_discount'] ?? 0),
+    if (file_exists($printOrdersLog)) {
+        $lines = file($printOrdersLog, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
 
-            // Способы оплаты
-            'payment_methods' => $_POST['payment_methods'] ?? [],
+        foreach ($lines as $line) {
+            if (strpos($line, $orderId) !== false && strpos($line, '{') !== false) {
+                $jsonStart = strpos($line, '{');
+                $orderData = json_decode(substr($line, $jsonStart), true);
 
-            // ЮKassa
-            'yookassa' => [
-                'enabled' => isset($_POST['yookassa_enabled']),
-                'shop_id' => trim($_POST['yookassa_shop_id'] ?? ''),
-                'secret_key' => trim($_POST['yookassa_secret_key'] ?? ''),
-                'test_mode' => isset($_POST['yookassa_test_mode']),
-                'auto_capture' => isset($_POST['yookassa_auto_capture']),
-                'description_template' => trim($_POST['yookassa_description'] ?? 'Оплата заказа #{order_id}'),
-                'success_url' => trim($_POST['yookassa_success_url'] ?? ''),
-                'fail_url' => trim($_POST['yookassa_fail_url'] ?? '')
-            ],
+                if ($orderData && isset($orderData['id']) && $orderData['id'] === $orderId) {
+                    $orderData['status'] = $newStatus;
+                    $orderData['status_updated_at'] = date('Y-m-d H:i:s');
 
-            // Сбербанк
-            'sberbank' => [
-                'enabled' => isset($_POST['sberbank_enabled']),
-                'username' => trim($_POST['sberbank_username'] ?? ''),
-                'password' => trim($_POST['sberbank_password'] ?? ''),
-                'test_mode' => isset($_POST['sberbank_test_mode']),
-                'two_stage' => isset($_POST['sberbank_two_stage']),
-                'success_url' => trim($_POST['sberbank_success_url'] ?? ''),
-                'fail_url' => trim($_POST['sberbank_fail_url'] ?? '')
-            ],
+                    // Добавляем в историю
+                    if (!isset($orderData['history'])) {
+                        $orderData['history'] = [];
+                    }
+                    $orderData['history'][] = [
+                        'action' => 'status_change',
+                        'from' => $orderData['status'] ?? 'new',
+                        'to' => $newStatus,
+                        'timestamp' => date('Y-m-d H:i:s')
+                    ];
 
-            // Интеграция 1С
-            '1c_integration' => [
-                'enabled' => isset($_POST['1c_enabled']),
-                'server' => trim($_POST['1c_server'] ?? ''),
-                'database' => trim($_POST['1c_database'] ?? ''),
-                'username' => trim($_POST['1c_username'] ?? ''),
-                'password' => trim($_POST['1c_password'] ?? ''),
-                'exchange_path' => trim($_POST['1c_exchange_path'] ?? './1c_exchange/'),
-                'auto_sync' => isset($_POST['1c_auto_sync']),
-                'sync_interval' => (int)($_POST['1c_sync_interval'] ?? 300),
-                'sync_settings' => $sync_settings,
-                'last_sync' => $last_sync
-            ],
+                    // Пересохраняем в txt
+                    $phone = preg_replace('/[^0-9]/', '', $orderData['customer']['phone']);
+                    $orderDate = date('Y-m-d', strtotime($orderData['dates']['order_date']));
+                    $txtFilename = $uploadsDir . '/' . $orderDate . '_' . $phone . '.txt';
+                    file_put_contents($txtFilename, json_encode($orderData, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT), LOCK_EX);
 
-            // Уведомления
-            'notifications' => [
-                'email_enabled' => isset($_POST['notif_email_enabled']),
-                'sms_enabled' => isset($_POST['notif_sms_enabled']),
-                'telegram_enabled' => isset($_POST['notif_telegram_enabled']),
-                'telegram_bot_token' => trim($_POST['notif_telegram_token'] ?? ''),
-                'telegram_chat_id' => trim($_POST['notif_telegram_chat'] ?? ''),
-                'new_order_notification' => isset($_POST['notif_new_order']),
-                'status_change_notification' => isset($_POST['notif_status_change'])
-            ],
+                    $line = date('Y-m-d H:i:s') . " | " . $orderId . " | " . json_encode($orderData, JSON_UNESCAPED_UNICODE);
+                    $updated = true;
+                }
+            }
+            $allLines[] = $line;
+        }
+    }
 
-            // SEO настройки
-            'seo' => [
-                'meta_title' => trim($_POST['seo_title'] ?? ''),
-                'meta_description' => trim($_POST['seo_description'] ?? ''),
-                'meta_keywords' => trim($_POST['seo_keywords'] ?? ''),
-                'og_image' => trim($_POST['seo_og_image'] ?? ''),
-                'robots_txt' => trim($_POST['seo_robots'] ?? ''),
-                'sitemap_enabled' => isset($_POST['seo_sitemap']),
-                'google_analytics' => trim($_POST['seo_google_analytics'] ?? ''),
-                'yandex_metrika' => trim($_POST['seo_yandex_metrika'] ?? '')
-            ],
+    if ($updated) {
+        file_put_contents($printOrdersLog, implode("\n", $allLines) . "\n", LOCK_EX);
+        echo json_encode(['success' => true], JSON_UNESCAPED_UNICODE);
+    } else {
+        echo json_encode(['success' => false, 'error' => 'Заказ не найден'], JSON_UNESCAPED_UNICODE);
+    }
+    exit;
+}
 
-            // Внешний вид
-            'appearance' => [
-                'theme' => $_POST['appearance_theme'] ?? 'light',
-                'primary_color' => $_POST['appearance_primary_color'] ?? '#000000',
-                'secondary_color' => $_POST['appearance_secondary_color'] ?? '#10b981',
-                'accent_color' => $_POST['appearance_accent_color'] ?? '#ffffff',
-                'font_family' => $_POST['appearance_font'] ?? 'Inter',
-                'show_prices' => isset($_POST['appearance_show_prices']),
-                'show_availability' => isset($_POST['appearance_show_availability']),
-                'catalog_view' => $_POST['appearance_catalog_view'] ?? 'grid',
-                'products_per_page' => (int)($_POST['appearance_products_per_page'] ?? 12)
-            ],
+// API: Добавление комментария
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'add_comment') {
+    header('Content-Type: application/json; charset=utf-8');
 
-            // Бонусная система
-            'bonus_system' => [
-                'enabled' => isset($_POST['bonus_enabled']),
-                'percent' => (float)($_POST['bonus_percent'] ?? 5),
-                'min_order_for_bonus' => (float)($_POST['bonus_min_order'] ?? 1000),
-                'max_bonus_payment' => (float)($_POST['bonus_max_payment'] ?? 30),
-                'bonus_expiration_days' => (int)($_POST['bonus_expiration'] ?? 365)
-            ],
+    $orderId = trim($_POST['order_id'] ?? '');
+    $comment = trim($_POST['comment'] ?? '');
 
-            // Email настройки
-            'email_settings' => [
-                'smtp_enabled' => isset($_POST['smtp_enabled']),
-                'smtp_host' => trim($_POST['smtp_host'] ?? ''),
-                'smtp_port' => (int)($_POST['smtp_port'] ?? 587),
-                'smtp_username' => trim($_POST['smtp_username'] ?? ''),
-                'smtp_password' => trim($_POST['smtp_password'] ?? ''),
-                'smtp_encryption' => $_POST['smtp_encryption'] ?? 'tls',
-                'from_email' => trim($_POST['smtp_from_email'] ?? ''),
-                'from_name' => trim($_POST['smtp_from_name'] ?? '')
-            ]
+    if (empty($orderId) || empty($comment)) {
+        echo json_encode(['success' => false, 'error' => 'Не указаны параметры'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
+    $allLines = [];
+    $updated = false;
+
+    if (file_exists($printOrdersLog)) {
+        $lines = file($printOrdersLog, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+
+        foreach ($lines as $line) {
+            if (strpos($line, $orderId) !== false && strpos($line, '{') !== false) {
+                $jsonStart = strpos($line, '{');
+                $orderData = json_decode(substr($line, $jsonStart), true);
+
+                if ($orderData && isset($orderData['id']) && $orderData['id'] === $orderId) {
+                    if (!isset($orderData['comments'])) {
+                        $orderData['comments'] = [];
+                    }
+                    $orderData['comments'][] = [
+                        'text' => $comment,
+                        'timestamp' => date('Y-m-d H:i:s')
+                    ];
+
+                    $phone = preg_replace('/[^0-9]/', '', $orderData['customer']['phone']);
+                    $orderDate = date('Y-m-d', strtotime($orderData['dates']['order_date']));
+                    $txtFilename = $uploadsDir . '/' . $orderDate . '_' . $phone . '.txt';
+                    file_put_contents($txtFilename, json_encode($orderData, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT), LOCK_EX);
+
+                    $line = date('Y-m-d H:i:s') . " | " . $orderId . " | " . json_encode($orderData, JSON_UNESCAPED_UNICODE);
+                    $updated = true;
+                }
+            }
+            $allLines[] = $line;
+        }
+    }
+
+    if ($updated) {
+        file_put_contents($printOrdersLog, implode("\n", $allLines) . "\n", LOCK_EX);
+        echo json_encode(['success' => true], JSON_UNESCAPED_UNICODE);
+    } else {
+        echo json_encode(['success' => false, 'error' => 'Заказ не найден'], JSON_UNESCAPED_UNICODE);
+    }
+    exit;
+}
+
+// API: Дублирование заказа
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'duplicate_order') {
+    header('Content-Type: application/json; charset=utf-8');
+
+    $orderId = trim($_POST['order_id'] ?? '');
+
+    if (empty($orderId)) {
+        echo json_encode(['success' => false, 'error' => 'ID не указан'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
+    if (file_exists($printOrdersLog)) {
+        $lines = file($printOrdersLog, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+
+        foreach ($lines as $line) {
+            if (strpos($line, $orderId) !== false && strpos($line, '{') !== false) {
+                $jsonStart = strpos($line, '{');
+                $orderData = json_decode(substr($line, $jsonStart), true);
+
+                if ($orderData && isset($orderData['id']) && $orderData['id'] === $orderId) {
+                    // Создаём копию
+                    $newOrderData = $orderData;
+                    $newOrderData['id'] = generateOrderNumber($ordersLog, $printOrdersLog);
+                    $newOrderData['timestamp'] = date('Y-m-d H:i:s');
+                    $newOrderData['dates']['order_date'] = date('Y-m-d');
+                    $newOrderData['status'] = 'new';
+                    unset($newOrderData['history']);
+                    unset($newOrderData['comments']);
+
+                    // Сохраняем
+                    $logLine = date('Y-m-d H:i:s') . " | " . $newOrderData['id'] . " | " . json_encode($newOrderData, JSON_UNESCAPED_UNICODE) . "\n";
+                    file_put_contents($printOrdersLog, $logLine, FILE_APPEND | LOCK_EX);
+
+                    $phone = preg_replace('/[^0-9]/', '', $newOrderData['customer']['phone']);
+                    $orderDate = date('Y-m-d');
+                    $txtFilename = $uploadsDir . '/' . $orderDate . '_' . $phone . '.txt';
+                    file_put_contents($txtFilename, json_encode($newOrderData, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT), LOCK_EX);
+
+                    echo json_encode([
+                        'success' => true,
+                        'new_order_id' => $newOrderData['id'],
+                        'new_order_number' => str_replace('print_order_', '#', $newOrderData['id'])
+                    ], JSON_UNESCAPED_UNICODE);
+                    exit;
+                }
+            }
+        }
+    }
+
+    echo json_encode(['success' => false, 'error' => 'Заказ не найден'], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+// API: Экспорт в Excel
+if (isset($_GET['action']) && $_GET['action'] === 'export_excel') {
+    $exportOrders = [];
+    if (file_exists($printOrdersLog)) {
+        $lines = file($printOrdersLog, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+        foreach ($lines as $line) {
+            if (strpos($line, 'print_order_') !== false && strpos($line, '{') !== false) {
+                $jsonStart = strpos($line, '{');
+                $jsonStr = substr($line, $jsonStart);
+                $orderData = json_decode($jsonStr, true);
+                if ($orderData && isset($orderData['id'])) {
+                    $exportOrders[] = $orderData;
+                }
+            }
+        }
+    }
+
+    usort($exportOrders, function($a, $b) {
+        return strtotime($b['timestamp'] ?? '1970-01-01') - strtotime($a['timestamp'] ?? '1970-01-01');
+    });
+
+    header('Content-Type: text/csv; charset=UTF-8');
+    header('Content-Disposition: attachment; filename="orders_' . date('Y-m-d') . '.csv"');
+
+    echo "\xEF\xBB\xBF";
+
+    $output = fopen('php://output', 'w');
+
+    fputcsv($output, [
+        'Номер заказа',
+        'Дата создания',
+        'Дата готовности',
+        'Клиент',
+        'Телефон',
+        'Email',
+        'Описание',
+        'Технические данные',
+        'Сумма',
+        'Предоплата',
+        'Осталось',
+        'Статус'
+    ], ';');
+
+    foreach ($exportOrders as $order) {
+        $statusLabels = [
+            'new' => 'Новый',
+            'in_progress' => 'В работе',
+            'ready' => 'Готов',
+            'completed' => 'Выдан',
+            'cancelled' => 'Отменён'
         ];
 
-        // Обработка зон доставки
-        $delivery_zones = [];
-        foreach ($_POST as $key => $value) {
-            if (preg_match('/^delivery_zone_name_(\d+)$/', $key, $matches)) {
-                $index = $matches[1];
-                if (!empty($value)) {
-                    $delivery_zones[] = [
-                        'name' => trim($value),
-                        'cost' => (float)($_POST['delivery_zone_cost_' . $index] ?? 0),
-                        'time' => (int)($_POST['delivery_zone_time_' . $index] ?? 0)
+        fputcsv($output, [
+            str_replace('print_order_', '#', $order['id']),
+            date('d.m.Y H:i', strtotime($order['timestamp'])),
+            date('d.m.Y', strtotime($order['dates']['ready_date'])),
+            $order['customer']['name'],
+            $order['customer']['phone'],
+            $order['customer']['email'] ?? '',
+            $order['details']['description'],
+            $order['details']['technical'] ?? '',
+            $order['pricing']['total'],
+            $order['pricing']['prepayment'],
+            $order['pricing']['total'] - $order['pricing']['prepayment'],
+            $statusLabels[$order['status']] ?? $order['status']
+        ], ';');
+    }
+
+    fclose($output);
+    exit;
+}
+
+// API: Получение данных заказа по ID
+if (isset($_GET['api']) && $_GET['api'] === 'get_order' && !empty($_GET['order_id'])) {
+    header('Content-Type: application/json; charset=utf-8');
+
+    $orderId = $_GET['order_id'];
+    $foundOrder = null;
+
+    if (file_exists($printOrdersLog)) {
+        $lines = file($printOrdersLog, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+        foreach ($lines as $line) {
+            if (strpos($line, $orderId) !== false && strpos($line, '{') !== false) {
+                $jsonStart = strpos($line, '{');
+                $jsonStr = substr($line, $jsonStart);
+                $orderData = json_decode($jsonStr, true);
+                if ($orderData && isset($orderData['id']) && $orderData['id'] === $orderId) {
+                    $foundOrder = $orderData;
+                    break;
+                }
+            }
+        }
+    }
+
+    if ($foundOrder) {
+        $response = [
+            'success' => true,
+            'order_id' => $foundOrder['id'],
+            'order_number' => str_replace('print_order_', '#', $foundOrder['id']),
+            'customer_name' => $foundOrder['customer']['name'],
+            'customer_phone' => $foundOrder['customer']['phone'],
+            'customer_email' => $foundOrder['customer']['email'] ?? '',
+            'order_date' => date('d.m.Y', strtotime($foundOrder['dates']['order_date'])),
+            'ready_date' => date('d.m.Y', strtotime($foundOrder['dates']['ready_date'])),
+            'description' => $foundOrder['details']['description'],
+            'technical' => $foundOrder['details']['technical'] ?? '',
+            'materials_provided' => $foundOrder['details']['materials_provided'],
+            'materials_date' => !empty($foundOrder['details']['materials_date']) ? date('d.m.Y', strtotime($foundOrder['details']['materials_date'])) : '',
+            'prepayment' => $foundOrder['pricing']['prepayment'],
+            'prepayment_paid' => $foundOrder['pricing']['prepayment_paid'],
+            'total' => $foundOrder['pricing']['total'],
+            'remaining' => $foundOrder['pricing']['total'] - $foundOrder['pricing']['prepayment'],
+            'timestamp' => date('d.m.Y H:i', strtotime($foundOrder['timestamp'])),
+            'status' => $foundOrder['status'] ?? 'new',
+            'comments' => $foundOrder['comments'] ?? []
+        ];
+        echo json_encode($response, JSON_UNESCAPED_UNICODE);
+    } else {
+        echo json_encode(['success' => false, 'error' => 'Заказ не найден'], JSON_UNESCAPED_UNICODE);
+    }
+    exit;
+}
+
+// API: Получение данных для календаря
+if (isset($_GET['api']) && $_GET['api'] === 'calendar_events') {
+    header('Content-Type: application/json; charset=utf-8');
+
+    $events = [];
+
+    if (file_exists($printOrdersLog)) {
+        $lines = file($printOrdersLog, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+        foreach ($lines as $line) {
+            if (strpos($line, 'print_order_') !== false && strpos($line, '{') !== false) {
+                $jsonStart = strpos($line, '{');
+                $jsonStr = substr($line, $jsonStart);
+                $orderData = json_decode($jsonStr, true);
+
+                if ($orderData && isset($orderData['id'])) {
+                    $statusColors = [
+                        'new' => '#fbbf24',
+                        'in_progress' => '#3b82f6',
+                        'ready' => '#10b981',
+                        'completed' => '#6b7280',
+                        'cancelled' => '#ef4444'
+                    ];
+
+                    $events[] = [
+                        'id' => $orderData['id'],
+                        'title' => str_replace('print_order_', '#', $orderData['id']) . ' - ' . $orderData['customer']['name'],
+                        'start' => $orderData['dates']['ready_date'],
+                        'color' => $statusColors[$orderData['status'] ?? 'new'] ?? '#3b82f6',
+                        'extendedProps' => [
+                            'customer' => $orderData['customer']['name'],
+                            'phone' => $orderData['customer']['phone'],
+                            'description' => mb_substr($orderData['details']['description'], 0, 50),
+                            'total' => $orderData['pricing']['total'],
+                            'status' => $orderData['status'] ?? 'new'
+                        ]
                     ];
                 }
             }
         }
-        $settings_to_save['delivery_zones'] = $delivery_zones;
+    }
 
-        // Сохраняем настройки
-        $result = $db->save('settings', $settings_to_save, 'main');
+    echo json_encode($events, JSON_UNESCAPED_UNICODE);
+    exit;
+}
 
-        if ($result) {
-            $success_message = 'Настройки успешно сохранены!';
-            if (method_exists($db, 'log')) {
-                $db->log('Settings updated by admin: ' . ($_SESSION['admin_name'] ?? 'Unknown'));
+// API: Обновление заказа
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'update_order') {
+    $orderId = trim($_POST['order_id'] ?? '');
+
+    if (empty($orderId)) {
+        header('Content-Type: application/json; charset=utf-8');
+        echo json_encode(['success' => false, 'error' => 'ID заказа не указан'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
+    $allLines = [];
+    $updated = false;
+
+    if (file_exists($printOrdersLog)) {
+        $lines = file($printOrdersLog, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+
+        foreach ($lines as $line) {
+            if (strpos($line, $orderId) !== false && strpos($line, '{') !== false) {
+                $jsonStart = strpos($line, '{');
+                $orderData = json_decode(substr($line, $jsonStart), true);
+
+                if ($orderData && isset($orderData['id']) && $orderData['id'] === $orderId) {
+                    $orderData['customer']['name'] = trim($_POST['customer_name'] ?? '');
+                    $orderData['customer']['phone'] = trim($_POST['customer_phone'] ?? '');
+                    $orderData['customer']['email'] = trim($_POST['customer_email'] ?? '');
+                    $orderData['details']['description'] = trim($_POST['order_description'] ?? '');
+                    $orderData['details']['technical'] = trim($_POST['technical_details'] ?? '');
+                    $orderData['details']['materials_provided'] = isset($_POST['materials_provided']);
+                    $orderData['details']['materials_date'] = trim($_POST['materials_date'] ?? '');
+                    $orderData['pricing']['prepayment'] = (float)($_POST['prepayment'] ?? 0);
+                    $orderData['pricing']['prepayment_paid'] = isset($_POST['prepayment_paid']);
+                    $orderData['pricing']['total'] = (float)($_POST['total_price'] ?? 0);
+                    $orderData['dates']['ready_date'] = trim($_POST['ready_date'] ?? '');
+                    $orderData['updated_at'] = date('Y-m-d H:i:s');
+
+                    $phone = preg_replace('/[^0-9]/', '', $orderData['customer']['phone']);
+                    $orderDate = date('Y-m-d', strtotime($orderData['dates']['order_date']));
+                    $txtFilename = $uploadsDir . '/' . $orderDate . '_' . $phone . '.txt';
+                    file_put_contents($txtFilename, json_encode($orderData, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT), LOCK_EX);
+
+                    $line = date('Y-m-d H:i:s') . " | " . $orderId . " | " . json_encode($orderData, JSON_UNESCAPED_UNICODE);
+                    $updated = true;
+                }
             }
-
-            // Перезагружаем настройки после сохранения
-            $settings = $db->find('settings', 'main');
-        } else {
-            throw new Exception('Ошибка при сохранении в базу данных');
-        }
-
-    } catch (Exception $e) {
-        $error_message = 'Ошибка сохранения настроек: ' . $e->getMessage();
-        if (method_exists($db, 'log')) {
-            $db->log('Settings save error: ' . $e->getMessage(), 'error');
+            $allLines[] = $line;
         }
     }
+
+    if ($updated) {
+        file_put_contents($printOrdersLog, implode("\n", $allLines) . "\n", LOCK_EX);
+        header('Content-Type: application/json; charset=utf-8');
+        echo json_encode(['success' => true], JSON_UNESCAPED_UNICODE);
+    } else {
+        header('Content-Type: application/json; charset=utf-8');
+        echo json_encode(['success' => false, 'error' => 'Заказ не найден'], JSON_UNESCAPED_UNICODE);
+    }
+    exit;
 }
 
-// Получаем текущие настройки
-$settings = $db->find('settings', 'main');
-if (!$settings) {
-    $settings = [];
-}
-
-// Устанавливаем значения по умолчанию
-$defaults = [
-    'site_name' => "Sasha's Sushi",
-    'site_description' => 'Лучшие суши и роллы в городе',
-    'site_keywords' => 'суши, роллы, доставка еды',
-    'site_logo' => '/assets/logo.png',
-    'site_favicon' => '/assets/favicon.ico',
-    'delivery_cost' => 200,
-    'free_delivery_from' => 1500,
-    'min_order_amount' => 800,
-    'max_delivery_distance' => 10,
-    'delivery_time' => '60-90',
-    'delivery_zones' => [],
-    'pickup_enabled' => true,
-    'pickup_discount' => 10,
-    'work_hours' => ['start' => '10:00', 'end' => '23:00'],
-    'work_schedule' => ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'],
-    'phones' => ['+7 999 123-45-67'],
-    'email' => 'info@sashas-sushi.ru',
-    'support_email' => 'support@sashas-sushi.ru',
-    'address' => 'г. Москва, ул. Примерная, 123',
-    'coordinates' => ['lat' => '55.751244', 'lng' => '37.618423'],
-    'payment_methods' => ['cash', 'card', 'online'],
-    'social_networks' => [
-        'vk' => '', 'instagram' => '', 'telegram' => '',
-        'whatsapp' => '', 'youtube' => '', 'facebook' => ''
-    ],
-    'jobs_banner' => [
-        'enabled' => true,
-        'title' => 'Требуются работники',
-        'description' => 'Присоединяйтесь к нашей команде',
-        'link' => '#',
-        'button_text' => 'Подробнее',
-        'background_color' => '#10b981',
-        'text_color' => '#ffffff',
-        'icon' => 'fa-briefcase',
-        'image' => '',
-        'use_image' => false
-    ],
-    'yookassa' => [
-        'enabled' => false, 'shop_id' => '', 'secret_key' => '',
-        'test_mode' => true, 'auto_capture' => true,
-        'description_template' => 'Оплата заказа #{order_id}',
-        'success_url' => '', 'fail_url' => ''
-    ],
-    'sberbank' => [
-        'enabled' => false, 'username' => '', 'password' => '',
-        'test_mode' => true, 'two_stage' => false,
-        'success_url' => '', 'fail_url' => ''
-    ],
-    '1c_integration' => [
-        'enabled' => false, 'server' => '192.168.1.100:1541',
-        'database' => 'SushiRestaurant', 'username' => 'WebExchange',
-        'password' => '', 'exchange_path' => './1c_exchange/',
-        'auto_sync' => true, 'sync_interval' => 300,
-        'sync_settings' => [
-            'products' => true, 'categories' => true, 'prices' => true,
-            'stock' => true, 'orders' => true, 'customers' => true,
-            'delivery_zones' => true, 'delivery_slots' => true,
-            'payment_transactions' => true, 'reviews' => false, 'promocodes' => false
+// Обработка создания заказа
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'create_order') {
+    $orderData = [
+        'id' => generateOrderNumber($ordersLog, $printOrdersLog),
+        'timestamp' => date('Y-m-d H:i:s'),
+        'customer' => [
+            'name' => trim($_POST['customer_name'] ?? ''),
+            'phone' => trim($_POST['customer_phone'] ?? ''),
+            'email' => trim($_POST['customer_email'] ?? '')
         ],
-        'last_sync' => null
-    ],
-    'notifications' => [
-        'email_enabled' => true, 'sms_enabled' => false,
-        'telegram_enabled' => false, 'telegram_bot_token' => '',
-        'telegram_chat_id' => '', 'new_order_notification' => true,
-        'status_change_notification' => true
-    ],
-    'seo' => [
-        'meta_title' => '', 'meta_description' => '', 'meta_keywords' => '',
-        'og_image' => '', 'robots_txt' => '', 'sitemap_enabled' => true,
-        'google_analytics' => '', 'yandex_metrika' => ''
-    ],
-    'appearance' => [
-        'theme' => 'light', 'primary_color' => '#000000',
-        'secondary_color' => '#10b981', 'accent_color' => '#ffffff',
-        'font_family' => 'Inter', 'show_prices' => true,
-        'show_availability' => true, 'catalog_view' => 'grid',
-        'products_per_page' => 12
-    ],
-    'bonus_system' => [
-        'enabled' => false, 'percent' => 5, 'min_order_for_bonus' => 1000,
-        'max_bonus_payment' => 30, 'bonus_expiration_days' => 365
-    ],
-    'email_settings' => [
-        'smtp_enabled' => false, 'smtp_host' => '', 'smtp_port' => 587,
-        'smtp_username' => '', 'smtp_password' => '', 'smtp_encryption' => 'tls',
-        'from_email' => '', 'from_name' => ''
-    ]
-];
+        'details' => [
+            'description' => trim($_POST['order_description'] ?? ''),
+            'technical' => trim($_POST['technical_details'] ?? ''),
+            'materials_provided' => isset($_POST['materials_provided']),
+            'materials_date' => trim($_POST['materials_date'] ?? '')
+        ],
+        'pricing' => [
+            'prepayment' => (float)($_POST['prepayment'] ?? 0),
+            'prepayment_paid' => isset($_POST['prepayment_paid']),
+            'total' => (float)($_POST['total_price'] ?? 0)
+        ],
+        'dates' => [
+            'order_date' => date('Y-m-d'),
+            'ready_date' => trim($_POST['ready_date'] ?? '')
+        ],
+        'status' => 'new',
+        'type' => 'print_order'
+    ];
 
-// Объединяем с дефолтными значениями
-$settings = array_replace_recursive($defaults, $settings);
+    $logLine = date('Y-m-d H:i:s') . " | " . $orderData['id'] . " | " . json_encode($orderData, JSON_UNESCAPED_UNICODE) . "\n";
+    file_put_contents($printOrdersLog, $logLine, FILE_APPEND | LOCK_EX);
 
-// Получаем статус синхронизации 1С
-$sync_status = null;
-if (method_exists($db, 'get1CSyncStatus')) {
-    $sync_status = $db->get1CSyncStatus();
+    $phone = preg_replace('/[^0-9]/', '', $orderData['customer']['phone']);
+    $orderDate = date('Y-m-d');
+    $txtFilename = $uploadsDir . '/' . $orderDate . '_' . $phone . '.txt';
+    file_put_contents($txtFilename, json_encode($orderData, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT), LOCK_EX);
+
+    $response = [
+        'success' => true,
+        'order_id' => $orderData['id'],
+        'order_number' => str_replace('print_order_', '#', $orderData['id']),
+        'customer_name' => $orderData['customer']['name'],
+        'customer_phone' => $orderData['customer']['phone'],
+        'customer_email' => $orderData['customer']['email'],
+        'order_date' => date('d.m.Y'),
+        'ready_date' => date('d.m.Y', strtotime($orderData['dates']['ready_date'])),
+        'description' => $orderData['details']['description'],
+        'technical' => $orderData['details']['technical'],
+        'materials_provided' => $orderData['details']['materials_provided'],
+        'materials_date' => !empty($orderData['details']['materials_date']) ? date('d.m.Y', strtotime($orderData['details']['materials_date'])) : '',
+        'prepayment' => $orderData['pricing']['prepayment'],
+        'prepayment_paid' => $orderData['pricing']['prepayment_paid'],
+        'total' => $orderData['pricing']['total'],
+        'remaining' => $orderData['pricing']['total'] - $orderData['pricing']['prepayment'],
+        'timestamp' => date('d.m.Y H:i'),
+        'txt_file' => basename($txtFilename)
+    ];
+
+    header('Content-Type: application/json; charset=utf-8');
+    echo json_encode($response, JSON_UNESCAPED_UNICODE);
+    exit;
 }
 
-// Функция для безопасного получения значения
-function getSetting($settings, $keys, $default = '') {
-    $value = $settings;
-    foreach ((array)$keys as $key) {
-        if (is_array($value) && isset($value[$key])) {
-            $value = $value[$key];
-        } else {
-            return $default;
-        }
+// API конфигурации
+if (isset($_GET['api']) && $_GET['api'] === 'config') {
+    header('Content-Type: application/json; charset=utf-8');
+    $photoConfig = json_decode(@file_get_contents($photoConfigFile), true);
+    if (!$photoConfig) {
+        $photoConfig = [
+            'enabled' => true,
+            'max_photos' => 100,
+            'max_file_size' => 10,
+            'supported_formats' => ['jpg', 'jpeg', 'png', 'heic', 'heif']
+        ];
     }
-    return $value;
-}
-?>
-
-<?php if (isset($success_message)): ?>
-    <div class="alert alert-success">
-        <i class="fas fa-check-circle"></i>
-        <?= htmlspecialchars($success_message) ?>
-    </div>
-<?php endif; ?>
-
-<?php if (isset($error_message)): ?>
-    <div class="alert alert-error">
-        <i class="fas fa-exclamation-circle"></i>
-        <?= htmlspecialchars($error_message) ?>
-    </div>
-<?php endif; ?>
-
-<form method="POST" action="" class="settings-form" id="settingsForm">
-    <input type="hidden" name="save_settings" value="1">
-
-    <div class="settings-tabs">
-        <div class="tab-list">
-            <button type="button" class="tab-button active" data-tab="general">
-                <i class="fas fa-cog"></i> Общие
-            </button>
-            <button type="button" class="tab-button" data-tab="appearance">
-                <i class="fas fa-palette"></i> Внешний вид
-            </button>
-            <button type="button" class="tab-button" data-tab="banner">
-                <i class="fas fa-bullhorn"></i> Баннер
-            </button>
-            <button type="button" class="tab-button" data-tab="delivery">
-                <i class="fas fa-truck"></i> Доставка
-            </button>
-            <button type="button" class="tab-button" data-tab="payments">
-                <i class="fas fa-credit-card"></i> Платежи
-            </button>
-            <button type="button" class="tab-button" data-tab="1c">
-                <i class="fas fa-sync-alt"></i> 1С
-                <?php if ($sync_status && isset($sync_status['status']) && $sync_status['status'] === 'recent'): ?>
-                    <span class="badge badge-success">●</span>
-                <?php endif; ?>
-            </button>
-            <button type="button" class="tab-button" data-tab="notifications">
-                <i class="fas fa-bell"></i> Уведомления
-            </button>
-            <button type="button" class="tab-button" data-tab="seo">
-                <i class="fas fa-search"></i> SEO
-            </button>
-            <button type="button" class="tab-button" data-tab="bonus">
-                <i class="fas fa-gift"></i> Бонусы
-            </button>
-            <button type="button" class="tab-button" data-tab="email">
-                <i class="fas fa-envelope"></i> Email
-            </button>
-        </div>
-
-        <!-- Общие настройки -->
-        <div id="general" class="tab-content active">
-            <div class="card">
-                <div class="card-header">
-                    <h3 class="card-title"><i class="fas fa-info-circle"></i> Основная информация</h3>
-                </div>
-                <div class="card-body">
-                    <div class="row">
-                        <div class="col-6">
-                            <div class="form-group">
-                                <label class="form-label">Название сайта *</label>
-                                <input type="text" class="form-input" name="site_name" 
-                                       value="<?= htmlspecialchars(getSetting($settings, 'site_name')) ?>" required>
-                            </div>
-                        </div>
-                        <div class="col-6">
-                            <div class="form-group">
-                                <label class="form-label">Email</label>
-                                <input type="email" class="form-input" name="email" 
-                                       value="<?= htmlspecialchars(getSetting($settings, 'email')) ?>">
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="row">
-                        <div class="col-6">
-                            <div class="form-group">
-                                <label class="form-label">Логотип (URL)</label>
-                                <input type="text" class="form-input" name="site_logo" 
-                                       value="<?= htmlspecialchars(getSetting($settings, 'site_logo')) ?>">
-                            </div>
-                        </div>
-                        <div class="col-6">
-                            <div class="form-group">
-                                <label class="form-label">Favicon (URL)</label>
-                                <input type="text" class="form-input" name="site_favicon" 
-                                       value="<?= htmlspecialchars(getSetting($settings, 'site_favicon')) ?>">
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="form-group">
-                        <label class="form-label">Описание</label>
-                        <textarea class="form-textarea" name="site_description" rows="3"><?= htmlspecialchars(getSetting($settings, 'site_description')) ?></textarea>
-                    </div>
-
-                    <div class="form-group">
-                        <label class="form-label">Ключевые слова</label>
-                        <input type="text" class="form-input" name="site_keywords" 
-                               value="<?= htmlspecialchars(getSetting($settings, 'site_keywords')) ?>">
-                    </div>
-
-                    <div class="form-group">
-                        <label class="form-label">Адрес</label>
-                        <input type="text" class="form-input" name="address" 
-                               value="<?= htmlspecialchars(getSetting($settings, 'address')) ?>">
-                    </div>
-
-                    <div class="row">
-                        <div class="col-6">
-                            <div class="form-group">
-                                <label class="form-label">Координаты (широта)</label>
-                                <input type="text" class="form-input" name="coord_lat" 
-                                       value="<?= htmlspecialchars(getSetting($settings, ['coordinates', 'lat'])) ?>"
-                                       placeholder="55.751244">
-                            </div>
-                        </div>
-                        <div class="col-6">
-                            <div class="form-group">
-                                <label class="form-label">Координаты (долгота)</label>
-                                <input type="text" class="form-input" name="coord_lng" 
-                                       value="<?= htmlspecialchars(getSetting($settings, ['coordinates', 'lng'])) ?>"
-                                       placeholder="37.618423">
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="form-group">
-                        <label class="form-label">Телефоны (каждый с новой строки)</label>
-                        <textarea class="form-textarea" name="phones" rows="3"><?= htmlspecialchars(implode("\n", getSetting($settings, 'phones', []))) ?></textarea>
-                    </div>
-
-                    <div class="row">
-                        <div class="col-4">
-                            <div class="form-group">
-                                <label class="form-label">Время работы: начало</label>
-                                <input type="time" class="form-input" name="work_start" 
-                                       value="<?= htmlspecialchars(getSetting($settings, ['work_hours', 'start'], '10:00')) ?>">
-                            </div>
-                        </div>
-                        <div class="col-4">
-                            <div class="form-group">
-                                <label class="form-label">Время работы: конец</label>
-                                <input type="time" class="form-input" name="work_end" 
-                                       value="<?= htmlspecialchars(getSetting($settings, ['work_hours', 'end'], '23:00')) ?>">
-                            </div>
-                        </div>
-                        <div class="col-4">
-                            <div class="form-group">
-                                <label class="form-label">Среднее время доставки</label>
-                                <input type="text" class="form-input" name="delivery_time" 
-                                       value="<?= htmlspecialchars(getSetting($settings, 'delivery_time', '60-90')) ?>"
-                                       placeholder="60-90">
-                                <small class="form-hint">В минутах (например: 60-90)</small>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="form-group">
-                        <label class="form-label">Рабочие дни</label>
-                        <div class="checkbox-group-inline">
-                            <?php
-                            $days = [
-                                'mon' => 'Пн', 'tue' => 'Вт', 'wed' => 'Ср',
-                                'thu' => 'Чт', 'fri' => 'Пт', 'sat' => 'Сб', 'sun' => 'Вс'
-                            ];
-                            $work_schedule = getSetting($settings, 'work_schedule', []);
-                            foreach ($days as $key => $label):
-                            ?>
-                            <label class="checkbox-label">
-                                <input type="checkbox" name="work_schedule[]" value="<?= $key ?>" 
-                                       <?= in_array($key, $work_schedule) ? 'checked' : '' ?>>
-                                <?= $label ?>
-                            </label>
-                            <?php endforeach; ?>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <div class="card">
-                <div class="card-header">
-                    <h3 class="card-title"><i class="fas fa-share-alt"></i> Социальные сети</h3>
-                </div>
-                <div class="card-body">
-                    <div class="row">
-                        <div class="col-6">
-                            <div class="form-group">
-                                <label class="form-label"><i class="fab fa-vk"></i> ВКонтакте</label>
-                                <input type="url" class="form-input" name="social_vk" 
-                                       value="<?= htmlspecialchars(getSetting($settings, ['social_networks', 'vk'])) ?>"
-                                       placeholder="https://vk.com/...">
-                            </div>
-                        </div>
-                        <div class="col-6">
-                            <div class="form-group">
-                                <label class="form-label"><i class="fab fa-instagram"></i> Instagram</label>
-                                <input type="url" class="form-input" name="social_instagram" 
-                                       value="<?= htmlspecialchars(getSetting($settings, ['social_networks', 'instagram'])) ?>"
-                                       placeholder="https://instagram.com/...">
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="row">
-                        <div class="col-6">
-                            <div class="form-group">
-                                <label class="form-label"><i class="fab fa-telegram"></i> Telegram</label>
-                                <input type="url" class="form-input" name="social_telegram" 
-                                       value="<?= htmlspecialchars(getSetting($settings, ['social_networks', 'telegram'])) ?>"
-                                       placeholder="https://t.me/...">
-                            </div>
-                        </div>
-                        <div class="col-6">
-                            <div class="form-group">
-                                <label class="form-label"><i class="fab fa-whatsapp"></i> WhatsApp</label>
-                                <input type="tel" class="form-input" name="social_whatsapp" 
-                                       value="<?= htmlspecialchars(getSetting($settings, ['social_networks', 'whatsapp'])) ?>"
-                                       placeholder="+79991234567">
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="row">
-                        <div class="col-6">
-                            <div class="form-group">
-                                <label class="form-label"><i class="fab fa-youtube"></i> YouTube</label>
-                                <input type="url" class="form-input" name="social_youtube" 
-                                       value="<?= htmlspecialchars(getSetting($settings, ['social_networks', 'youtube'])) ?>"
-                                       placeholder="https://youtube.com/...">
-                            </div>
-                        </div>
-                        <div class="col-6">
-                            <div class="form-group">
-                                <label class="form-label"><i class="fab fa-facebook"></i> Facebook</label>
-                                <input type="url" class="form-input" name="social_facebook" 
-                                       value="<?= htmlspecialchars(getSetting($settings, ['social_networks', 'facebook'])) ?>"
-                                       placeholder="https://facebook.com/...">
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-<!-- Внешний вид -->
-        <div id="appearance" class="tab-content">
-            <div class="card">
-                <div class="card-header">
-                    <h3 class="card-title"><i class="fas fa-paint-brush"></i> Настройки внешнего вида</h3>
-                </div>
-                <div class="card-body">
-                    <div class="row">
-                        <div class="col-3">
-                            <div class="form-group">
-                                <label class="form-label">Тема</label>
-                                <select class="form-input" name="appearance_theme">
-                                    <option value="light" <?= getSetting($settings, ['appearance', 'theme'], 'light') == 'light' ? 'selected' : '' ?>>Светлая</option>
-                                    <option value="dark" <?= getSetting($settings, ['appearance', 'theme']) == 'dark' ? 'selected' : '' ?>>Темная</option>
-                                </select>
-                            </div>
-                        </div>
-                        <div class="col-3">
-                            <div class="form-group">
-                                <label class="form-label">Основной цвет</label>
-                                <input type="color" class="form-input color-input" name="appearance_primary_color" 
-                                       value="<?= htmlspecialchars(getSetting($settings, ['appearance', 'primary_color'], '#000000')) ?>">
-                            </div>
-                        </div>
-                        <div class="col-3">
-                            <div class="form-group">
-                                <label class="form-label">Цвет акцента</label>
-                                <input type="color" class="form-input color-input" name="appearance_secondary_color" 
-                                       value="<?= htmlspecialchars(getSetting($settings, ['appearance', 'secondary_color'], '#10b981')) ?>">
-                            </div>
-                        </div>
-                        <div class="col-3">
-                            <div class="form-group">
-                                <label class="form-label">Цвет фона</label>
-                                <input type="color" class="form-input color-input" name="appearance_accent_color" 
-                                       value="<?= htmlspecialchars(getSetting($settings, ['appearance', 'accent_color'], '#ffffff')) ?>">
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="row">
-                        <div class="col-4">
-                            <div class="form-group">
-                                <label class="form-label">Шрифт</label>
-                                <select class="form-input" name="appearance_font">
-                                    <option value="Inter" <?= getSetting($settings, ['appearance', 'font_family'], 'Inter') == 'Inter' ? 'selected' : '' ?>>Inter</option>
-                                    <option value="Roboto" <?= getSetting($settings, ['appearance', 'font_family']) == 'Roboto' ? 'selected' : '' ?>>Roboto</option>
-                                    <option value="Open Sans" <?= getSetting($settings, ['appearance', 'font_family']) == 'Open Sans' ? 'selected' : '' ?>>Open Sans</option>
-                                    <option value="Montserrat" <?= getSetting($settings, ['appearance', 'font_family']) == 'Montserrat' ? 'selected' : '' ?>>Montserrat</option>
-                                </select>
-                            </div>
-                        </div>
-                        <div class="col-4">
-                            <div class="form-group">
-                                <label class="form-label">Вид каталога</label>
-                                <select class="form-input" name="appearance_catalog_view">
-                                    <option value="grid" <?= getSetting($settings, ['appearance', 'catalog_view'], 'grid') == 'grid' ? 'selected' : '' ?>>Сетка</option>
-                                    <option value="list" <?= getSetting($settings, ['appearance', 'catalog_view']) == 'list' ? 'selected' : '' ?>>Список</option>
-                                </select>
-                            </div>
-                        </div>
-                        <div class="col-4">
-                            <div class="form-group">
-                                <label class="form-label">Товаров на странице</label>
-                                <input type="number" class="form-input" name="appearance_products_per_page" 
-                                       value="<?= getSetting($settings, ['appearance', 'products_per_page'], 12) ?>" min="6" max="48">
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="form-group">
-                        <div class="checkbox-group">
-                            <label class="checkbox-label">
-                                <input type="checkbox" name="appearance_show_prices" 
-                                       <?= getSetting($settings, ['appearance', 'show_prices'], true) ? 'checked' : '' ?>>
-                                Показывать цены на товары
-                            </label>
-                            <label class="checkbox-label">
-                                <input type="checkbox" name="appearance_show_availability" 
-                                       <?= getSetting($settings, ['appearance', 'show_availability'], true) ? 'checked' : '' ?>>
-                                Показывать наличие товаров
-                            </label>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <div class="card">
-                <div class="card-header">
-                    <h3 class="card-title"><i class="fas fa-eye"></i> Предпросмотр цветовой схемы</h3>
-                </div>
-                <div class="card-body">
-                    <div class="color-preview" id="colorPreview">
-                        <div class="preview-header">Заголовок</div>
-                        <div class="preview-content">
-                            <button class="preview-button" type="button">Кнопка</button>
-                            <div class="preview-text">Пример текста</div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- Баннер "Требуются работники" -->
-        <div id="banner" class="tab-content">
-            <div class="card">
-                <div class="card-header">
-                    <h3 class="card-title"><i class="fas fa-bullhorn"></i> Баннер на главной странице</h3>
-                    <label class="toggle-switch">
-                        <input type="checkbox" name="jobs_banner_enabled" 
-                               <?= getSetting($settings, ['jobs_banner', 'enabled'], true) ? 'checked' : '' ?>>
-                        <span class="toggle-slider"></span>
-                    </label>
-                </div>
-                <div class="card-body">
-                    <div class="form-group">
-                        <label class="form-label">Заголовок баннера</label>
-                        <input type="text" class="form-input" name="jobs_banner_title" 
-                               value="<?= htmlspecialchars(getSetting($settings, ['jobs_banner', 'title'], 'Требуются работники')) ?>"
-                               placeholder="Требуются работники">
-                    </div>
-
-                    <div class="form-group">
-                        <label class="form-label">Описание</label>
-                        <textarea class="form-textarea" name="jobs_banner_description" rows="2"><?= htmlspecialchars(getSetting($settings, ['jobs_banner', 'description'], 'Присоединяйтесь к нашей команде')) ?></textarea>
-                    </div>
-
-                    <div class="row">
-                        <div class="col-6">
-                            <div class="form-group">
-                                <label class="form-label">Ссылка</label>
-                                <input type="text" class="form-input" name="jobs_banner_link" 
-                                       value="<?= htmlspecialchars(getSetting($settings, ['jobs_banner', 'link'], '#')) ?>"
-                                       placeholder="https://example.com/vacancies или #">
-                                <small class="form-hint">URL страницы вакансий или # для модального окна</small>
-                            </div>
-                        </div>
-                        <div class="col-6">
-                            <div class="form-group">
-                                <label class="form-label">Текст кнопки</label>
-                                <input type="text" class="form-input" name="jobs_banner_button" 
-                                       value="<?= htmlspecialchars(getSetting($settings, ['jobs_banner', 'button_text'], 'Подробнее')) ?>"
-                                       placeholder="Подробнее">
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="row">
-                        <div class="col-6">
-                            <div class="form-group">
-                                <label class="form-label">Цвет фона</label>
-                                <input type="color" class="form-input color-input" name="jobs_banner_bg_color" 
-                                       value="<?= htmlspecialchars(getSetting($settings, ['jobs_banner', 'background_color'], '#10b981')) ?>"
-                                       id="bannerBgColor">
-                            </div>
-                        </div>
-                        <div class="col-6">
-                            <div class="form-group">
-                                <label class="form-label">Цвет текста</label>
-                                <input type="color" class="form-input color-input" name="jobs_banner_text_color" 
-                                       value="<?= htmlspecialchars(getSetting($settings, ['jobs_banner', 'text_color'], '#ffffff')) ?>"
-                                       id="bannerTextColor">
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="form-group">
-                        <label class="checkbox-label">
-                            <input type="checkbox" name="jobs_banner_use_image" id="bannerUseImage"
-                                   <?= getSetting($settings, ['jobs_banner', 'use_image'], false) ? 'checked' : '' ?>>
-                            Использовать изображение вместо иконки
-                        </label>
-                    </div>
-
-                    <div class="row">
-                        <div class="col-6">
-                            <div class="form-group" id="iconGroup">
-                                <label class="form-label">Иконка FontAwesome</label>
-                                <div class="icon-input-wrapper">
-                                    <i class="fas <?= htmlspecialchars(getSetting($settings, ['jobs_banner', 'icon'], 'fa-briefcase')) ?>" id="iconPreview"></i>
-                                    <input type="text" class="form-input" name="jobs_banner_icon" 
-                                           value="<?= htmlspecialchars(getSetting($settings, ['jobs_banner', 'icon'], 'fa-briefcase')) ?>"
-                                           id="bannerIcon"
-                                           placeholder="fa-briefcase">
-                                </div>
-                                <small class="form-hint">
-                                    <a href="https://fontawesome.com/icons" target="_blank">Посмотреть все иконки</a>
-                                    (например: fa-briefcase, fa-users, fa-handshake)
-                                </small>
-                            </div>
-                        </div>
-                        <div class="col-6">
-                            <div class="form-group" id="imageGroup">
-                                <label class="form-label">URL изображения</label>
-                                <input type="text" class="form-input" name="jobs_banner_image" 
-                                       value="<?= htmlspecialchars(getSetting($settings, ['jobs_banner', 'image'], '')) ?>"
-                                       placeholder="https://example.com/banner-image.jpg">
-                                <small class="form-hint">Рекомендуемый размер: 80x80px, формат PNG с прозрачностью</small>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <div class="card">
-                <div class="card-header">
-                    <h3 class="card-title"><i class="fas fa-eye"></i> Предпросмотр баннера</h3>
-                </div>
-                <div class="card-body">
-                    <div class="banner-preview" id="bannerPreview">
-                        <div class="banner-preview-icon" id="previewIcon">
-                            <i class="fas <?= htmlspecialchars(getSetting($settings, ['jobs_banner', 'icon'], 'fa-briefcase')) ?>"></i>
-                        </div>
-                        <div class="banner-preview-image" id="previewImage" style="display: none;">
-                            <img src="" alt="Banner" id="previewImageSrc">
-                        </div>
-                        <div class="banner-preview-content">
-                            <h4 id="previewTitle"><?= htmlspecialchars(getSetting($settings, ['jobs_banner', 'title'], 'Требуются работники')) ?></h4>
-                            <p id="previewDesc"><?= htmlspecialchars(getSetting($settings, ['jobs_banner', 'description'], 'Присоединяйтесь к нашей команде')) ?></p>
-                        </div>
-                        <div class="banner-preview-button">
-                            <button type="button" id="previewButton"><?= htmlspecialchars(getSetting($settings, ['jobs_banner', 'button_text'], 'Подробнее')) ?></button>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- Настройки доставки -->
-        <div id="delivery" class="tab-content">
-            <div class="card">
-                <div class="card-header">
-                    <h3 class="card-title"><i class="fas fa-shipping-fast"></i> Параметры доставки</h3>
-                </div>
-                <div class="card-body">
-                    <div class="row">
-                        <div class="col-3">
-                            <div class="form-group">
-                                <label class="form-label">Стоимость доставки (₽)</label>
-                                <input type="number" class="form-input" name="delivery_cost" 
-                                       value="<?= getSetting($settings, 'delivery_cost', 0) ?>" min="0" step="0.01">
-                            </div>
-                        </div>
-                        <div class="col-3">
-                            <div class="form-group">
-                                <label class="form-label">Бесплатная доставка от (₽)</label>
-                                <input type="number" class="form-input" name="free_delivery_from" 
-                                       value="<?= getSetting($settings, 'free_delivery_from', 0) ?>" min="0" step="0.01">
-                            </div>
-                        </div>
-                        <div class="col-3">
-                            <div class="form-group">
-                                <label class="form-label">Минимальная сумма заказа (₽)</label>
-                                <input type="number" class="form-input" name="min_order_amount" 
-                                       value="<?= getSetting($settings, 'min_order_amount', 0) ?>" min="0" step="0.01">
-                            </div>
-                        </div>
-                        <div class="col-3">
-                            <div class="form-group">
-                                <label class="form-label">Макс. расстояние доставки (км)</label>
-                                <input type="number" class="form-input" name="max_delivery_distance" 
-                                       value="<?= getSetting($settings, 'max_delivery_distance', 10) ?>" min="0" step="0.1">
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <div class="card">
-                <div class="card-header">
-                    <h3 class="card-title"><i class="fas fa-map-marked-alt"></i> Зоны доставки</h3>
-                    <button type="button" class="btn btn-sm btn-primary" onclick="addDeliveryZone()">
-                        <i class="fas fa-plus"></i> Добавить зону
-                    </button>
-                </div>
-                <div class="card-body">
-                    <div id="deliveryZones">
-                        <?php 
-                        $delivery_zones = getSetting($settings, 'delivery_zones', []);
-                        if (!empty($delivery_zones)): ?>
-                            <?php foreach ($delivery_zones as $index => $zone): ?>
-                            <div class="delivery-zone-item" data-zone="<?= $index ?>">
-                                <div class="row">
-                                    <div class="col-5">
-                                        <input type="text" class="form-input" 
-                                               name="delivery_zone_name_<?= $index ?>" 
-                                               value="<?= htmlspecialchars($zone['name'] ?? '') ?>"
-                                               placeholder="Название зоны">
-                                    </div>
-                                    <div class="col-3">
-                                        <input type="number" class="form-input" 
-                                               name="delivery_zone_cost_<?= $index ?>" 
-                                               value="<?= $zone['cost'] ?? 0 ?>"
-                                               placeholder="Стоимость" step="0.01">
-                                    </div>
-                                    <div class="col-3">
-                                        <input type="number" class="form-input" 
-                                               name="delivery_zone_time_<?= $index ?>" 
-                                               value="<?= $zone['time'] ?? 0 ?>"
-                                               placeholder="Время (мин)">
-                                    </div>
-                                    <div class="col-1">
-                                        <button type="button" class="btn btn-danger btn-sm" onclick="removeDeliveryZone(this)">
-                                            <i class="fas fa-trash"></i>
-                                        </button>
-                                    </div>
-                                </div>
-                            </div>
-                            <?php endforeach; ?>
-                        <?php endif; ?>
-                    </div>
-                    <small class="form-hint">
-                        <i class="fas fa-info-circle"></i> Зоны доставки синхронизируются с 1С или добавляются вручную
-                    </small>
-                </div>
-            </div>
-
-            <div class="card">
-                <div class="card-header">
-                    <h3 class="card-title"><i class="fas fa-store"></i> Самовывоз</h3>
-                </div>
-                <div class="card-body">
-                    <div class="form-group">
-                        <label class="checkbox-label">
-                            <input type="checkbox" name="pickup_enabled" 
-                                   <?= getSetting($settings, 'pickup_enabled', true) ? 'checked' : '' ?>>
-                            Разрешить самовывоз
-                        </label>
-                    </div>
-                    <div class="form-group">
-                        <label class="form-label">Скидка при самовывозе (%)</label>
-                        <input type="number" class="form-input" name="pickup_discount" 
-                               value="<?= getSetting($settings, 'pickup_discount', 0) ?>" min="0" max="100" step="0.01">
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- Способы оплаты -->
-        <div id="payments" class="tab-content">
-            <div class="card">
-                <div class="card-header">
-                    <h3 class="card-title"><i class="fas fa-money-bill-wave"></i> Способы оплаты</h3>
-                </div>
-                <div class="card-body">
-                    <div class="form-group">
-                        <label class="form-label">Доступные способы оплаты</label>
-                        <div class="checkbox-group">
-                            <?php $payment_methods = getSetting($settings, 'payment_methods', []); ?>
-                            <label class="checkbox-label">
-                                <input type="checkbox" name="payment_methods[]" value="cash" 
-                                       <?= in_array('cash', $payment_methods) ? 'checked' : '' ?>>
-                                <i class="fas fa-money-bill-alt"></i> Наличными при получении
-                            </label>
-                            <label class="checkbox-label">
-                                <input type="checkbox" name="payment_methods[]" value="card" 
-                                       <?= in_array('card', $payment_methods) ? 'checked' : '' ?>>
-                                <i class="fas fa-credit-card"></i> Картой при получении
-                            </label>
-                            <label class="checkbox-label">
-                                <input type="checkbox" name="payment_methods[]" value="online" 
-                                       <?= in_array('online', $payment_methods) ? 'checked' : '' ?>>
-                                <i class="fas fa-laptop"></i> Онлайн-оплата
-                            </label>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- ЮKassa -->
-            <div class="card">
-                <div class="card-header">
-                    <h3 class="card-title">
-                        <img src="https://yookassa.ru/favicon.ico" alt="ЮKassa" style="width: 20px; height: 20px; margin-right: 8px;" onerror="this.style.display='none'">
-                        ЮKassa (Яндекс.Касса)
-                    </h3>
-                    <label class="toggle-switch">
-                        <input type="checkbox" name="yookassa_enabled" 
-                               <?= getSetting($settings, ['yookassa', 'enabled'], false) ? 'checked' : '' ?>>
-                        <span class="toggle-slider"></span>
-                    </label>
-                </div>
-                <div class="card-body">
-                    <div class="row">
-                        <div class="col-6">
-                            <div class="form-group">
-                                <label class="form-label">Shop ID</label>
-                                <input type="text" class="form-input" name="yookassa_shop_id" 
-                                       value="<?= htmlspecialchars(getSetting($settings, ['yookassa', 'shop_id'])) ?>"
-                                       placeholder="123456">
-                            </div>
-                        </div>
-                        <div class="col-6">
-                            <div class="form-group">
-                                <label class="form-label">Secret Key</label>
-                                <input type="password" class="form-input" name="yookassa_secret_key" 
-                                       value="<?= htmlspecialchars(getSetting($settings, ['yookassa', 'secret_key'])) ?>"
-                                       placeholder="live_...">
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="form-group">
-                        <label class="form-label">Шаблон описания платежа</label>
-                        <input type="text" class="form-input" name="yookassa_description" 
-                               value="<?= htmlspecialchars(getSetting($settings, ['yookassa', 'description_template'], 'Оплата заказа #{order_id}')) ?>"
-                               placeholder="Оплата заказа #{order_id}">
-                        <small class="form-hint">Доступные переменные: {order_id}, {customer_name}</small>
-                    </div>
-
-                    <div class="row">
-                        <div class="col-6">
-                            <div class="form-group">
-                                <label class="form-label">URL успешной оплаты</label>
-                                <input type="url" class="form-input" name="yookassa_success_url" 
-                                       value="<?= htmlspecialchars(getSetting($settings, ['yookassa', 'success_url'])) ?>"
-                                       placeholder="https://example.com/payment/success">
-                            </div>
-                        </div>
-                        <div class="col-6">
-                            <div class="form-group">
-                                <label class="form-label">URL неуспешной оплаты</label>
-                                <input type="url" class="form-input" name="yookassa_fail_url" 
-                                       value="<?= htmlspecialchars(getSetting($settings, ['yookassa', 'fail_url'])) ?>"
-                                       placeholder="https://example.com/payment/fail">
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="checkbox-group">
-                        <label class="checkbox-label">
-                            <input type="checkbox" name="yookassa_test_mode" 
-                                   <?= getSetting($settings, ['yookassa', 'test_mode'], false) ? 'checked' : '' ?>>
-                            Тестовый режим
-                        </label>
-                        <label class="checkbox-label">
-                            <input type="checkbox" name="yookassa_auto_capture" 
-                                   <?= getSetting($settings, ['yookassa', 'auto_capture'], false) ? 'checked' : '' ?>>
-                            Автоматическое подтверждение платежа
-                        </label>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Сбербанк -->
-            <div class="card">
-                <div class="card-header">
-                    <h3 class="card-title">
-                        <i class="fas fa-university"></i> Сбербанк Эквайринг
-                    </h3>
-                    <label class="toggle-switch">
-                        <input type="checkbox" name="sberbank_enabled" 
-                               <?= getSetting($settings, ['sberbank', 'enabled'], false) ? 'checked' : '' ?>>
-                        <span class="toggle-slider"></span>
-                    </label>
-                </div>
-                <div class="card-body">
-                    <div class="row">
-                        <div class="col-6">
-                            <div class="form-group">
-                                <label class="form-label">Логин</label>
-                                <input type="text" class="form-input" name="sberbank_username" 
-                                       value="<?= htmlspecialchars(getSetting($settings, ['sberbank', 'username'])) ?>"
-                                       placeholder="merchant_username">
-                            </div>
-                        </div>
-                        <div class="col-6">
-                            <div class="form-group">
-                                <label class="form-label">Пароль</label>
-                                <input type="password" class="form-input" name="sberbank_password" 
-                                       value="<?= htmlspecialchars(getSetting($settings, ['sberbank', 'password'])) ?>"
-                                       placeholder="merchant_password">
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="row">
-                        <div class="col-6">
-                            <div class="form-group">
-                                <label class="form-label">URL успешной оплаты</label>
-                                <input type="url" class="form-input" name="sberbank_success_url" 
-                                       value="<?= htmlspecialchars(getSetting($settings, ['sberbank', 'success_url'])) ?>"
-                                       placeholder="https://example.com/payment/success">
-                            </div>
-                        </div>
-                        <div class="col-6">
-                            <div class="form-group">
-                                <label class="form-label">URL неуспешной оплаты</label>
-                                <input type="url" class="form-input" name="sberbank_fail_url" 
-                                       value="<?= htmlspecialchars(getSetting($settings, ['sberbank', 'fail_url'])) ?>"
-                                       placeholder="https://example.com/payment/fail">
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="checkbox-group">
-                        <label class="checkbox-label">
-                            <input type="checkbox" name="sberbank_test_mode" 
-                                   <?= getSetting($settings, ['sberbank', 'test_mode'], false) ? 'checked' : '' ?>>
-                            Тестовый режим
-                        </label>
-                        <label class="checkbox-label">
-                            <input type="checkbox" name="sberbank_two_stage" 
-                                   <?= getSetting($settings, ['sberbank', 'two_stage'], false) ? 'checked' : '' ?>>
-                            Двухстадийная оплата (с холдированием)
-                        </label>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- Интеграция 1С -->
-        <div id="1c" class="tab-content">
-            <div class="card">
-                <div class="card-header">
-                    <h3 class="card-title"><i class="fas fa-database"></i> Подключение к 1С</h3>
-                    <label class="toggle-switch">
-                        <input type="checkbox" name="1c_enabled" 
-                               <?= getSetting($settings, ['1c_integration', 'enabled'], false) ? 'checked' : '' ?>>
-                        <span class="toggle-slider"></span>
-                    </label>
-                </div>
-                <div class="card-body">
-                    <div class="row">
-                        <div class="col-6">
-                            <div class="form-group">
-                                <label class="form-label">Сервер 1С</label>
-                                <input type="text" class="form-input" name="1c_server" 
-                                       value="<?= htmlspecialchars(getSetting($settings, ['1c_integration', 'server'])) ?>"
-                                       placeholder="192.168.1.100:1541">
-                            </div>
-                        </div>
-                        <div class="col-6">
-                            <div class="form-group">
-                                <label class="form-label">База данных</label>
-                                <input type="text" class="form-input" name="1c_database" 
-                                       value="<?= htmlspecialchars(getSetting($settings, ['1c_integration', 'database'])) ?>"
-                                       placeholder="SushiRestaurant">
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="row">
-                        <div class="col-6">
-                            <div class="form-group">
-                                <label class="form-label">Пользователь</label>
-                                <input type="text" class="form-input" name="1c_username" 
-                                       value="<?= htmlspecialchars(getSetting($settings, ['1c_integration', 'username'])) ?>"
-                                       placeholder="WebExchange">
-                            </div>
-                        </div>
-                        <div class="col-6">
-                            <div class="form-group">
-                                <label class="form-label">Пароль</label>
-                                <input type="password" class="form-input" name="1c_password" 
-                                       value="<?= htmlspecialchars(getSetting($settings, ['1c_integration', 'password'])) ?>"
-                                       placeholder="••••••••">
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="form-group">
-                        <label class="form-label">Путь к файлам обмена</label>
-                        <input type="text" class="form-input" name="1c_exchange_path" 
-                               value="<?= htmlspecialchars(getSetting($settings, ['1c_integration', 'exchange_path'], './1c_exchange/')) ?>">
-                    </div>
-
-                    <?php if ($sync_status): ?>
-                    <div class="sync-status-block status-<?= htmlspecialchars($sync_status['status'] ?? 'normal') ?>">
-                        <i class="fas fa-clock"></i>
-                        <div>
-                            <strong>Последняя синхронизация:</strong> 
-                            <?php if (isset($sync_status['last_sync'])): ?>
-                                <?= date('d.m.Y H:i:s', strtotime($sync_status['last_sync'])) ?>
-                                <br>
-                                <small>(<?= $sync_status['minutes_ago'] ?? 0 ?> минут назад)</small>
-                            <?php else: ?>
-                                Никогда
-                            <?php endif; ?>
-                        </div>
-                    </div>
-                    <?php endif; ?>
-                </div>
-            </div>
-
-            <div class="card">
-                <div class="card-header">
-                    <h3 class="card-title"><i class="fas fa-list-check"></i> Что синхронизировать с 1С</h3>
-                </div>
-                <div class="card-body">
-                    <div class="form-group">
-                        <label class="checkbox-label">
-                            <input type="checkbox" name="1c_auto_sync" 
-                                   <?= getSetting($settings, ['1c_integration', 'auto_sync'], false) ? 'checked' : '' ?>>
-                            <strong>Автоматическая синхронизация</strong>
-                        </label>
-                    </div>
-
-                    <div class="form-group">
-                        <label class="form-label">Интервал синхронизации (секунд)</label>
-                        <input type="number" class="form-input" name="1c_sync_interval" 
-                               value="<?= getSetting($settings, ['1c_integration', 'sync_interval'], 300) ?>" min="60">
-                        <small class="form-hint">Рекомендуется не менее 300 секунд (5 минут)</small>
-                    </div>
-
-                    <div class="sync-options-grid">
-                        <?php 
-                        $sync_options = [
-                            'products' => ['icon' => 'shopping-bag', 'title' => 'Товары', 'desc' => 'Номенклатура и характеристики'],
-                            'categories' => ['icon' => 'folder-open', 'title' => 'Категории', 'desc' => 'Группы товаров'],
-                            'prices' => ['icon' => 'ruble-sign', 'title' => 'Цены', 'desc' => 'Актуальные цены'],
-                            'stock' => ['icon' => 'boxes', 'title' => 'Остатки', 'desc' => 'Количество на складе'],
-                            'orders' => ['icon' => 'receipt', 'title' => 'Заказы', 'desc' => 'Передача заказов в 1С'],
-                            'customers' => ['icon' => 'users', 'title' => 'Клиенты', 'desc' => 'Контрагенты'],
-                            'delivery_zones' => ['icon' => 'map-marked-alt', 'title' => 'Зоны доставки', 'desc' => 'Тарифы и районы'],
-                            'delivery_slots' => ['icon' => 'clock', 'title' => 'Слоты доставки', 'desc' => 'Временные интервалы'],
-                            'payment_transactions' => ['icon' => 'money-bill-transfer', 'title' => 'Платежи', 'desc' => 'Транзакции оплаты'],
-                            'reviews' => ['icon' => 'star', 'title' => 'Отзывы', 'desc' => 'Отзывы клиентов'],
-                            'promocodes' => ['icon' => 'ticket-alt', 'title' => 'Промокоды', 'desc' => 'Акции и скидки']
-                        ];
-
-                        foreach ($sync_options as $key => $option):
-                            $checked = getSetting($settings, ['1c_integration', 'sync_settings', $key], false);
-                        ?>
-                        <div class="sync-option-card">
-                            <label class="checkbox-label">
-                                <input type="checkbox" name="1c_sync_<?= $key ?>" <?= $checked ? 'checked' : '' ?>>
-                                <div>
-                                    <i class="fas fa-<?= $option['icon'] ?>"></i>
-                                    <strong><?= $option['title'] ?></strong>
-                                    <small><?= $option['desc'] ?></small>
-                                </div>
-                            </label>
-                        </div>
-                        <?php endforeach; ?>
-                    </div>
-
-                    <div class="form-group" style="margin-top: 2rem;">
-                        <button type="button" class="btn btn-primary" onclick="manualSync()">
-                            <i class="fas fa-sync-alt"></i> Запустить синхронизацию вручную
-                        </button>
-                        <button type="button" class="btn btn-secondary" onclick="viewSyncLogs()">
-                            <i class="fas fa-file-alt"></i> Просмотреть логи
-                        </button>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- Уведомления -->
-        <div id="notifications" class="tab-content">
-            <div class="card">
-                <div class="card-header">
-                    <h3 class="card-title"><i class="fas fa-envelope"></i> Email уведомления</h3>
-                    <label class="toggle-switch">
-                        <input type="checkbox" name="notif_email_enabled" 
-                               <?= getSetting($settings, ['notifications', 'email_enabled'], false) ? 'checked' : '' ?>>
-                        <span class="toggle-slider"></span>
-                    </label>
-                </div>
-                <div class="card-body">
-                    <div class="checkbox-group">
-                        <label class="checkbox-label">
-                            <input type="checkbox" name="notif_new_order" 
-                                   <?= getSetting($settings, ['notifications', 'new_order_notification'], false) ? 'checked' : '' ?>>
-                            Уведомлять о новых заказах
-                        </label>
-                        <label class="checkbox-label">
-                            <input type="checkbox" name="notif_status_change" 
-                                   <?= getSetting($settings, ['notifications', 'status_change_notification'], false) ? 'checked' : '' ?>>
-                            Уведомлять об изменении статуса заказа
-                        </label>
-                    </div>
-                </div>
-            </div>
-
-            <div class="card">
-                <div class="card-header">
-                    <h3 class="card-title"><i class="fas fa-sms"></i> SMS уведомления</h3>
-                    <label class="toggle-switch">
-                        <input type="checkbox" name="notif_sms_enabled" 
-                               <?= getSetting($settings, ['notifications', 'sms_enabled'], false) ? 'checked' : '' ?>>
-                        <span class="toggle-slider"></span>
-                    </label>
-                </div>
-                <div class="card-body">
-                    <p class="text-muted">SMS уведомления требуют подключения SMS-шлюза</p>
-                </div>
-            </div>
-
-            <div class="card">
-                <div class="card-header">
-                    <h3 class="card-title"><i class="fab fa-telegram"></i> Telegram уведомления</h3>
-                    <label class="toggle-switch">
-                        <input type="checkbox" name="notif_telegram_enabled" 
-                               <?= getSetting($settings, ['notifications', 'telegram_enabled'], false) ? 'checked' : '' ?>>
-                        <span class="toggle-slider"></span>
-                    </label>
-                </div>
-                <div class="card-body">
-                    <div class="row">
-                        <div class="col-6">
-                            <div class="form-group">
-                                <label class="form-label">Bot Token</label>
-                                <input type="text" class="form-input" name="notif_telegram_token" 
-                                       value="<?= htmlspecialchars(getSetting($settings, ['notifications', 'telegram_bot_token'])) ?>"
-                                       placeholder="123456789:ABCdefGHIjklMNOpqrsTUVwxyz">
-                            </div>
-                        </div>
-                        <div class="col-6">
-                            <div class="form-group">
-                                <label class="form-label">Chat ID</label>
-                                <input type="text" class="form-input" name="notif_telegram_chat" 
-                                       value="<?= htmlspecialchars(getSetting($settings, ['notifications', 'telegram_chat_id'])) ?>"
-                                       placeholder="-123456789">
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- SEO -->
-        <div id="seo" class="tab-content">
-            <div class="card">
-                <div class="card-header">
-                    <h3 class="card-title"><i class="fas fa-chart-line"></i> Основные SEO настройки</h3>
-                </div>
-                <div class="card-body">
-                    <div class="form-group">
-                        <label class="form-label">Meta Title</label>
-                        <input type="text" class="form-input" name="seo_title" 
-                               value="<?= htmlspecialchars(getSetting($settings, ['seo', 'meta_title'])) ?>"
-                               placeholder="<?= htmlspecialchars(getSetting($settings, 'site_name')) ?>">
-                        <small class="form-hint">Рекомендуемая длина: 50-60 символов</small>
-                    </div>
-
-                    <div class="form-group">
-                        <label class="form-label">Meta Description</label>
-                        <textarea class="form-textarea" name="seo_description" rows="3" 
-                                  placeholder="Описание сайта для поисковых систем"><?= htmlspecialchars(getSetting($settings, ['seo', 'meta_description'])) ?></textarea>
-                        <small class="form-hint">Рекомендуемая длина: 150-160 символов</small>
-                    </div>
-
-                    <div class="form-group">
-                        <label class="form-label">Meta Keywords</label>
-                        <input type="text" class="form-input" name="seo_keywords" 
-                               value="<?= htmlspecialchars(getSetting($settings, ['seo', 'meta_keywords'])) ?>"
-                               placeholder="ключевое слово 1, ключевое слово 2">
-                    </div>
-
-                    <div class="form-group">
-                        <label class="form-label">OG Image (URL)</label>
-                        <input type="url" class="form-input" name="seo_og_image" 
-                               value="<?= htmlspecialchars(getSetting($settings, ['seo', 'og_image'])) ?>"
-                               placeholder="https://example.com/og-image.jpg">
-                        <small class="form-hint">Изображение для социальных сетей (рекомендуемый размер: 1200x630)</small>
-                    </div>
-
-                    <div class="form-group">
-                        <label class="checkbox-label">
-                            <input type="checkbox" name="seo_sitemap" 
-                                   <?= getSetting($settings, ['seo', 'sitemap_enabled'], true) ? 'checked' : '' ?>>
-                            Автоматически генерировать sitemap.xml
-                        </label>
-                    </div>
-                </div>
-            </div>
-
-            <div class="card">
-                <div class="card-header">
-                    <h3 class="card-title"><i class="fas fa-robot"></i> Robots.txt</h3>
-                </div>
-                <div class="card-body">
-                    <div class="form-group">
-                        <label class="form-label">Содержимое robots.txt</label>
-                        <textarea class="form-textarea" name="seo_robots" rows="10" 
-                                  placeholder="User-agent: *&#10;Disallow: /admin/&#10;Sitemap: https://example.com/sitemap.xml"><?= htmlspecialchars(getSetting($settings, ['seo', 'robots_txt'])) ?></textarea>
-                    </div>
-                </div>
-            </div>
-
-            <div class="card">
-                <div class="card-header">
-                    <h3 class="card-title"><i class="fas fa-chart-bar"></i> Аналитика</h3>
-                </div>
-                <div class="card-body">
-                    <div class="form-group">
-                        <label class="form-label">Google Analytics ID</label>
-                        <input type="text" class="form-input" name="seo_google_analytics" 
-                               value="<?= htmlspecialchars(getSetting($settings, ['seo', 'google_analytics'])) ?>"
-                               placeholder="G-XXXXXXXXXX или UA-XXXXXXXXX-X">
-                    </div>
-
-                    <div class="form-group">
-                        <label class="form-label">Яндекс.Метрика ID</label>
-                        <input type="text" class="form-input" name="seo_yandex_metrika" 
-                               value="<?= htmlspecialchars(getSetting($settings, ['seo', 'yandex_metrika'])) ?>"
-                               placeholder="12345678">
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- Бонусная система -->
-        <div id="bonus" class="tab-content">
-            <div class="card">
-                <div class="card-header">
-                    <h3 class="card-title"><i class="fas fa-gift"></i> Бонусная программа</h3>
-                    <label class="toggle-switch">
-                        <input type="checkbox" name="bonus_enabled" 
-                               <?= getSetting($settings, ['bonus_system', 'enabled'], false) ? 'checked' : '' ?>>
-                        <span class="toggle-slider"></span>
-                    </label>
-                </div>
-                <div class="card-body">
-                    <div class="row">
-                        <div class="col-6">
-                            <div class="form-group">
-                                <label class="form-label">Процент начисления бонусов</label>
-                                <input type="number" class="form-input" name="bonus_percent" 
-                                       value="<?= getSetting($settings, ['bonus_system', 'percent'], 5) ?>" 
-                                       min="0" max="100" step="0.1">
-                                <small class="form-hint">От суммы заказа</small>
-                            </div>
-                        </div>
-                        <div class="col-6">
-                            <div class="form-group">
-                                <label class="form-label">Минимальная сумма для начисления</label>
-                                <input type="number" class="form-input" name="bonus_min_order" 
-                                       value="<?= getSetting($settings, ['bonus_system', 'min_order_for_bonus'], 1000) ?>" 
-                                       min="0" step="0.01">
-                                <small class="form-hint">Рублей</small>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="row">
-                        <div class="col-6">
-                            <div class="form-group">
-                                <label class="form-label">Максимальная оплата бонусами</label>
-                                <input type="number" class="form-input" name="bonus_max_payment" 
-                                       value="<?= getSetting($settings, ['bonus_system', 'max_bonus_payment'], 30) ?>" 
-                                       min="0" max="100" step="0.1">
-                                <small class="form-hint">Процент от суммы заказа</small>
-                            </div>
-                        </div>
-                        <div class="col-6">
-                            <div class="form-group">
-                                <label class="form-label">Срок действия бонусов</label>
-                                <input type="number" class="form-input" name="bonus_expiration" 
-                                       value="<?= getSetting($settings, ['bonus_system', 'bonus_expiration_days'], 365) ?>" 
-                                       min="30">
-                                <small class="form-hint">Дней</small>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="info-block">
-                        <i class="fas fa-info-circle"></i>
-                        <div>
-                            <strong>Как работает:</strong>
-                            <ul style="margin: 0.5rem 0 0 1.5rem;">
-                                <li>Клиент получает <?= getSetting($settings, ['bonus_system', 'percent'], 5) ?>% бонусов от суммы заказа</li>
-                                <li>Минимальная сумма заказа для начисления: <?= getSetting($settings, ['bonus_system', 'min_order_for_bonus'], 1000) ?> ₽</li>
-                                <li>Можно оплатить бонусами до <?= getSetting($settings, ['bonus_system', 'max_bonus_payment'], 30) ?>% от суммы заказа</li>
-                                <li>Бонусы сгорают через <?= getSetting($settings, ['bonus_system', 'bonus_expiration_days'], 365) ?> дней</li>
-                            </ul>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- Email настройки -->
-        <div id="email" class="tab-content">
-            <div class="card">
-                <div class="card-header">
-                    <h3 class="card-title"><i class="fas fa-server"></i> SMTP настройки</h3>
-                    <label class="toggle-switch">
-                        <input type="checkbox" name="smtp_enabled" 
-                               <?= getSetting($settings, ['email_settings', 'smtp_enabled'], false) ? 'checked' : '' ?>>
-                        <span class="toggle-slider"></span>
-                    </label>
-                </div>
-                <div class="card-body">
-                    <div class="row">
-                        <div class="col-8">
-                            <div class="form-group">
-                                <label class="form-label">SMTP сервер</label>
-                                <input type="text" class="form-input" name="smtp_host" 
-                                       value="<?= htmlspecialchars(getSetting($settings, ['email_settings', 'smtp_host'])) ?>"
-                                       placeholder="smtp.gmail.com">
-                            </div>
-                        </div>
-                        <div class="col-4">
-                            <div class="form-group">
-                                <label class="form-label">Порт</label>
-                                <input type="number" class="form-input" name="smtp_port" 
-                                       value="<?= getSetting($settings, ['email_settings', 'smtp_port'], 587) ?>"
-                                       placeholder="587">
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="row">
-                        <div class="col-6">
-                            <div class="form-group">
-                                <label class="form-label">Имя пользователя</label>
-                                <input type="text" class="form-input" name="smtp_username" 
-                                       value="<?= htmlspecialchars(getSetting($settings, ['email_settings', 'smtp_username'])) ?>"
-                                       placeholder="user@example.com">
-                            </div>
-                        </div>
-                        <div class="col-6">
-                            <div class="form-group">
-                                <label class="form-label">Пароль</label>
-                                <input type="password" class="form-input" name="smtp_password" 
-                                       value="<?= htmlspecialchars(getSetting($settings, ['email_settings', 'smtp_password'])) ?>"
-                                       placeholder="••••••••">
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="row">
-                        <div class="col-4">
-                            <div class="form-group">
-                                <label class="form-label">Шифрование</label>
-                                <select class="form-input" name="smtp_encryption">
-                                    <option value="tls" <?= getSetting($settings, ['email_settings', 'smtp_encryption'], 'tls') == 'tls' ? 'selected' : '' ?>>TLS</option>
-                                    <option value="ssl" <?= getSetting($settings, ['email_settings', 'smtp_encryption']) == 'ssl' ? 'selected' : '' ?>>SSL</option>
-                                    <option value="" <?= getSetting($settings, ['email_settings', 'smtp_encryption']) == '' ? 'selected' : '' ?>>Нет</option>
-                                </select>
-                            </div>
-                        </div>
-                        <div class="col-4">
-                            <div class="form-group">
-                                <label class="form-label">Email отправителя</label>
-                                <input type="email" class="form-input" name="smtp_from_email" 
-                                       value="<?= htmlspecialchars(getSetting($settings, ['email_settings', 'from_email'])) ?>"
-                                       placeholder="noreply@example.com">
-                            </div>
-                        </div>
-                        <div class="col-4">
-                            <div class="form-group">
-                                <label class="form-label">Имя отправителя</label>
-                                <input type="text" class="form-input" name="smtp_from_name" 
-                                       value="<?= htmlspecialchars(getSetting($settings, ['email_settings', 'from_name'])) ?>"
-                                       placeholder="<?= htmlspecialchars(getSetting($settings, 'site_name')) ?>">
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="form-group">
-                        <button type="button" class="btn btn-secondary" onclick="testEmail()">
-                            <i class="fas fa-paper-plane"></i> Отправить тестовое письмо
-                        </button>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <style>
-:root {
-    --bg-color: #f8f9fa;
-    --border-color: #e5e7eb;
-    --text-color: #111827;
-    --text-light: #6b7280;
-    --primary-color: #000000;
-    --secondary-color: #10b981;
-}
-
-.settings-form {
-    max-width: 1400px;
-    margin: 0 auto;
-}
-
-.settings-tabs {
-    background: white;
-    border-radius: 12px;
-    box-shadow: 0 1px 3px 0 rgb(0 0 0 / 0.1);
-    border: 1px solid var(--border-color);
-    overflow: hidden;
-}
-
-.tab-list {
-    display: flex;
-    flex-wrap: wrap;
-    border-bottom: 2px solid var(--border-color);
-    background: var(--bg-color);
-    padding: 0.5rem;
-    gap: 0.25rem;
-}
-
-.tab-button {
-    background: none;
-    border: none;
-    padding: 0.75rem 1.5rem;
-    font-size: 0.875rem;
-    font-weight: 600;
-    color: var(--text-light);
-    cursor: pointer;
-    border-radius: 8px;
-    transition: all 0.2s;
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    position: relative;
-}
-
-.tab-button i {
-    font-size: 1rem;
-}
-
-.tab-button:hover {
-    color: var(--text-color);
-    background: rgba(0, 0, 0, 0.05);
-}
-
-.tab-button.active {
-    color: white;
-    background: var(--primary-color);
-}
-
-.badge {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    margin-left: 4px;
-}
-
-.badge-success {
-    background: var(--secondary-color);
-    box-shadow: 0 0 8px var(--secondary-color);
-}
-
-.tab-content {
-    display: none;
-    padding: 2rem;
-}
-
-.tab-content.active {
-    display: block;
-}
-
-.card {
-    background: white;
-    border: 1px solid var(--border-color);
-    border-radius: 12px;
-    margin-bottom: 1.5rem;
-    overflow: hidden;
-}
-
-.card-header {
-    padding: 1.25rem 1.5rem;
-    background: var(--bg-color);
-    border-bottom: 1px solid var(--border-color);
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-}
-
-.card-title {
-    font-size: 1.125rem;
-    font-weight: 700;
-    color: var(--text-color);
-    margin: 0;
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-}
-
-.card-body {
-    padding: 1.5rem;
-}
-
-.form-group {
-    margin-bottom: 1.5rem;
-}
-
-.form-label {
-    display: block;
-    font-size: 0.875rem;
-    font-weight: 600;
-    color: var(--text-color);
-    margin-bottom: 0.5rem;
-}
-
-.form-input,
-.form-textarea {
-    width: 100%;
-    padding: 0.625rem 0.875rem;
-    font-size: 0.875rem;
-    border: 1px solid var(--border-color);
-    border-radius: 8px;
-    transition: all 0.2s;
-    font-family: inherit;
-    box-sizing: border-box;
-}
-
-.form-input:focus,
-.form-textarea:focus {
-    outline: none;
-    border-color: var(--primary-color);
-    box-shadow: 0 0 0 3px rgba(0, 0, 0, 0.05);
-}
-
-.color-input {
-    height: 42px;
-    padding: 0.25rem;
-    cursor: pointer;
-}
-
-.form-hint {
-    display: block;
-    font-size: 0.75rem;
-    color: var(--text-light);
-    margin-top: 0.25rem;
-}
-
-.checkbox-group {
-    display: flex;
-    flex-direction: column;
-    gap: 0.75rem;
-}
-
-.checkbox-group-inline {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 1rem;
-}
-
-.checkbox-label {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    font-size: 0.875rem;
-    cursor: pointer;
-    color: var(--text-color);
-}
-
-.checkbox-label input[type="checkbox"] {
-    width: 18px;
-    height: 18px;
-    cursor: pointer;
-    accent-color: var(--primary-color);
-    flex-shrink: 0;
-}
-
-.checkbox-label i {
-    color: var(--text-light);
-}
-
-/* Toggle Switch */
-.toggle-switch {
-    position: relative;
-    display: inline-block;
-    width: 48px;
-    height: 24px;
-}
-
-.toggle-switch input {
-    opacity: 0;
-    width: 0;
-    height: 0;
-}
-
-.toggle-slider {
-    position: absolute;
-    cursor: pointer;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background-color: #ccc;
-    transition: 0.3s;
-    border-radius: 24px;
-}
-
-.toggle-slider:before {
-    position: absolute;
-    content: "";
-    height: 18px;
-    width: 18px;
-    left: 3px;
-    bottom: 3px;
-    background-color: white;
-    transition: 0.3s;
-    border-radius: 50%;
-}
-
-.toggle-switch input:checked + .toggle-slider {
-    background-color: var(--secondary-color);
-}
-
-.toggle-switch input:checked + .toggle-slider:before {
-    transform: translateX(24px);
-}
-
-/* Icon Input */
-.icon-input-wrapper {
-    display: flex;
-    align-items: center;
-    gap: 1rem;
-}
-
-.icon-input-wrapper i {
-    font-size: 2rem;
-    color: var(--primary-color);
-    width: 40px;
-    text-align: center;
-}
-
-/* Banner Preview */
-.banner-preview {
-    display: flex;
-    align-items: center;
-    gap: 1.5rem;
-    padding: 2rem;
-    border-radius: 12px;
-    background: <?= getSetting($settings, ['jobs_banner', 'background_color'], '#10b981') ?>;
-    color: <?= getSetting($settings, ['jobs_banner', 'text_color'], '#ffffff') ?>;
-}
-
-.banner-preview-icon {
-    font-size: 3rem;
-    flex-shrink: 0;
-}
-
-.banner-preview-image {
-    flex-shrink: 0;
-}
-
-.banner-preview-image img {
-    width: 80px;
-    height: 80px;
-    object-fit: contain;
-}
-
-.banner-preview-content {
-    flex: 1;
-}
-
-.banner-preview-content h4 {
-    margin: 0 0 0.5rem 0;
-    font-size: 1.5rem;
-    font-weight: 700;
-}
-
-.banner-preview-content p {
-    margin: 0;
-    opacity: 0.9;
-}
-
-.banner-preview-button button {
-    padding: 0.75rem 1.5rem;
-    font-size: 0.875rem;
-    font-weight: 600;
-    background: rgba(255, 255, 255, 0.2);
-    color: inherit;
-    border: 2px solid currentColor;
-    border-radius: 8px;
-    cursor: pointer;
-    transition: all 0.2s;
-}
-
-.banner-preview-button button:hover {
-    background: rgba(255, 255, 255, 0.3);
-}
-
-/* Sync Options Grid */
-.sync-options-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
-    gap: 1rem;
-    margin-top: 1rem;
-}
-
-.sync-option-card {
-    padding: 1rem;
-    border: 2px solid var(--border-color);
-    border-radius: 10px;
-    transition: all 0.2s;
-}
-
-.sync-option-card:hover {
-    border-color: var(--primary-color);
-    background: var(--bg-color);
-}
-
-.sync-option-card .checkbox-label {
-    display: block;
-}
-
-.sync-option-card i {
-    font-size: 1.5rem;
-    margin-bottom: 0.5rem;
-    color: var(--primary-color);
-    display: block;
-}
-
-.sync-option-card strong {
-    display: block;
-    margin-bottom: 0.25rem;
-}
-
-.sync-option-card small {
-    display: block;
-    color: var(--text-light);
-    font-size: 0.75rem;
-}
-
-/* Sync Status Block */
-.sync-status-block {
-    padding: 1rem;
-    border-radius: 8px;
-    display: flex;
-    align-items: center;
-    gap: 1rem;
-    margin-top: 1rem;
-}
-
-.sync-status-block.status-recent {
-    background: #d1fae5;
-    border: 1px solid var(--secondary-color);
-    color: #065f46;
-}
-
-.sync-status-block.status-normal {
-    background: #fef3c7;
-    border: 1px solid #f59e0b;
-    color: #92400e;
-}
-
-.sync-status-block.status-outdated {
-    background: #fee2e2;
-    border: 1px solid #dc2626;
-    color: #991b1b;
-}
-
-.sync-status-block i {
-    font-size: 1.5rem;
-}
-
-/* Delivery Zones */
-.delivery-zone-item {
-    padding: 1rem;
-    background: var(--bg-color);
-    border-radius: 8px;
-    margin-bottom: 0.75rem;
-}
-
-/* Color Preview */
-.color-preview {
-    padding: 2rem;
-    border-radius: 8px;
-    border: 2px dashed var(--border-color);
-}
-
-.preview-header {
-    font-size: 1.5rem;
-    font-weight: 700;
-    margin-bottom: 1rem;
-    padding-bottom: 1rem;
-    border-bottom: 2px solid;
-}
-
-.preview-button {
-    padding: 0.75rem 1.5rem;
-    font-weight: 600;
-    border: none;
-    border-radius: 8px;
-    cursor: pointer;
-    margin-right: 1rem;
-}
-
-.preview-text {
-    margin-top: 1rem;
-    font-size: 0.875rem;
-}
-
-/* Info Block */
-.info-block {
-    padding: 1rem;
-    background: #f0f9ff;
-    border-left: 4px solid #0284c7;
-    border-radius: 8px;
-    display: flex;
-    gap: 1rem;
-    margin-top: 1rem;
-}
-
-.info-block i {
-    color: #0284c7;
-    font-size: 1.25rem;
-}
-
-/* Form Actions */
-.form-actions {
-    margin-top: 2rem;
-    padding: 1.5rem 2rem;
-    background: white;
-    border-radius: 12px;
-    border: 1px solid var(--border-color);
-    display: flex;
-    gap: 1rem;
-    box-shadow: 0 1px 3px 0 rgb(0 0 0 / 0.1);
-}
-
-/* Buttons */
-.btn {
-    padding: 0.625rem 1.25rem;
-    font-size: 0.875rem;
-    font-weight: 600;
-    border: none;
-    border-radius: 8px;
-    cursor: pointer;
-    transition: all 0.2s;
-    display: inline-flex;
-    align-items: center;
-    gap: 0.5rem;
-    text-decoration: none;
-}
-
-.btn-primary {
-    background: var(--primary-color);
-    color: white;
-}
-
-.btn-primary:hover:not(:disabled) {
-    background: #1f2937;
-    transform: translateY(-1px);
-    box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);
-}
-
-.btn-primary:disabled {
-    opacity: 0.6;
-    cursor: not-allowed;
-}
-
-.btn-secondary {
-    background: white;
-    color: var(--text-color);
-    border: 1px solid var(--border-color);
-}
-
-.btn-secondary:hover {
-    background: var(--bg-color);
-}
-
-.btn-danger {
-    background: #dc2626;
-    color: white;
-}
-
-.btn-danger:hover {
-    background: #b91c1c;
-}
-
-.btn-lg {
-    padding: 0.875rem 1.75rem;
-    font-size: 1rem;
-}
-
-.btn-sm {
-    padding: 0.375rem 0.75rem;
-    font-size: 0.8125rem;
-}
-
-/* Alert */
-.alert {
-    padding: 1rem 1.25rem;
-    border-radius: 12px;
-    margin-bottom: 1.5rem;
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-    font-weight: 500;
-    animation: slideDown 0.3s ease-out;
-}
-
-@keyframes slideDown {
-    from {
-        opacity: 0;
-        transform: translateY(-10px);
-    }
-    to {
-        opacity: 1;
-        transform: translateY(0);
+    echo json_encode($photoConfig, JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+// Скачивание архива
+if (isset($_GET['download_archive']) && !empty($_GET['order_id'])) {
+    $orderId = $_GET['order_id'];
+    $pattern = $uploadsDir . "/photos_order_{$orderId}_*.zip";
+    $archiveFiles = glob($pattern);
+    if (!empty($archiveFiles) && file_exists($archiveFiles[0])) {
+        $filename = basename($archiveFiles[0]);
+        header('Content-Type: application/zip');
+        header('Content-Disposition: attachment; filename="' . $filename . '"');
+        header('Content-Length: ' . filesize($archiveFiles[0]));
+        readfile($archiveFiles[0]);
+        exit;
+    } else {
+        http_response_code(404);
+        die('Архив заказа не найден');
     }
 }
 
-.alert-success {
-    background: #d1fae5;
-    color: #065f46;
-    border: 1px solid #10b981;
-}
+// Определяем активную страницу
+$page = $_GET['page'] ?? 'dashboard';
 
-.alert-success i {
-    color: #10b981;
-    font-size: 1.25rem;
-}
-
-.alert-error {
-    background: #fee2e2;
-    color: #991b1b;
-    border: 1px solid #dc2626;
-}
-
-.alert-error i {
-    color: #dc2626;
-    font-size: 1.25rem;
-}
-
-/* Grid System */
-.row {
-    display: flex;
-    margin: 0 -0.5rem;
-    flex-wrap: wrap;
-}
-
-.col-3,
-.col-4,
-.col-5,
-.col-6,
-.col-8,
-.col-1 {
-    padding: 0 0.5rem;
-}
-
-.col-1 { flex: 0 0 8.333%; max-width: 8.333%; }
-.col-3 { flex: 0 0 25%; max-width: 25%; }
-.col-4 { flex: 0 0 33.333%; max-width: 33.333%; }
-.col-5 { flex: 0 0 41.666%; max-width: 41.666%; }
-.col-6 { flex: 0 0 50%; max-width: 50%; }
-.col-8 { flex: 0 0 66.666%; max-width: 66.666%; }
-
-@media (max-width: 768px) {
-    .col-3,
-    .col-4,
-    .col-5,
-    .col-6,
-    .col-8,
-    .col-1 {
-        flex: 0 0 100%;
-        max-width: 100%;
-    }
-
-    .tab-list {
-        overflow-x: auto;
-    }
-
-    .tab-button {
-        white-space: nowrap;
-    }
-
-    .form-actions {
-        flex-direction: column;
-    }
-
-    .sync-options-grid {
-        grid-template-columns: 1fr;
-    }
-
-    .banner-preview {
-        flex-direction: column;
-        text-align: center;
-    }
-}
-
-.text-muted {
-    color: var(--text-light);
-    font-size: 0.875rem;
-}
-</style>
-
-<script>
-document.addEventListener('DOMContentLoaded', function() {
-    // Tab switching
-    const tabButtons = document.querySelectorAll('.tab-button');
-    const tabContents = document.querySelectorAll('.tab-content');
-
-    tabButtons.forEach(button => {
-        button.addEventListener('click', function() {
-            const tabId = this.dataset.tab;
-
-            tabButtons.forEach(btn => btn.classList.remove('active'));
-            tabContents.forEach(content => content.classList.remove('active'));
-
-            this.classList.add('active');
-            const targetContent = document.getElementById(tabId);
-            if (targetContent) {
-                targetContent.classList.add('active');
-            }
-        });
-    });
-
-    // Color preview
-    const primaryColor = document.querySelector('[name="appearance_primary_color"]');
-    const secondaryColor = document.querySelector('[name="appearance_secondary_color"]');
-    const accentColor = document.querySelector('[name="appearance_accent_color"]');
-    const preview = document.getElementById('colorPreview');
-
-    function updatePreview() {
-        if (preview && primaryColor && secondaryColor && accentColor) {
-            preview.style.background = accentColor.value;
-            const header = preview.querySelector('.preview-header');
-            const button = preview.querySelector('.preview-button');
-            const text = preview.querySelector('.preview-text');
-
-            if (header) {
-                header.style.color = primaryColor.value;
-                header.style.borderColor = primaryColor.value;
-            }
-            if (button) {
-                button.style.background = primaryColor.value;
-                button.style.color = accentColor.value;
-            }
-            if (text) {
-                text.style.color = primaryColor.value;
+// Загрузка заказов фотопечати
+$orders = [];
+if (file_exists($ordersLog)) {
+    $lines = file($ordersLog, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+    foreach ($lines as $line) {
+        if (strpos($line, 'photo_') !== false && strpos($line, '{') !== false) {
+            $jsonStart = strpos($line, '{');
+            $jsonStr = substr($line, $jsonStart);
+            $orderData = json_decode($jsonStr, true);
+            if ($orderData && isset($orderData['id'])) {
+                $orders[] = $orderData;
             }
         }
     }
+}
 
-    if (primaryColor) primaryColor.addEventListener('input', updatePreview);
-    if (secondaryColor) secondaryColor.addEventListener('input', updatePreview);
-    if (accentColor) accentColor.addEventListener('input', updatePreview);
-
-    updatePreview();
-
-    // Banner Preview
-    const bannerBgColor = document.getElementById('bannerBgColor');
-    const bannerTextColor = document.getElementById('bannerTextColor');
-    const bannerTitle = document.querySelector('[name="jobs_banner_title"]');
-    const bannerDesc = document.querySelector('[name="jobs_banner_description"]');
-    const bannerButton = document.querySelector('[name="jobs_banner_button"]');
-    const bannerIcon = document.getElementById('bannerIcon');
-    const bannerImage = document.querySelector('[name="jobs_banner_image"]');
-    const bannerUseImage = document.getElementById('bannerUseImage');
-    const bannerPreview = document.getElementById('bannerPreview');
-    const previewIcon = document.getElementById('previewIcon');
-    const previewImage = document.getElementById('previewImage');
-    const previewImageSrc = document.getElementById('previewImageSrc');
-    const iconGroup = document.getElementById('iconGroup');
-    const imageGroup = document.getElementById('imageGroup');
-
-    function updateBannerPreview() {
-        if (!bannerPreview) return;
-
-        // Цвета
-        if (bannerBgColor) {
-            bannerPreview.style.background = bannerBgColor.value;
-        }
-        if (bannerTextColor) {
-            bannerPreview.style.color = bannerTextColor.value;
-        }
-
-        // Текст
-        const previewTitle = document.getElementById('previewTitle');
-        const previewDesc = document.getElementById('previewDesc');
-        const previewButton = document.getElementById('previewButton');
-
-        if (previewTitle && bannerTitle) {
-            previewTitle.textContent = bannerTitle.value || 'Требуются работники';
-        }
-        if (previewDesc && bannerDesc) {
-            previewDesc.textContent = bannerDesc.value || 'Присоединяйтесь к нашей команде';
-        }
-        if (previewButton && bannerButton) {
-            previewButton.textContent = bannerButton.value || 'Подробнее';
-        }
-
-        // Иконка или изображение
-        if (bannerUseImage && bannerUseImage.checked) {
-            if (previewIcon) previewIcon.style.display = 'none';
-            if (previewImage) {
-                previewImage.style.display = 'block';
-                if (bannerImage && previewImageSrc) {
-                    previewImageSrc.src = bannerImage.value || '';
-                }
-            }
-            if (iconGroup) iconGroup.style.opacity = '0.5';
-            if (imageGroup) imageGroup.style.opacity = '1';
-        } else {
-            if (previewIcon) {
-                previewIcon.style.display = 'block';
-                const iconElement = previewIcon.querySelector('i');
-                if (iconElement && bannerIcon) {
-                    iconElement.className = 'fas ' + (bannerIcon.value || 'fa-briefcase');
-                }
-            }
-            if (previewImage) previewImage.style.display = 'none';
-            if (iconGroup) iconGroup.style.opacity = '1';
-            if (imageGroup) imageGroup.style.opacity = '0.5';
-        }
-
-        // Обновление preview иконки в input
-        const iconPreview = document.getElementById('iconPreview');
-        if (iconPreview && bannerIcon) {
-            iconPreview.className = 'fas ' + (bannerIcon.value || 'fa-briefcase');
-        }
-    }
-
-    // Слушатели для баннера
-    if (bannerBgColor) bannerBgColor.addEventListener('input', updateBannerPreview);
-    if (bannerTextColor) bannerTextColor.addEventListener('input', updateBannerPreview);
-    if (bannerTitle) bannerTitle.addEventListener('input', updateBannerPreview);
-    if (bannerDesc) bannerDesc.addEventListener('input', updateBannerPreview);
-    if (bannerButton) bannerButton.addEventListener('input', updateBannerPreview);
-    if (bannerIcon) bannerIcon.addEventListener('input', updateBannerPreview);
-    if (bannerImage) bannerImage.addEventListener('input', updateBannerPreview);
-    if (bannerUseImage) bannerUseImage.addEventListener('change', updateBannerPreview);
-
-    updateBannerPreview();
-
-    // Form submit handler
-    const form = document.getElementById('settingsForm');
-    const saveButton = document.getElementById('saveButton');
-
-    if (form && saveButton) {
-        form.addEventListener('submit', function(e) {
-            // Предотвращаем двойную отправку
-            if (saveButton.disabled) {
-                e.preventDefault();
-                return false;
-            }
-
-            saveButton.disabled = true;
-            saveButton.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Сохранение...';
-
-            // Если форма не отправится, через 10 секунд разблокируем кнопку
-            setTimeout(function() {
-                if (saveButton.disabled) {
-                    saveButton.disabled = false;
-                    saveButton.innerHTML = '<i class="fas fa-save"></i> Сохранить все настройки';
-                }
-            }, 10000);
-        });
-    }
+// Сортируем фотозаказы
+usort($orders, function($a, $b) {
+    return strtotime($b['timestamp'] ?? '1970-01-01') - strtotime($a['timestamp'] ?? '1970-01-01');
 });
 
-let deliveryZoneIndex = <?= count(getSetting($settings, 'delivery_zones', [])) ?>;
+// Загрузка заказов печати
+$printOrders = [];
+if (file_exists($printOrdersLog)) {
+    $lines = file($printOrdersLog, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+    foreach ($lines as $line) {
+        if (strpos($line, 'print_order_') !== false && strpos($line, '{') !== false) {
+            $jsonStart = strpos($line, '{');
+            $jsonStr = substr($line, $jsonStart);
+            $orderData = json_decode($jsonStr, true);
+            if ($orderData && isset($orderData['id'])) {
+                $printOrders[] = $orderData;
+            }
+        }
+    }
+}
 
-function addDeliveryZone() {
-    const container = document.getElementById('deliveryZones');
-    if (!container) return;
+// Объединяем все заказы
+$allOrders = array_merge($orders, $printOrders);
 
-    const zoneHtml = `
-        <div class="delivery-zone-item" data-zone="${deliveryZoneIndex}">
-            <div class="row">
-                <div class="col-5">
-                    <input type="text" class="form-input" 
-                           name="delivery_zone_name_${deliveryZoneIndex}" 
-                           placeholder="Название зоны">
+// Сортировка по дате (новые сначала)
+usort($allOrders, function($a, $b) {
+    return strtotime($b['timestamp'] ?? '1970-01-01') - strtotime($a['timestamp'] ?? '1970-01-01');
+});
+
+// Статистика
+$totalOrders = count($allOrders);
+$totalPhotos = array_sum(array_map(function($o) { return $o['details']['photo_count'] ?? 0; }, $orders));
+
+// Считаем общую сумму
+$totalAmount = 0;
+$totalReceived = 0;
+$totalRemaining = 0;
+
+foreach ($allOrders as $order) {
+    if (isset($order['pricing']['total_price'])) {
+        $totalAmount += $order['pricing']['total_price'];
+    } elseif (isset($order['pricing']['total'])) {
+        $totalAmount += $order['pricing']['total'];
+        $totalReceived += $order['pricing']['prepayment'] ?? 0;
+        $totalRemaining += ($order['pricing']['total'] - ($order['pricing']['prepayment'] ?? 0));
+    }
+}
+
+// Статистика за периоды
+$today = date('Y-m-d');
+$todayOrders = array_filter($allOrders, function($o) use ($today) { return strpos($o['timestamp'], $today) === 0; });
+$todayAmount = 0;
+foreach ($todayOrders as $order) {
+    if (isset($order['pricing']['total_price'])) {
+        $todayAmount += $order['pricing']['total_price'];
+    } elseif (isset($order['pricing']['total'])) {
+        $todayAmount += $order['pricing']['total'];
+    }
+}
+
+$thisMonth = date('Y-m');
+$monthOrders = array_filter($allOrders, function($o) use ($thisMonth) { return strpos($o['timestamp'], $thisMonth) === 0; });
+$monthAmount = 0;
+foreach ($monthOrders as $order) {
+    if (isset($order['pricing']['total_price'])) {
+        $monthAmount += $order['pricing']['total_price'];
+    } elseif (isset($order['pricing']['total'])) {
+        $monthAmount += $order['pricing']['total'];
+    }
+}
+
+// Статистика по статусам
+$statusCounts = [
+    'new' => 0,
+    'in_progress' => 0,
+    'ready' => 0,
+    'completed' => 0,
+    'cancelled' => 0
+];
+
+foreach ($printOrders as $order) {
+    $status = $order['status'] ?? 'new';
+    if (isset($statusCounts[$status])) {
+        $statusCounts[$status]++;
+    }
+}
+?>
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🎯 ПРИНТСС Админ PRO - Управление заказами</title>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.9/index.global.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.9/index.global.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <style>
+        * { 
+            margin: 0; 
+            padding: 0; 
+            box-sizing: border-box; 
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            color: #333;
+        }
+
+        .dashboard {
+            display: grid;
+            grid-template-columns: 280px 1fr;
+            min-height: 100vh;
+        }
+
+        .sidebar {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            padding: 20px;
+            box-shadow: 2px 0 10px rgba(0,0,0,0.1);
+            overflow-y: auto;
+        }
+
+        .logo {
+            text-align: center;
+            margin-bottom: 30px;
+            padding: 20px;
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: white;
+            border-radius: 15px;
+        }
+
+        .logo h1 {
+            font-size: 24px;
+            margin-bottom: 5px;
+        }
+
+        .logo p {
+            opacity: 0.9;
+            font-size: 14px;
+        }
+
+        .menu {
+            list-style: none;
+        }
+
+        .menu li {
+            margin-bottom: 10px;
+        }
+
+        .menu a {
+            display: flex;
+            align-items: center;
+            padding: 15px;
+            color: #555;
+            text-decoration: none;
+            border-radius: 10px;
+            transition: all 0.3s;
+        }
+
+        .menu a:hover, .menu a.active {
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: white;
+            transform: translateX(5px);
+        }
+
+        .menu i {
+            margin-right: 12px;
+            width: 20px;
+        }
+
+        .main-content {
+            padding: 30px;
+            overflow-y: auto;
+            max-height: 100vh;
+        }
+
+        .header {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            padding: 20px 30px;
+            border-radius: 15px;
+            margin-bottom: 30px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.1);
+        }
+
+        .header h2 {
+            color: #333;
+            font-size: 28px;
+        }
+
+        .header-actions {
+            display: flex;
+            gap: 15px;
+            flex-wrap: wrap;
+        }
+
+        .btn {
+            border: none;
+            padding: 12px 24px;
+            border-radius: 25px;
+            cursor: pointer;
+            font-weight: 600;
+            transition: all 0.3s;
+            font-size: 14px;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            white-space: nowrap;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: white;
+        }
+
+        .btn-success {
+            background: linear-gradient(135deg, #28a745, #20c997);
+            color: white;
+        }
+
+        .btn-warning {
+            background: linear-gradient(135deg, #f59e0b, #d97706);
+            color: white;
+        }
+
+        .btn-info {
+            background: linear-gradient(135deg, #06b6d4, #0284c7);
+            color: white;
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 25px rgba(0,0,0,0.2);
+        }
+
+        .btn-sm {
+            padding: 8px 16px;
+            font-size: 12px;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+
+        .stat-card {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            padding: 25px;
+            border-radius: 15px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.1);
+            position: relative;
+            overflow: hidden;
+            transition: all 0.3s;
+        }
+
+        .stat-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 15px 40px rgba(0,0,0,0.15);
+        }
+
+        .stat-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 4px;
+            background: var(--color);
+        }
+
+        .stat-card.total { --color: linear-gradient(135deg, #3b82f6, #1d4ed8); }
+        .stat-card.today { --color: linear-gradient(135deg, #10b981, #047857); }
+        .stat-card.month { --color: linear-gradient(135deg, #f59e0b, #d97706); }
+        .stat-card.received { --color: linear-gradient(135deg, #8b5cf6, #7c3aed); }
+        .stat-card.remaining { --color: linear-gradient(135deg, #ef4444, #dc2626); }
+
+        .stat-header {
+            display: flex;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+
+        .stat-icon {
+            width: 50px;
+            height: 50px;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 24px;
+            color: white;
+            margin-right: 15px;
+        }
+
+        .stat-card.total .stat-icon { background: linear-gradient(135deg, #3b82f6, #1d4ed8); }
+        .stat-card.today .stat-icon { background: linear-gradient(135deg, #10b981, #047857); }
+        .stat-card.month .stat-icon { background: linear-gradient(135deg, #f59e0b, #d97706); }
+        .stat-card.received .stat-icon { background: linear-gradient(135deg, #8b5cf6, #7c3aed); }
+        .stat-card.remaining .stat-icon { background: linear-gradient(135deg, #ef4444, #dc2626); }
+
+        .stat-number {
+            font-size: 32px;
+            font-weight: 700;
+            color: #333;
+        }
+
+        .stat-label {
+            color: #666;
+            font-size: 14px;
+            margin-top: 5px;
+        }
+
+        .controls {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            padding: 25px;
+            border-radius: 15px;
+            margin-bottom: 25px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.1);
+        }
+
+        .controls-grid {
+            display: grid;
+            grid-template-columns: 1fr auto auto auto;
+            gap: 15px;
+            align-items: center;
+        }
+
+        .search-box {
+            position: relative;
+        }
+
+        .search-input {
+            width: 100%;
+            padding: 15px 20px 15px 50px;
+            border: 2px solid #e1e5e9;
+            border-radius: 25px;
+            font-size: 16px;
+            transition: all 0.3s;
+            background: white;
+        }
+
+        .search-input:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+
+        .search-icon {
+            position: absolute;
+            left: 18px;
+            top: 50%;
+            transform: translateY(-50%);
+            color: #999;
+            font-size: 18px;
+        }
+
+        .filter-select {
+            padding: 15px 20px;
+            border: 2px solid #e1e5e9;
+            border-radius: 25px;
+            font-size: 14px;
+            background: white;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .filter-select:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .orders-container {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            overflow: hidden;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.1);
+        }
+
+        .orders-header {
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: white;
+            padding: 20px 30px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .orders-count {
+            background: rgba(255, 255, 255, 0.2);
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-size: 14px;
+        }
+
+        .orders-table {
+            max-height: 70vh;
+            overflow-y: auto;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        th {
+            background: #f8fafc;
+            padding: 15px;
+            text-align: left;
+            font-weight: 600;
+            color: #374151;
+            position: sticky;
+            top: 0;
+            z-index: 10;
+            font-size: 12px;
+            text-transform: uppercase;
+        }
+
+        td {
+            padding: 15px;
+            border-bottom: 1px solid #e5e7eb;
+            vertical-align: top;
+            font-size: 14px;
+        }
+
+        tr:hover {
+            background: #f8fafc;
+        }
+
+        .order-id {
+            font-family: 'Courier New', monospace;
+            background: #e0e7ff;
+            color: #3730a3;
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+            display: inline-block;
+        }
+
+        .client-name {
+            font-weight: 600;
+            font-size: 14px;
+            margin-bottom: 4px;
+        }
+
+        .client-contact {
+            font-size: 11px;
+            color: #6b7280;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            margin-bottom: 2px;
+        }
+
+        .order-details {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-bottom: 10px;
+        }
+
+        .detail-badge {
+            padding: 4px 10px;
+            border-radius: 15px;
+            font-size: 11px;
+            font-weight: 600;
+        }
+
+        .detail-photos { background: #dbeafe; color: #1e40af; }
+        .detail-size { background: #f3e8ff; color: #7c3aed; }
+        .detail-paper { background: #ecfdf5; color: #065f46; }
+
+        .edit-indicators {
+            margin-top: 8px;
+        }
+
+        .edit-badge {
+            display: inline-block;
+            padding: 3px 8px;
+            border-radius: 12px;
+            font-size: 10px;
+            font-weight: 600;
+            margin-right: 6px;
+            margin-bottom: 4px;
+        }
+
+        .edit-processed { background: #fef3c7; color: #92400e; }
+        .edit-polaroid { background: linear-gradient(135deg, #f59e0b, #d97706); color: white; }
+
+        .price {
+            font-size: 18px;
+            font-weight: 700;
+            color: #059669;
+            margin-bottom: 6px;
+        }
+
+        .discount {
+            font-size: 12px;
+            color: #059669;
+            background: #d1fae5;
+            padding: 2px 8px;
+            border-radius: 10px;
+            display: inline-block;
+        }
+
+        .status-badge {
+            padding: 6px 12px;
+            border-radius: 15px;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            text-align: center;
+            display: inline-block;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .status-badge:hover {
+            transform: scale(1.05);
+        }
+
+        .status-new { background: #fef3c7; color: #92400e; }
+        .status-in_progress { background: #dbeafe; color: #1e40af; }
+        .status-ready { background: #d1fae5; color: #065f46; }
+        .status-completed { background: #e5e7eb; color: #374151; }
+        .status-cancelled { background: #fee2e2; color: #991b1b; }
+
+        .action-buttons {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .action-btn {
+            padding: 6px 12px;
+            border-radius: 15px;
+            font-size: 11px;
+            font-weight: 600;
+            border: none;
+            cursor: pointer;
+            transition: all 0.3s;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            justify-content: center;
+        }
+
+        .action-btn-primary {
+            background: linear-gradient(135deg, #3b82f6, #1d4ed8);
+            color: white;
+        }
+
+        .action-btn-success {
+            background: linear-gradient(135deg, #10b981, #047857);
+            color: white;
+        }
+
+        .action-btn-warning {
+            background: linear-gradient(135deg, #f59e0b, #d97706);
+            color: white;
+        }
+
+        .action-btn-info {
+            background: linear-gradient(135deg, #06b6d4, #0284c7);
+            color: white;
+        }
+
+        .action-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        }
+
+        .download-btn {
+            background: linear-gradient(135deg, #3b82f6, #1d4ed8);
+            color: white;
+            padding: 10px 16px;
+            border: none;
+            border-radius: 20px;
+            cursor: pointer;
+            text-decoration: none;
+            font-weight: 600;
+            transition: all 0.3s;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 12px;
+        }
+
+        .download-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 25px rgba(59, 130, 246, 0.3);
+        }
+
+        .archive-info {
+            font-size: 10px;
+            color: #6b7280;
+            margin-top: 8px;
+        }
+
+        .no-orders {
+            text-align: center;
+            padding: 80px 20px;
+            color: #6b7280;
+        }
+
+        .no-orders i {
+            font-size: 64px;
+            margin-bottom: 20px;
+            opacity: 0.3;
+        }
+
+        .order-form-container {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            padding: 40px;
+            border-radius: 15px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.1);
+            max-width: 900px;
+            margin: 0 auto;
+        }
+
+        .form-section {
+            margin-bottom: 30px;
+        }
+
+        .form-section-title {
+            font-size: 18px;
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 15px;
+            padding-bottom: 10px;
+            border-bottom: 2px solid #e5e7eb;
+        }
+
+        .form-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 20px;
+        }
+
+        .form-grid.full {
+            grid-template-columns: 1fr;
+        }
+
+        .form-label {
+            display: block;
+            font-weight: 600;
+            color: #374151;
+            margin-bottom: 8px;
+            font-size: 14px;
+        }
+
+        .form-input, .form-textarea {
+            width: 100%;
+            padding: 12px 16px;
+            border: 2px solid #e1e5e9;
+            border-radius: 10px;
+            font-size: 14px;
+            font-family: inherit;
+            transition: all 0.3s;
+        }
+
+        .form-input:focus, .form-textarea:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+
+        .form-textarea {
+            resize: vertical;
+            min-height: 100px;
+        }
+
+        .form-checkbox-group {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-top: 10px;
+        }
+
+        .form-checkbox {
+            width: 20px;
+            height: 20px;
+            cursor: pointer;
+        }
+
+        .form-checkbox-label {
+            font-size: 14px;
+            color: #374151;
+            cursor: pointer;
+        }
+
+        .important-note {
+            background: #fef3c7;
+            border-left: 4px solid #f59e0b;
+            padding: 15px;
+            border-radius: 8px;
+            margin: 20px 0;
+        }
+
+        .important-note h4 {
+            font-size: 14px;
+            font-weight: 600;
+            color: #92400e;
+            margin-bottom: 8px;
+        }
+
+        .important-note ul {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+        }
+
+        .important-note li {
+            font-size: 13px;
+            color: #78350f;
+            padding: 4px 0;
+            padding-left: 20px;
+            position: relative;
+        }
+
+        .important-note li:before {
+            content: '✓';
+            position: absolute;
+            left: 0;
+            color: #f59e0b;
+            font-weight: bold;
+        }
+
+        .form-actions {
+            display: flex;
+            gap: 15px;
+            justify-content: flex-end;
+            margin-top: 30px;
+            padding-top: 20px;
+            border-top: 2px solid #e5e7eb;
+        }
+
+        .btn-lg {
+            padding: 15px 30px;
+            font-size: 16px;
+        }
+
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.7);
+            backdrop-filter: blur(5px);
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .modal.active {
+            display: flex;
+        }
+
+        .modal-content {
+            background: white;
+            padding: 40px;
+            border-radius: 20px;
+            max-width: 600px;
+            width: 90%;
+            max-height: 80vh;
+            overflow-y: auto;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            position: relative;
+            animation: modalSlideIn 0.3s ease-out;
+        }
+
+        @keyframes modalSlideIn {
+            from {
+                opacity: 0;
+                transform: translateY(-50px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .modal-close {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            background: #f3f4f6;
+            border: none;
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            cursor: pointer;
+            font-size: 20px;
+            color: #6b7280;
+            transition: all 0.3s;
+        }
+
+        .modal-close:hover {
+            background: #e5e7eb;
+            color: #374151;
+            transform: rotate(90deg);
+        }
+
+        .modal-header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+
+        .modal-icon {
+            width: 80px;
+            height: 80px;
+            background: linear-gradient(135deg, #10b981, #047857);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 40px;
+            color: white;
+            margin: 0 auto 20px;
+        }
+
+        .modal-icon.edit {
+            background: linear-gradient(135deg, #f59e0b, #d97706);
+        }
+
+        .modal-title {
+            font-size: 24px;
+            font-weight: 700;
+            color: #333;
+            margin-bottom: 10px;
+        }
+
+        .modal-subtitle {
+            font-size: 14px;
+            color: #6b7280;
+        }
+
+        .notification-box {
+            background: #f9fafb;
+            border: 2px dashed #d1d5db;
+            border-radius: 12px;
+            padding: 20px;
+            margin: 20px 0;
+            font-size: 14px;
+            line-height: 1.8;
+            color: #374151;
+            font-family: 'Courier New', monospace;
+            white-space: pre-wrap;
+        }
+
+        .modal-actions {
+            display: flex;
+            gap: 12px;
+            margin-top: 25px;
+            flex-wrap: wrap;
+        }
+
+        .btn-copy {
+            flex: 1;
+            background: linear-gradient(135deg, #3b82f6, #1d4ed8);
+            color: white;
+        }
+
+        .btn-whatsapp {
+            flex: 1;
+            background: linear-gradient(135deg, #25d366, #128c7e);
+            color: white;
+        }
+
+        .btn-receipt {
+            flex: 1;
+            background: linear-gradient(135deg, #f59e0b, #d97706);
+            color: white;
+        }
+
+        @media print {
+            body * {
+                visibility: hidden;
+            }
+            .receipt-print, .receipt-print * {
+                visibility: visible;
+            }
+            .receipt-print {
+                position: fixed;
+                left: 0;
+                top: 0;
+                width: 100%;
+            }
+        }
+
+        .receipt-print {
+            display: none;
+        }
+
+        .receipt-document {
+            max-width: 210mm;
+            margin: 0 auto;
+            padding: 15mm;
+            background: white;
+            font-family: Arial, sans-serif;
+            color: #000;
+        }
+
+        .receipt-header {
+            text-align: center;
+            border-bottom: 2px solid #333;
+            padding-bottom: 15px;
+            margin-bottom: 20px;
+        }
+
+        .receipt-header h1 {
+            font-size: 24px;
+            margin-bottom: 5px;
+        }
+
+        .receipt-header h2 {
+            font-size: 18px;
+            color: #666;
+            margin-bottom: 10px;
+        }
+
+        .receipt-info {
+            font-size: 12px;
+            color: #666;
+            line-height: 1.6;
+        }
+
+        .receipt-body {
+            margin: 30px 0;
+        }
+
+        .receipt-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 10px 0;
+            border-bottom: 1px solid #e5e7eb;
+        }
+
+        .receipt-row.header {
+            font-weight: bold;
+            border-bottom: 2px solid #333;
+        }
+
+        .receipt-row.total {
+            font-weight: bold;
+            font-size: 18px;
+            border-top: 2px solid #333;
+            border-bottom: 2px solid #333;
+            margin-top: 10px;
+        }
+
+        .receipt-footer {
+            margin-top: 40px;
+            padding-top: 20px;
+            border-top: 2px solid #333;
+        }
+
+        .receipt-signatures {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 40px;
+            margin-top: 40px;
+        }
+
+        .signature-line {
+            border-bottom: 1px solid #333;
+            padding-bottom: 5px;
+            margin-bottom: 5px;
+        }
+
+        .success-message {
+            background: #d1fae5;
+            color: #065f46;
+            padding: 15px 20px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            display: none;
+            align-items: center;
+            gap: 10px;
+            animation: slideDown 0.3s ease-out;
+        }
+
+        .success-message.show {
+            display: flex;
+        }
+
+        @keyframes slideDown {
+            from {
+                opacity: 0;
+                transform: translateY(-20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .calendar-container {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            padding: 30px;
+            border-radius: 15px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.1);
+            margin-bottom: 30px;
+        }
+
+        #calendar {
+            max-width: 100%;
+        }
+
+        .fc-theme-standard td, .fc-theme-standard th {
+            border-color: #e5e7eb;
+        }
+
+        .fc-button-primary {
+            background: linear-gradient(135deg, #667eea, #764ba2) !important;
+            border: none !important;
+        }
+
+        .fc-button-primary:hover {
+            background: linear-gradient(135deg, #5a67d8, #6b46a0) !important;
+        }
+
+        .charts-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+            gap: 30px;
+            margin-bottom: 30px;
+        }
+
+        .chart-container {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            padding: 30px;
+            border-radius: 15px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.1);
+        }
+
+        .chart-title {
+            font-size: 18px;
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 20px;
+            text-align: center;
+        }
+
+        .status-dropdown {
+            position: relative;
+            display: inline-block;
+        }
+
+        .status-dropdown-content {
+            display: none;
+            position: absolute;
+            background: white;
+            min-width: 160px;
+            box-shadow: 0 8px 16px rgba(0,0,0,0.2);
+            z-index: 100;
+            border-radius: 10px;
+            overflow: hidden;
+            top: 100%;
+            left: 0;
+            margin-top: 5px;
+        }
+
+        .status-dropdown:hover .status-dropdown-content {
+            display: block;
+        }
+
+        .status-option {
+            padding: 12px 16px;
+            cursor: pointer;
+            transition: all 0.3s;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .status-option:hover {
+            background: #f3f4f6;
+        }
+
+        .comment-section {
+            margin-top: 20px;
+            padding-top: 20px;
+            border-top: 1px solid #e5e7eb;
+        }
+
+        .comment-item {
+            background: #f9fafb;
+            padding: 12px;
+            border-radius: 8px;
+            margin-bottom: 10px;
+            font-size: 13px;
+        }
+
+        .comment-time {
+            color: #6b7280;
+            font-size: 11px;
+            margin-top: 4px;
+        }
+
+        .comment-form {
+            display: flex;
+            gap: 10px;
+            margin-top: 15px;
+        }
+
+        .comment-input {
+            flex: 1;
+            padding: 10px;
+            border: 2px solid #e1e5e9;
+            border-radius: 10px;
+            font-size: 13px;
+        }
+
+        @media (max-width: 1024px) {
+            .dashboard {
+                grid-template-columns: 1fr;
+            }
+
+            .sidebar {
+                display: none;
+            }
+
+            .controls-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .header-actions {
+                flex-direction: column;
+                width: 100%;
+            }
+
+            .header-actions .btn {
+                width: 100%;
+                justify-content: center;
+            }
+
+            .stats-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .charts-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .stat-card, .orders-container, .controls, .order-form-container, .calendar-container, .chart-container {
+            animation: fadeIn 0.6s ease-out;
+        }
+
+        .orders-table::-webkit-scrollbar, .modal-content::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        .orders-table::-webkit-scrollbar-track, .modal-content::-webkit-scrollbar-track {
+            background: #f1f1f1;
+        }
+
+        .orders-table::-webkit-scrollbar-thumb, .modal-content::-webkit-scrollbar-thumb {
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            border-radius: 4px;
+        }
+    </style>
+</head>
+<body>
+    <div class="dashboard">
+        <!-- Боковая панель -->
+        <aside class="sidebar">
+            <div class="logo">
+                <h1><i class="fas fa-print"></i> ПРИНТСС PRO</h1>
+                <p>Панель управления</p>
+            </div>
+
+            <nav>
+                <ul class="menu">
+                    <li>
+                        <a href="?key=<?= $adminKey ?>&page=dashboard" class="<?= $page === 'dashboard' ? 'active' : '' ?>">
+                            <i class="fas fa-chart-bar"></i> Дашборд
+                        </a>
+                    </li>
+                    <li>
+                        <a href="?key=<?= $adminKey ?>&page=create_order" class="<?= $page === 'create_order' ? 'active' : '' ?>">
+                            <i class="fas fa-plus-circle"></i> Создать заказ
+                        </a>
+                    </li>
+                    <li>
+                        <a href="?key=<?= $adminKey ?>&page=photo_orders" class="<?= $page === 'photo_orders' ? 'active' : '' ?>">
+                            <i class="fas fa-camera"></i> Фотозаказы
+                        </a>
+                    </li>
+                    <li>
+                        <a href="?key=<?= $adminKey ?>&page=all_orders" class="<?= $page === 'all_orders' ? 'active' : '' ?>">
+                            <i class="fas fa-list"></i> Все заказы
+                        </a>
+                    </li>
+                    <li>
+                        <a href="?key=<?= $adminKey ?>&page=calendar" class="<?= $page === 'calendar' ? 'active' : '' ?>">
+                            <i class="fas fa-calendar-alt"></i> Календарь
+                        </a>
+                    </li>
+                    <li>
+                        <a href="?key=<?= $adminKey ?>&page=analytics" class="<?= $page === 'analytics' ? 'active' : '' ?>">
+                            <i class="fas fa-chart-line"></i> Аналитика
+                        </a>
+                    </li>
+                    <li>
+                        <a href="?key=<?= $adminKey ?>&action=export_excel">
+                            <i class="fas fa-file-excel"></i> Экспорт Excel
+                        </a>
+                    </li>
+                    <li>
+                        <a href="#" onclick="refreshData()">
+                            <i class="fas fa-sync-alt"></i> Обновить
+                        </a>
+                    </li>
+                </ul>
+            </nav>
+        </aside>
+
+        <!-- Главная область -->
+        <main class="main-content">
+            <?php if ($page === 'photo_orders'): ?>
+                <!-- СТРАНИЦА ФОТОЗАКАЗОВ -->
+                <header class="header">
+                    <div>
+                        <h2><i class="fas fa-camera"></i> Заказы фотопечати</h2>
+                        <p style="color: #666; margin-top: 5px;">Управление заказами из фотоконструктора</p>
+                    </div>
+                    <div class="header-actions">
+                        <button class="btn btn-success" onclick="refreshData()">
+                            <i class="fas fa-sync-alt"></i> Обновить
+                        </button>
+                    </div>
+                </header>
+
+                <!-- Панель управления -->
+                <div class="controls">
+                    <div class="controls-grid">
+                        <div class="search-box">
+                            <i class="fas fa-search search-icon"></i>
+                            <input type="text" class="search-input" id="searchInputPhoto" placeholder="Поиск по ID, имени, телефону..." onkeyup="filterPhotoOrders()">
+                        </div>
+
+                        <select class="filter-select" id="statusFilterPhoto" onchange="filterPhotoOrders()">
+                            <option value="">Все статусы</option>
+                            <option value="new">Новые</option>
+                            <option value="pending_payment">Ожидает оплаты</option>
+                            <option value="completed">Завершенные</option>
+                        </select>
+
+                        <select class="filter-select" id="dateFilterPhoto" onchange="filterPhotoOrders()">
+                            <option value="">Все даты</option>
+                            <option value="today">Сегодня</option>
+                            <option value="week">Эта неделя</option>
+                            <option value="month">Этот месяц</option>
+                        </select>
+                    </div>
                 </div>
-                <div class="col-3">
-                    <input type="number" class="form-input" 
-                           name="delivery_zone_cost_${deliveryZoneIndex}" 
-                           placeholder="Стоимость" step="0.01">
+
+                <!-- Заказы -->
+                <?php if (empty($orders)): ?>
+                <div class="orders-container">
+                    <div class="no-orders">
+                        <i class="fas fa-inbox"></i>
+                        <h2>Фотозаказов пока нет</h2>
+                        <p>Заказы из фотоконструктора появятся здесь</p>
+                    </div>
                 </div>
-                <div class="col-3">
-                    <input type="number" class="form-input" 
-                           name="delivery_zone_time_${deliveryZoneIndex}" 
-                           placeholder="Время (мин)">
+                <?php else: ?>
+
+                <div class="orders-container">
+                    <div class="orders-header">
+                        <h3><i class="fas fa-images"></i> Список фотозаказов</h3>
+                        <div class="orders-count">
+                            <span id="ordersCountPhoto"><?= count($orders) ?></span> заказов
+                        </div>
+                    </div>
+
+                    <div class="orders-table">
+                        <table id="ordersTablePhoto">
+                            <thead>
+                                <tr>
+                                    <th width="15%">ID заказа</th>
+                                    <th width="20%">Клиент</th>
+                                    <th width="30%">Детали заказа</th>
+                                    <th width="15%">Сумма</th>
+                                    <th width="10%">Статус</th>
+                                    <th width="10%">Архив</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <?php foreach ($orders as $order): 
+                                    $hasEditedPhotos = 0;
+                                    $polaroidCount = 0;
+
+                                    if (!empty($order['details']['photos'])) {
+                                        foreach ($order['details']['photos'] as $photo) {
+                                            if (!empty($photo['edit_params'])) {
+                                                if ($photo['edit_params']['brightness'] != 0 || $photo['edit_params']['contrast'] != 0 || $photo['edit_params']['crop']) {
+                                                    $hasEditedPhotos++;
+                                                }
+                                                if ($photo['edit_params']['polaroid']) {
+                                                    $polaroidCount++;
+                                                }
+                                            }
+                                        }
+                                    }
+                                ?>
+                                <tr data-order-id="<?= esc($order['id']) ?>" 
+                                    data-customer="<?= esc($order['name'] ?? '') ?>" 
+                                    data-phone="<?= esc($order['phone'] ?? '') ?>"
+                                    data-status="<?= esc($order['status'] ?? 'new') ?>"
+                                    data-date="<?= esc($order['timestamp'] ?? '') ?>">
+
+                                    <td>
+                                        <div class="order-id"><?= esc($order['id']) ?></div>
+                                        <div style="font-size: 11px; color: #6b7280; margin-top: 8px;">
+                                            <i class="fas fa-clock"></i> <?= date('d.m.Y H:i', strtotime($order['timestamp'])) ?>
+                                        </div>
+                                        <div style="font-size: 10px; color: #9ca3af; margin-top: 4px;">
+                                            <i class="fas fa-map-marker-alt"></i> <?= esc(substr($order['ip'] ?? 'неизвестен', 0, 12)) ?>
+                                        </div>
+                                    </td>
+
+                                    <td>
+                                        <div class="client-info">
+                                            <div class="client-name"><?= esc($order['name']) ?></div>
+                                            <div class="client-contact">
+                                                <i class="fas fa-phone"></i> <?= esc($order['phone']) ?>
+                                            </div>
+                                            <?php if (!empty($order['email'])): ?>
+                                            <div class="client-contact">
+                                                <i class="fas fa-envelope"></i> <?= esc($order['email']) ?>
+                                            </div>
+                                            <?php endif; ?>
+                                        </div>
+                                    </td>
+
+                                    <td>
+                                        <div class="order-details">
+                                            <span class="detail-badge detail-photos">
+                                                <i class="fas fa-images"></i> <?= $order['details']['photo_count'] ?> фото
+                                            </span>
+                                            <span class="detail-badge detail-size">
+                                                <i class="fas fa-ruler-combined"></i> <?= esc($order['details']['size']) ?>
+                                            </span>
+                                            <span class="detail-badge detail-paper">
+                                                <i class="fas fa-file-alt"></i> <?= esc($order['details']['paper']) ?>
+                                            </span>
+                                        </div>
+
+                                        <?php if (!empty($order['details']['qty_per_photo']) && $order['details']['qty_per_photo'] > 1): ?>
+                                        <div style="font-size: 12px; color: #6b7280; margin-bottom: 6px;">
+                                            <i class="fas fa-copy"></i> Тираж: <?= $order['details']['qty_per_photo'] ?>x каждое фото
+                                        </div>
+                                        <?php endif; ?>
+
+                                        <div class="edit-indicators">
+                                            <?php if ($hasEditedPhotos > 0): ?>
+                                            <span class="edit-badge edit-processed">
+                                                <i class="fas fa-palette"></i> Обработано: <?= $hasEditedPhotos ?>
+                                            </span>
+                                            <?php endif; ?>
+
+                                            <?php if ($polaroidCount > 0): ?>
+                                            <span class="edit-badge edit-polaroid">
+                                                <i class="fas fa-camera-retro"></i> Polaroid: <?= $polaroidCount ?>
+                                            </span>
+                                            <?php endif; ?>
+                                        </div>
+
+                                        <?php if (!empty($order['details']['processing_options'])): ?>
+                                        <div style="font-size: 11px; color: #6b7280; margin-top: 6px;">
+                                            <i class="fas fa-tools"></i> Услуги: 
+                                            <?= implode(', ', array_map(function($p) { return $p['name']; }, $order['details']['processing_options'])) ?>
+                                        </div>
+                                        <?php endif; ?>
+
+                                        <?php if (!empty($order['details']['comment'])): ?>
+                                        <div style="font-size: 11px; color: #6b7280; margin-top: 6px; font-style: italic;">
+                                            <i class="fas fa-comment"></i> <?= esc(mb_substr($order['details']['comment'], 0, 50)) ?><?= mb_strlen($order['details']['comment']) > 50 ? '...' : '' ?>
+                                        </div>
+                                        <?php endif; ?>
+                                    </td>
+
+                                    <td>
+                                        <div class="price"><?= number_format($order['pricing']['total_price'], 0, '.', ' ') ?> ₽</div>
+                                        <?php if (!empty($order['pricing']['discount_percent'])): ?>
+                                        <div class="discount">
+                                            -<?= $order['pricing']['discount_percent'] ?>% (<?= number_format($order['pricing']['discount_amount'], 0) ?> ₽)
+                                        </div>
+                                        <?php endif; ?>
+                                        <?php if ($order['payment_method'] === 'online'): ?>
+                                        <div style="font-size: 11px; color: #3b82f6; margin-top: 6px;">
+                                            <i class="fas fa-credit-card"></i> Онлайн оплата
+                                        </div>
+                                        <?php endif; ?>
+                                    </td>
+
+                                    <td>
+                                        <?php
+                                        $status = $order['status'] ?? 'new';
+                                        $statusLabels = [
+                                            'new' => 'Новый',
+                                            'pending_payment' => 'Ожидает оплаты',
+                                            'completed' => 'Завершен'
+                                        ];
+                                        ?>
+                                        <span class="status-badge status-<?= $status ?>">
+                                            <?= $statusLabels[$status] ?? 'Неизвестно' ?>
+                                        </span>
+                                    </td>
+
+                                    <td>
+                                        <div class="download-section">
+                                            <?php if (!empty($order['archive']['filename'])): ?>
+                                            <a href="?key=<?= $adminKey ?>&download_archive=1&order_id=<?= urlencode($order['id']) ?>" 
+                                               class="download-btn" title="Скачать ZIP архив с фотографиями">
+                                                <i class="fas fa-download"></i> Скачать
+                                            </a>
+                                            <div class="archive-info">
+                                                <i class="fas fa-file-archive"></i> <?= round($order['archive']['size']/1024/1024, 1) ?> МБ
+                                                <br>
+                                                <i class="fas fa-images"></i> <?= $order['archive']['files_count'] ?> файлов
+                                            </div>
+                                            <?php else: ?>
+                                            <span style="color: #9ca3af; font-size: 12px;">
+                                                <i class="fas fa-times-circle"></i><br>
+                                                Архив не создан
+                                            </span>
+                                            <?php endif; ?>
+                                        </div>
+                                    </td>
+                                </tr>
+                                <?php endforeach; ?>
+                            </tbody>
+                        </table>
+                    </div>
                 </div>
-                <div class="col-1">
-                    <button type="button" class="btn btn-danger btn-sm" onclick="removeDeliveryZone(this)">
-                        <i class="fas fa-trash"></i>
+                <?php endif; ?>
+
+            <?php elseif ($page === 'create_order'): ?>
+                <!-- СТРАНИЦА СОЗДАНИЯ ЗАКАЗА -->
+                <header class="header">
+                    <div>
+                        <h2><i class="fas fa-plus-circle"></i> Создание нового заказа</h2>
+                        <p style="color: #666; margin-top: 5px;">Заполните форму для создания заказа</p>
+                    </div>
+                    <a href="?key=<?= $adminKey ?>&page=dashboard" class="btn btn-primary">
+                        <i class="fas fa-arrow-left"></i> Вернуться
+                    </a>
+                </header>
+
+                <div id="successMessage" class="success-message">
+                    <i class="fas fa-check-circle" style="font-size: 24px;"></i>
+                    <span>Заказ успешно создан! Форма очищена.</span>
+                </div>
+
+                <div class="order-form-container">
+                    <form id="orderForm">
+                        <div class="form-section">
+                            <div class="form-section-title">
+                                <i class="fas fa-user"></i> ЗАКАЗЧИК
+                            </div>
+                            <div class="form-grid">
+                                <div class="form-group">
+                                    <label class="form-label">ФИО: *</label>
+                                    <input type="text" name="customer_name" class="form-input" required>
+                                </div>
+                                <div class="form-group">
+                                    <label class="form-label">Телефон: *</label>
+                                    <input type="tel" name="customer_phone" class="form-input" required>
+                                </div>
+                            </div>
+                            <div class="form-grid full" style="margin-top: 20px;">
+                                <div class="form-group">
+                                    <label class="form-label">Email:</label>
+                                    <input type="email" name="customer_email" class="form-input">
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="form-section">
+                            <div class="form-section-title">
+                                <i class="fas fa-file-alt"></i> ЧТО ДЕЛАЕМ (описание заказа)
+                            </div>
+                            <div class="form-grid full">
+                                <div class="form-group">
+                                    <textarea name="order_description" class="form-textarea" placeholder="Например: Вывеска 2x1м, печать на баннере, люверсы по периметру" required></textarea>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="form-section">
+                            <div class="form-section-title">
+                                <i class="fas fa-tools"></i> ТЕХНИЧЕСКИЕ ДАННЫЕ
+                            </div>
+                            <div class="form-grid full">
+                                <div class="form-group">
+                                    <label class="form-label">Размеры, материалы, тексты, логотипы и т.д.:</label>
+                                    <textarea name="technical_details" class="form-textarea" placeholder="Укажите размеры, материалы, цвета, шрифты и другие технические детали"></textarea>
+                                </div>
+                            </div>
+
+                            <div class="form-checkbox-group">
+                                <input type="checkbox" id="materials_provided" name="materials_provided" class="form-checkbox">
+                                <label for="materials_provided" class="form-checkbox-label">
+                                    Все материалы предоставлены (логотипы, тексты, фото и т.д.)
+                                </label>
+                            </div>
+
+                            <div class="form-grid" style="margin-top: 15px;">
+                                <div class="form-group">
+                                    <label class="form-label">Материалы будут предоставлены до:</label>
+                                    <input type="date" name="materials_date" class="form-input">
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="form-section">
+                            <div class="form-section-title">
+                                <i class="fas fa-ruble-sign"></i> СТОИМОСТЬ
+                            </div>
+                            <div class="form-grid">
+                                <div class="form-group">
+                                    <label class="form-label">Предоплата (руб.):</label>
+                                    <input type="number" name="prepayment" class="form-input" min="0" step="1" value="0">
+                                </div>
+                                <div class="form-group">
+                                    <label class="form-label">Итого к оплате (руб.): *</label>
+                                    <input type="number" name="total_price" class="form-input" min="0" step="1" required>
+                                </div>
+                            </div>
+                            <div class="form-checkbox-group">
+                                <input type="checkbox" id="prepayment_paid" name="prepayment_paid" class="form-checkbox">
+                                <label for="prepayment_paid" class="form-checkbox-label">
+                                    Предоплата внесена
+                                </label>
+                            </div>
+                        </div>
+
+                        <div class="form-section">
+                            <div class="form-section-title">
+                                <i class="fas fa-calendar"></i> СРОКИ
+                            </div>
+                            <div class="form-grid">
+                                <div class="form-group">
+                                    <label class="form-label">Дата приёма заказа:</label>
+                                    <input type="date" value="<?= date('Y-m-d') ?>" class="form-input" disabled>
+                                </div>
+                                <div class="form-group">
+                                    <label class="form-label">Дата готовности: *</label>
+                                    <input type="date" name="ready_date" class="form-input" required>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="important-note">
+                            <h4>ВАЖНО! Заказчик подтверждает своей подписью:</h4>
+                            <ul>
+                                <li>Описание заказа согласовано и понятно</li>
+                                <li>Срок выполнения устраивает</li>
+                                <li>Стоимость работ согласована</li>
+                                <li>Дополнительные правки после утверждения оплачиваются отдельно</li>
+                                <li>Если материалы не предоставлены вовремя — срок выполнения сдвигается</li>
+                                <li>Претензии принимаются только при наличии корешка заказа</li>
+                            </ul>
+                        </div>
+
+                        <div class="form-actions">
+                            <a href="?key=<?= $adminKey ?>&page=dashboard" class="btn" style="background: #e5e7eb; color: #374151;">
+                                <i class="fas fa-times"></i> Отмена
+                            </a>
+                            <button type="submit" class="btn btn-success btn-lg">
+                                <i class="fas fa-check"></i> Создать заказ
+                            </button>
+                        </div>
+                    </form>
+                </div>
+
+            <?php elseif ($page === 'calendar'): ?>
+                <!-- СТРАНИЦА КАЛЕНДАРЯ -->
+                <header class="header">
+                    <div>
+                        <h2><i class="fas fa-calendar-alt"></i> Календарь заказов</h2>
+                        <p style="color: #666; margin-top: 5px;">Визуальное планирование по датам готовности</p>
+                    </div>
+                    <div class="header-actions">
+                        <a href="?key=<?= $adminKey ?>&page=create_order" class="btn btn-primary">
+                            <i class="fas fa-plus"></i> Создать заказ
+                        </a>
+                        <button class="btn btn-success" onclick="refreshData()">
+                            <i class="fas fa-sync-alt"></i> Обновить
+                        </button>
+                    </div>
+                </header>
+
+                <div class="calendar-container">
+                    <div id="calendar"></div>
+                </div>
+
+                <script>
+                document.addEventListener('DOMContentLoaded', function() {
+                    var calendarEl = document.getElementById('calendar');
+                    if (calendarEl) {
+                        var calendar = new FullCalendar.Calendar(calendarEl, {
+                            initialView: 'dayGridMonth',
+                            locale: 'ru',
+                            headerToolbar: {
+                                left: 'prev,next today',
+                                center: 'title',
+                                right: 'dayGridMonth,timeGridWeek,listMonth'
+                            },
+                            buttonText: {
+                                today: 'Сегодня',
+                                month: 'Месяц',
+                                week: 'Неделя',
+                                list: 'Список'
+                            },
+                            events: function(info, successCallback, failureCallback) {
+                                fetch('?key=<?= $adminKey ?>&api=calendar_events')
+                                    .then(response => response.json())
+                                    .then(data => successCallback(data))
+                                    .catch(error => failureCallback(error));
+                            },
+                            eventClick: function(info) {
+                                showOrderDetails(info.event.id);
+                            },
+                            eventContent: function(arg) {
+                                return {
+                                    html: '<div style="padding: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">' + arg.event.title + '</div>'
+                                };
+                            }
+                        });
+                        calendar.render();
+                    }
+                });
+                </script>
+
+            <?php elseif ($page === 'analytics'): ?>
+                <!-- СТРАНИЦА АНАЛИТИКИ -->
+                <header class="header">
+                    <div>
+                        <h2><i class="fas fa-chart-line"></i> Финансовая аналитика</h2>
+                        <p style="color: #666; margin-top: 5px;">Графики доходов и статистика</p>
+                    </div>
+                    <div class="header-actions">
+                        <a href="?key=<?= $adminKey ?>&action=export_excel" class="btn btn-success">
+                            <i class="fas fa-file-excel"></i> Экспорт Excel
+                        </a>
+                        <button class="btn btn-info" onclick="refreshData()">
+                            <i class="fas fa-sync-alt"></i> Обновить
+                        </button>
+                    </div>
+                </header>
+
+                <!-- Статистика -->
+                <div class="stats-grid">
+                    <div class="stat-card total">
+                        <div class="stat-header">
+                            <div class="stat-icon"><i class="fas fa-shopping-cart"></i></div>
+                            <div>
+                                <div class="stat-number"><?= $totalOrders ?></div>
+                                <div class="stat-label">Всего заказов</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="stat-card received">
+                        <div class="stat-header">
+                            <div class="stat-icon"><i class="fas fa-wallet"></i></div>
+                            <div>
+                                <div class="stat-number"><?= number_format($totalReceived, 0, '.', ' ') ?> ₽</div>
+                                <div class="stat-label">Получено (предоплаты)</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="stat-card remaining">
+                        <div class="stat-header">
+                            <div class="stat-icon"><i class="fas fa-hand-holding-usd"></i></div>
+                            <div>
+                                <div class="stat-number"><?= number_format($totalRemaining, 0, '.', ' ') ?> ₽</div>
+                                <div class="stat-label">К получению</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="stat-card today">
+                        <div class="stat-header">
+                            <div class="stat-icon"><i class="fas fa-calendar-day"></i></div>
+                            <div>
+                                <div class="stat-number"><?= count($todayOrders) ?></div>
+                                <div class="stat-label">Заказов сегодня</div>
+                                <?php if ($todayAmount > 0): ?>
+                                <div style="font-size: 12px; color: #059669; margin-top: 2px;">
+                                    <?= number_format($todayAmount, 0, '.', ' ') ?> ₽
+                                </div>
+                                <?php endif; ?>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="stat-card month">
+                        <div class="stat-header">
+                            <div class="stat-icon"><i class="fas fa-calendar-alt"></i></div>
+                            <div>
+                                <div class="stat-number"><?= count($monthOrders) ?></div>
+                                <div class="stat-label">За этот месяц</div>
+                                <?php if ($monthAmount > 0): ?>
+                                <div style="font-size: 12px; color: #d97706; margin-top: 2px;">
+                                    <?= number_format($monthAmount, 0, '.', ' ') ?> ₽
+                                </div>
+                                <?php endif; ?>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Графики -->
+                <div class="charts-grid">
+                    <div class="chart-container">
+                        <div class="chart-title">Распределение по статусам</div>
+                        <canvas id="statusChart"></canvas>
+                    </div>
+
+                    <div class="chart-container">
+                        <div class="chart-title">Доходы за последние 7 дней</div>
+                        <canvas id="revenueChart"></canvas>
+                    </div>
+                </div>
+
+                <script>
+                // График статусов
+                const statusCtx = document.getElementById('statusChart');
+                if (statusCtx) {
+                    new Chart(statusCtx, {
+                        type: 'doughnut',
+                        data: {
+                            labels: ['Новый', 'В работе', 'Готов', 'Выдан', 'Отменён'],
+                            datasets: [{
+                                data: [
+                                    <?= $statusCounts['new'] ?>,
+                                    <?= $statusCounts['in_progress'] ?>,
+                                    <?= $statusCounts['ready'] ?>,
+                                    <?= $statusCounts['completed'] ?>,
+                                    <?= $statusCounts['cancelled'] ?>
+                                ],
+                                backgroundColor: [
+                                    '#fbbf24',
+                                    '#3b82f6',
+                                    '#10b981',
+                                    '#6b7280',
+                                    '#ef4444'
+                                ]
+                            }]
+                        },
+                        options: {
+                            responsive: true,
+                            plugins: {
+                                legend: {
+                                    position: 'bottom'
+                                }
+                            }
+                        }
+                    });
+                }
+
+                // График доходов за 7 дней
+                const revenueCtx = document.getElementById('revenueChart');
+                if (revenueCtx) {
+                    const last7Days = [];
+                    const revenueData = [];
+
+                    for (let i = 6; i >= 0; i--) {
+                        const date = new Date();
+                        date.setDate(date.getDate() - i);
+                        const dateStr = date.toISOString().split('T')[0];
+                        last7Days.push(date.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' }));
+
+                        let dayRevenue = 0;
+                        <?php foreach ($printOrders as $order): ?>
+                        if ('<?= date('Y-m-d', strtotime($order['dates']['order_date'])) ?>' === dateStr) {
+                            dayRevenue += <?= $order['pricing']['total'] ?>;
+                        }
+                        <?php endforeach; ?>
+
+                        revenueData.push(dayRevenue);
+                    }
+
+                    new Chart(revenueCtx, {
+                        type: 'line',
+                        data: {
+                            labels: last7Days,
+                            datasets: [{
+                                label: 'Доход (₽)',
+                                data: revenueData,
+                                borderColor: '#667eea',
+                                backgroundColor: 'rgba(102, 126, 234, 0.1)',
+                                tension: 0.4,
+                                fill: true
+                            }]
+                        },
+                        options: {
+                            responsive: true,
+                            plugins: {
+                                legend: {
+                                    display: false
+                                }
+                            },
+                            scales: {
+                                y: {
+                                    beginAtZero: true,
+                                    ticks: {
+                                        callback: function(value) {
+                                            return value.toLocaleString('ru-RU') + ' ₽';
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    });
+                }
+                </script>
+
+            <?php elseif ($page === 'all_orders'): ?>
+                <!-- СТРАНИЦА ВСЕХ ЗАКАЗОВ -->
+                <header class="header">
+                    <div>
+                        <h2><i class="fas fa-list"></i> Все заказы печати</h2>
+                        <p style="color: #666; margin-top: 5px;">Полный список заказов печати с управлением</p>
+                    </div>
+                    <div class="header-actions">
+                        <a href="?key=<?= $adminKey ?>&page=create_order" class="btn btn-primary">
+                            <i class="fas fa-plus"></i> Создать
+                        </a>
+                        <a href="?key=<?= $adminKey ?>&action=export_excel" class="btn btn-success">
+                            <i class="fas fa-file-excel"></i> Excel
+                        </a>
+                        <button class="btn btn-info" onclick="refreshData()">
+                            <i class="fas fa-sync-alt"></i> Обновить
+                        </button>
+                    </div>
+                </header>
+
+                <!-- Панель управления -->
+                <div class="controls">
+                    <div class="controls-grid">
+                        <div class="search-box">
+                            <i class="fas fa-search search-icon"></i>
+                            <input type="text" class="search-input" id="searchInput" placeholder="Поиск по ID, имени, телефону..." onkeyup="filterOrders()">
+                        </div>
+
+                        <select class="filter-select" id="statusFilter" onchange="filterOrders()">
+                            <option value="">Все статусы</option>
+                            <option value="new">Новый</option>
+                            <option value="in_progress">В работе</option>
+                            <option value="ready">Готов</option>
+                            <option value="completed">Выдан</option>
+                            <option value="cancelled">Отменён</option>
+                        </select>
+
+                        <select class="filter-select" id="dateFilter" onchange="filterOrders()">
+                            <option value="">Все даты</option>
+                            <option value="today">Сегодня</option>
+                            <option value="week">Эта неделя</option>
+                            <option value="month">Этот месяц</option>
+                        </select>
+                    </div>
+                </div>
+
+                <!-- Заказы -->
+                <?php if (empty($printOrders)): ?>
+                <div class="orders-container">
+                    <div class="no-orders">
+                        <i class="fas fa-inbox"></i>
+                        <h2>Заказов пока нет</h2>
+                        <p>Создайте первый заказ для начала работы</p>
+                        <a href="?key=<?= $adminKey ?>&page=create_order" class="btn btn-primary" style="margin-top: 20px;">
+                            <i class="fas fa-plus"></i> Создать первый заказ
+                        </a>
+                    </div>
+                </div>
+                <?php else: ?>
+
+                <div class="orders-container">
+                    <div class="orders-header">
+                        <h3><i class="fas fa-list-ul"></i> Список заказов</h3>
+                        <div class="orders-count">
+                            <span id="ordersCount"><?= count($printOrders) ?></span> заказов
+                        </div>
+                    </div>
+
+                    <div class="orders-table">
+                        <table id="ordersTable">
+                            <thead>
+                                <tr>
+                                    <th width="10%">ID</th>
+                                    <th width="15%">Клиент</th>
+                                    <th width="25%">Описание</th>
+                                    <th width="10%">Готовность</th>
+                                    <th width="10%">Сумма</th>
+                                    <th width="10%">Статус</th>
+                                    <th width="20%">Действия</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <?php foreach ($printOrders as $order): ?>
+                                <tr data-order-id="<?= esc($order['id']) ?>" 
+                                    data-customer="<?= esc($order['customer']['name'] ?? '') ?>" 
+                                    data-phone="<?= esc($order['customer']['phone'] ?? '') ?>"
+                                    data-status="<?= esc($order['status'] ?? 'new') ?>"
+                                    data-date="<?= esc($order['timestamp'] ?? '') ?>">
+
+                                    <td>
+                                        <div class="order-id"><?= str_replace('print_order_', '#', esc($order['id'])) ?></div>
+                                        <div style="font-size: 10px; color: #6b7280; margin-top: 4px;">
+                                            <?= date('d.m H:i', strtotime($order['timestamp'])) ?>
+                                        </div>
+                                    </td>
+
+                                    <td>
+                                        <div class="client-name"><?= esc($order['customer']['name']) ?></div>
+                                        <div class="client-contact">
+                                            <i class="fas fa-phone"></i> <?= esc($order['customer']['phone']) ?>
+                                        </div>
+                                    </td>
+
+                                    <td>
+                                        <div style="font-weight: 600; margin-bottom: 6px; font-size: 13px;">
+                                            <?= esc(mb_substr($order['details']['description'], 0, 60)) ?><?= mb_strlen($order['details']['description']) > 60 ? '...' : '' ?>
+                                        </div>
+                                        <?php if (!empty($order['details']['technical'])): ?>
+                                        <div style="font-size: 11px; color: #6b7280;">
+                                            <i class="fas fa-tools"></i> <?= esc(mb_substr($order['details']['technical'], 0, 40)) ?>...
+                                        </div>
+                                        <?php endif; ?>
+                                    </td>
+
+                                    <td>
+                                        <div style="font-size: 13px; font-weight: 600; color: #059669;">
+                                            <?= date('d.m.Y', strtotime($order['dates']['ready_date'])) ?>
+                                        </div>
+                                    </td>
+
+                                    <td>
+                                        <div class="price"><?= number_format($order['pricing']['total'], 0, '.', ' ') ?> ₽</div>
+                                        <?php if ($order['pricing']['prepayment'] > 0): ?>
+                                        <div style="font-size: 11px; color: #f59e0b;">
+                                            Остаток: <?= number_format($order['pricing']['total'] - $order['pricing']['prepayment'], 0) ?> ₽
+                                        </div>
+                                        <?php endif; ?>
+                                    </td>
+
+                                    <td>
+                                        <div class="status-dropdown">
+                                            <?php
+                                            $status = $order['status'] ?? 'new';
+                                            $statusLabels = [
+                                                'new' => 'Новый',
+                                                'in_progress' => 'В работе',
+                                                'ready' => 'Готов',
+                                                'completed' => 'Выдан',
+                                                'cancelled' => 'Отменён'
+                                            ];
+                                            ?>
+                                            <div class="status-badge status-<?= $status ?>">
+                                                <?= $statusLabels[$status] ?? 'Неизвестно' ?> <i class="fas fa-caret-down"></i>
+                                            </div>
+                                            <div class="status-dropdown-content">
+                                                <div class="status-option" onclick="changeStatus('<?= esc($order['id']) ?>', 'new')">
+                                                    <i class="fas fa-circle" style="color: #fbbf24;"></i> Новый
+                                                </div>
+                                                <div class="status-option" onclick="changeStatus('<?= esc($order['id']) ?>', 'in_progress')">
+                                                    <i class="fas fa-circle" style="color: #3b82f6;"></i> В работе
+                                                </div>
+                                                <div class="status-option" onclick="changeStatus('<?= esc($order['id']) ?>', 'ready')">
+                                                    <i class="fas fa-circle" style="color: #10b981;"></i> Готов
+                                                </div>
+                                                <div class="status-option" onclick="changeStatus('<?= esc($order['id']) ?>', 'completed')">
+                                                    <i class="fas fa-circle" style="color: #6b7280;"></i> Выдан
+                                                </div>
+                                                <div class="status-option" onclick="changeStatus('<?= esc($order['id']) ?>', 'cancelled')">
+                                                    <i class="fas fa-circle" style="color: #ef4444;"></i> Отменён
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </td>
+
+                                    <td>
+                                        <div class="action-buttons">
+                                            <button class="action-btn action-btn-primary" onclick="showOrderDetails('<?= esc($order['id']) ?>')" title="Детали">
+                                                <i class="fas fa-eye"></i> Детали
+                                            </button>
+                                            <button class="action-btn action-btn-success" onclick="sendWhatsApp('<?= esc($order['customer']['phone']) ?>', '<?= esc($order['id']) ?>')" title="WhatsApp">
+                                                <i class="fab fa-whatsapp"></i> WhatsApp
+                                            </button>
+                                            <button class="action-btn action-btn-warning" onclick="editOrder('<?= esc($order['id']) ?>')" title="Редактировать">
+                                                <i class="fas fa-edit"></i> Изменить
+                                            </button>
+                                            <button class="action-btn action-btn-info" onclick="duplicateOrder('<?= esc($order['id']) ?>')" title="Дублировать">
+                                                <i class="fas fa-copy"></i> Копия
+                                            </button>
+                                        </div>
+                                    </td>
+                                </tr>
+                                <?php endforeach; ?>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+                <?php endif; ?>
+
+            <?php else: ?>
+                <!-- ДАШБОРД (ГЛАВНАЯ СТРАНИЦА) -->
+                <header class="header">
+                    <div>
+                        <h2><i class="fas fa-tachometer-alt"></i> Панель управления</h2>
+                        <p style="color: #666; margin-top: 5px;">Добро пожаловать в ПРИНТСС Админ PRO</p>
+                    </div>
+                    <div class="header-actions">
+                        <a href="?key=<?= $adminKey ?>&page=create_order" class="btn btn-primary">
+                            <i class="fas fa-plus"></i> Создать заказ
+                        </a>
+                        <a href="?key=<?= $adminKey ?>&page=photo_orders" class="btn btn-info">
+                            <i class="fas fa-camera"></i> Фотозаказы
+                        </a>
+                        <a href="?key=<?= $adminKey ?>&page=all_orders" class="btn btn-warning">
+                            <i class="fas fa-list"></i> Все заказы
+                        </a>
+                        <button class="btn btn-success" onclick="refreshData()">
+                            <i class="fas fa-sync-alt"></i> Обновить
+                        </button>
+                    </div>
+                </header>
+
+                <!-- Статистика -->
+                <div class="stats-grid">
+                    <div class="stat-card total">
+                        <div class="stat-header">
+                            <div class="stat-icon"><i class="fas fa-shopping-cart"></i></div>
+                            <div>
+                                <div class="stat-number"><?= $totalOrders ?></div>
+                                <div class="stat-label">Всего заказов</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="stat-card today">
+                        <div class="stat-header">
+                            <div class="stat-icon"><i class="fas fa-calendar-day"></i></div>
+                            <div>
+                                <div class="stat-number"><?= count($todayOrders) ?></div>
+                                <div class="stat-label">Заказов сегодня</div>
+                                <?php if ($todayAmount > 0): ?>
+                                <div style="font-size: 12px; color: #059669; margin-top: 2px;">
+                                    <?= number_format($todayAmount, 0, '.', ' ') ?> ₽
+                                </div>
+                                <?php endif; ?>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="stat-card month">
+                        <div class="stat-header">
+                            <div class="stat-icon"><i class="fas fa-calendar-alt"></i></div>
+                            <div>
+                                <div class="stat-number"><?= count($monthOrders) ?></div>
+                                <div class="stat-label">За этот месяц</div>
+                                <?php if ($monthAmount > 0): ?>
+                                <div style="font-size: 12px; color: #d97706; margin-top: 2px;">
+                                    <?= number_format($monthAmount, 0, '.', ' ') ?> ₽
+                                </div>
+                                <?php endif; ?>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="stat-card received">
+                        <div class="stat-header">
+                            <div class="stat-icon"><i class="fas fa-wallet"></i></div>
+                            <div>
+                                <div class="stat-number"><?= number_format($totalReceived, 0, '.', ' ') ?> ₽</div>
+                                <div class="stat-label">Получено</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="stat-card remaining">
+                        <div class="stat-header">
+                            <div class="stat-icon"><i class="fas fa-hand-holding-usd"></i></div>
+                            <div>
+                                <div class="stat-number"><?= number_format($totalRemaining, 0, '.', ' ') ?> ₽</div>
+                                <div class="stat-label">К получению</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Последние заказы -->
+                <?php if (empty($allOrders)): ?>
+                <div class="orders-container">
+                    <div class="no-orders">
+                        <i class="fas fa-inbox"></i>
+                        <h2>Заказов пока нет</h2>
+                        <p>Создайте первый заказ для начала работы</p>
+                        <a href="?key=<?= $adminKey ?>&page=create_order" class="btn btn-primary" style="margin-top: 20px;">
+                            <i class="fas fa-plus"></i> Создать первый заказ
+                        </a>
+                    </div>
+                </div>
+                <?php else: ?>
+                <div class="orders-container">
+                    <div class="orders-header">
+                        <h3><i class="fas fa-clock"></i> Последние заказы</h3>
+                        <div class="orders-count">
+                            Последние 10 из <?= $totalOrders ?>
+                        </div>
+                    </div>
+
+                    <div class="orders-table">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th width="12%">ID</th>
+                                    <th width="18%">Клиент</th>
+                                    <th width="30%">Описание</th>
+                                    <th width="12%">Дата</th>
+                                    <th width="12%">Сумма</th>
+                                    <th width="10%">Тип</th>
+                                    <th width="6%"></th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <?php 
+                                $recentOrders = array_slice($allOrders, 0, 10);
+                                foreach ($recentOrders as $order): 
+                                    $isPhoto = isset($order['details']['photo_count']);
+                                ?>
+                                <tr>
+                                    <td>
+                                        <div class="order-id"><?= $isPhoto ? esc($order['id']) : str_replace('print_order_', '#', esc($order['id'])) ?></div>
+                                    </td>
+                                    <td>
+                                        <div class="client-name"><?= esc($isPhoto ? $order['name'] : $order['customer']['name']) ?></div>
+                                        <div class="client-contact">
+                                            <i class="fas fa-phone"></i> <?= esc($isPhoto ? $order['phone'] : $order['customer']['phone']) ?>
+                                        </div>
+                                    </td>
+                                    <td>
+                                        <?php if ($isPhoto): ?>
+                                            <div style="font-size: 13px;">
+                                                <i class="fas fa-images"></i> <?= $order['details']['photo_count'] ?> фото | 
+                                                <?= esc($order['details']['size']) ?> | 
+                                                <?= esc($order['details']['paper']) ?>
+                                            </div>
+                                        <?php else: ?>
+                                            <div style="font-size: 13px;">
+                                                <?= esc(mb_substr($order['details']['description'], 0, 50)) ?><?= mb_strlen($order['details']['description']) > 50 ? '...' : '' ?>
+                                            </div>
+                                        <?php endif; ?>
+                                    </td>
+                                    <td>
+                                        <div style="font-size: 13px; font-weight: 600;">
+                                            <?= date('d.m.Y H:i', strtotime($order['timestamp'])) ?>
+                                        </div>
+                                    </td>
+                                    <td>
+                                        <div class="price"><?= number_format($isPhoto ? $order['pricing']['total_price'] : $order['pricing']['total'], 0, '.', ' ') ?> ₽</div>
+                                    </td>
+                                    <td>
+                                        <?php if ($isPhoto): ?>
+                                            <span style="background: #dbeafe; color: #1e40af; padding: 4px 8px; border-radius: 10px; font-size: 10px; font-weight: 600;">
+                                                <i class="fas fa-camera"></i> ФОТО
+                                            </span>
+                                        <?php else: ?>
+                                            <span style="background: #f3e8ff; color: #7c3aed; padding: 4px 8px; border-radius: 10px; font-size: 10px; font-weight: 600;">
+                                                <i class="fas fa-print"></i> ПЕЧАТЬ
+                                            </span>
+                                        <?php endif; ?>
+                                    </td>
+                                    <td>
+                                        <?php if ($isPhoto): ?>
+                                            <?php if (!empty($order['archive']['filename'])): ?>
+                                            <a href="?key=<?= $adminKey ?>&download_archive=1&order_id=<?= urlencode($order['id']) ?>" 
+                                               class="action-btn action-btn-primary action-btn-sm" title="Скачать">
+                                                <i class="fas fa-download"></i>
+                                            </a>
+                                            <?php endif; ?>
+                                        <?php else: ?>
+                                            <button class="action-btn action-btn-primary action-btn-sm" onclick="showOrderDetails('<?= esc($order['id']) ?>')">
+                                                <i class="fas fa-eye"></i>
+                                            </button>
+                                        <?php endif; ?>
+                                    </td>
+                                </tr>
+                                <?php endforeach; ?>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-top: 20px;">
+                    <a href="?key=<?= $adminKey ?>&page=photo_orders" class="btn btn-info btn-lg" style="justify-content: center;">
+                        <i class="fas fa-camera"></i> Все фотозаказы (<?= count($orders) ?>)
+                    </a>
+                    <a href="?key=<?= $adminKey ?>&page=all_orders" class="btn btn-primary btn-lg" style="justify-content: center;">
+                        <i class="fas fa-list"></i> Все заказы печати (<?= count($printOrders) ?>)
+                    </a>
+                </div>
+
+                <?php endif; ?>
+            <?php endif; ?>
+        </main>
+    </div>
+
+    <!-- Модальное окно с уведомлением -->
+    <div id="successModal" class="modal">
+        <div class="modal-content">
+            <button class="modal-close" onclick="closeModal()">&times;</button>
+
+            <div class="modal-header">
+                <div class="modal-icon" id="modalIcon">
+                    <i class="fas fa-check"></i>
+                </div>
+                <h2 class="modal-title">Заказ <span id="modal-order-number"></span></h2>
+                <p class="modal-subtitle">Скопируйте и отправьте клиенту</p>
+            </div>
+
+            <div class="notification-box" id="notificationText"></div>
+
+            <div class="modal-actions">
+                <button class="btn btn-copy" onclick="copyNotification()">
+                    <i class="fas fa-copy"></i> Копировать
+                </button>
+                <button class="btn btn-whatsapp" onclick="sendWhatsAppFromModal()">
+                    <i class="fab fa-whatsapp"></i> WhatsApp
+                </button>
+                <button class="btn btn-receipt" onclick="printReceipt()">
+                    <i class="fas fa-receipt"></i> Чек
+                </button>
+                <button class="btn btn-primary" onclick="closeModal()">
+                    <i class="fas fa-times"></i> Закрыть
+                </button>
+            </div>
+
+            <div class="comment-section" id="commentSection" style="display: none;">
+                <h4 style="font-size: 14px; font-weight: 600; margin-bottom: 10px;">
+                    <i class="fas fa-comments"></i> Комментарии
+                </h4>
+                <div id="commentsContainer"></div>
+                <div class="comment-form">
+                    <input type="text" id="commentInput" class="comment-input" placeholder="Добавить комментарий...">
+                    <button class="btn btn-sm btn-primary" onclick="addComment()">
+                        <i class="fas fa-paper-plane"></i>
                     </button>
                 </div>
             </div>
         </div>
-    `;
-    container.insertAdjacentHTML('beforeend', zoneHtml);
-    deliveryZoneIndex++;
-}
-
-function removeDeliveryZone(button) {
-    if (confirm('Удалить эту зону доставки?')) {
-        button.closest('.delivery-zone-item').remove();
-    }
-}
-
-function manualSync() {
-    if (confirm('Запустить синхронизацию с 1С?')) {
-        alert('Функция синхронизации будет реализована в sync_1c.php');
-        // TODO: Ajax запрос на синхронизацию
-    }
-}
-
-function viewSyncLogs() {
-    alert('Просмотр логов будет реализован в logs_1c.php');
-    // TODO: Открыть страницу логов
-}
-
-function testEmail() {
-    const email = prompt('Введите email для отправки тестового письма:');
-    if (email) {
-        alert('Отправка тестового письма будет реализована в test_email.php');
-        // TODO: Ajax запрос на отправку тестового письма
-    }
-}
-</script>
-
-    <div class="form-actions">
-        <button type="submit" class="btn btn-primary btn-lg" id="saveButton">
-            <i class="fas fa-save"></i>
-            Сохранить все настройки
-        </button>
-        <a href="index.php" class="btn btn-secondary btn-lg">
-            <i class="fas fa-times"></i>
-            Отмена
-        </a>
     </div>
-</form>
 
-<?php require_once 'footer.php'; ?>
+    <!-- Модальное окно редактирования -->
+    <div id="editModal" class="modal">
+        <div class="modal-content" style="max-width: 800px;">
+            <button class="modal-close" onclick="closeEditModal()">&times;</button>
 
+            <div class="modal-header">
+                <div class="modal-icon edit">
+                    <i class="fas fa-edit"></i>
+                </div>
+                <h2 class="modal-title">Редактирование заказа <span id="edit-order-number"></span></h2>
+            </div>
+
+            <form id="editOrderForm">
+                <input type="hidden" name="order_id" id="edit-order-id">
+
+                <div class="form-section">
+                    <div class="form-section-title">
+                        <i class="fas fa-user"></i> ЗАКАЗЧИК
+                    </div>
+                    <div class="form-grid">
+                        <div class="form-group">
+                            <label class="form-label">ФИО: *</label>
+                            <input type="text" name="customer_name" id="edit-customer-name" class="form-input" required>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Телефон: *</label>
+                            <input type="tel" name="customer_phone" id="edit-customer-phone" class="form-input" required>
+                        </div>
+                    </div>
+                    <div class="form-grid full" style="margin-top: 20px;">
+                        <div class="form-group">
+                            <label class="form-label">Email:</label>
+                            <input type="email" name="customer_email" id="edit-customer-email" class="form-input">
+                        </div>
+                    </div>
+                </div>
+
+                <div class="form-section">
+                    <div class="form-section-title">
+                        <i class="fas fa-file-alt"></i> ОПИСАНИЕ
+                    </div>
+                    <div class="form-grid full">
+                        <textarea name="order_description" id="edit-order-description" class="form-textarea" required></textarea>
+                    </div>
+                </div>
+
+                <div class="form-section">
+                    <div class="form-section-title">
+                        <i class="fas fa-tools"></i> ТЕХНИЧЕСКИЕ ДАННЫЕ
+                    </div>
+                    <div class="form-grid full">
+                        <textarea name="technical_details" id="edit-technical-details" class="form-textarea"></textarea>
+                    </div>
+                    <div class="form-checkbox-group">
+                        <input type="checkbox" id="edit-materials-provided" name="materials_provided" class="form-checkbox">
+                        <label for="edit-materials-provided" class="form-checkbox-label">
+                            Все материалы предоставлены
+                        </label>
+                    </div>
+                    <div class="form-grid" style="margin-top: 15px;">
+                        <div class="form-group">
+                            <label class="form-label">Материалы до:</label>
+                            <input type="date" name="materials_date" id="edit-materials-date" class="form-input">
+                        </div>
+                    </div>
+                </div>
+
+                <div class="form-section">
+                    <div class="form-section-title">
+                        <i class="fas fa-ruble-sign"></i> СТОИМОСТЬ
+                    </div>
+                    <div class="form-grid">
+                        <div class="form-group">
+                            <label class="form-label">Предоплата (руб.):</label>
+                            <input type="number" name="prepayment" id="edit-prepayment" class="form-input" min="0" step="1">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Итого (руб.): *</label>
+                            <input type="number" name="total_price" id="edit-total-price" class="form-input" min="0" step="1" required>
+                        </div>
+                    </div>
+                    <div class="form-checkbox-group">
+                        <input type="checkbox" id="edit-prepayment-paid" name="prepayment_paid" class="form-checkbox">
+                        <label for="edit-prepayment-paid" class="form-checkbox-label">
+                            Предоплата внесена
+                        </label>
+                    </div>
+                </div>
+
+                <div class="form-section">
+                    <div class="form-section-title">
+                        <i class="fas fa-calendar"></i> ДАТА ГОТОВНОСТИ
+                    </div>
+                    <div class="form-grid">
+                        <div class="form-group">
+                            <label class="form-label">Готовность: *</label>
+                            <input type="date" name="ready_date" id="edit-ready-date" class="form-input" required>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="form-actions">
+                    <button type="button" class="btn" style="background: #e5e7eb; color: #374151;" onclick="closeEditModal()">
+                        <i class="fas fa-times"></i> Отмена
+                    </button>
+                    <button type="submit" class="btn btn-success btn-lg">
+                        <i class="fas fa-save"></i> Сохранить
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Товарный чек для печати -->
+    <div class="receipt-print" id="receiptPrint">
+        <div class="receipt-document">
+            <div class="receipt-header">
+                <h1>Копировальный центр ПРИНТСС</h1>
+                <h2>ИП Гурбанова Г.А.</h2>
+                <div class="receipt-info">
+                    г. Сосновый Бор, ул. Красных Фортов, д. 49а<br>
+                    Тел: 8-952-200-39-90 | Email: artcopy78@bk.ru
+                </div>
+            </div>
+
+            <div style="text-align: center; margin: 30px 0;">
+                <h2 style="font-size: 20px; font-weight: bold;">ТОВАРНЫЙ ЧЕК</h2>
+                <div style="margin-top: 10px; font-size: 14px;">
+                    № <span id="receipt-number"></span> от <span id="receipt-date"></span>
+                </div>
+            </div>
+
+            <div class="receipt-body">
+                <div class="receipt-row header">
+                    <div style="width: 60%;">Наименование</div>
+                    <div style="width: 15%; text-align: center;">Кол-во</div>
+                    <div style="width: 25%; text-align: right;">Сумма</div>
+                </div>
+
+                <div class="receipt-row">
+                    <div style="width: 60%;" id="receipt-description"></div>
+                    <div style="width: 15%; text-align: center;">1</div>
+                    <div style="width: 25%; text-align: right;" id="receipt-total"></div>
+                </div>
+
+                <div class="receipt-row total">
+                    <div>ИТОГО:</div>
+                    <div id="receipt-total-final"></div>
+                </div>
+
+                <div style="margin-top: 20px; font-size: 14px;">
+                    <div style="margin-bottom: 8px;">
+                        <strong>Заказчик:</strong> <span id="receipt-customer"></span>
+                    </div>
+                    <div style="margin-bottom: 8px;">
+                        <strong>Телефон:</strong> <span id="receipt-phone"></span>
+                    </div>
+                    <div style="margin-bottom: 8px;">
+                        <strong>Дата готовности:</strong> <span id="receipt-ready-date"></span>
+                    </div>
+                    <div id="receipt-prepayment-block" style="margin-top: 15px; display: none;">
+                        <div style="margin-bottom: 8px;">
+                            <strong>Предоплата:</strong> <span id="receipt-prepayment"></span>
+                        </div>
+                        <div style="margin-bottom: 8px; color: #f59e0b;">
+                            <strong>Осталось оплатить:</strong> <span id="receipt-remaining"></span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="receipt-footer">
+                <div style="margin-bottom: 20px; font-size: 12px; color: #666;">
+                    <strong>Технические требования:</strong><br>
+                    <span id="receipt-technical"></span>
+                </div>
+
+                <div class="receipt-signatures">
+                    <div>
+                        <div style="margin-bottom: 10px; font-weight: bold;">Продавец:</div>
+                        <div class="signature-line"></div>
+                        <div style="font-size: 12px; color: #666; margin-top: 5px;">подпись</div>
+                    </div>
+                    <div>
+                        <div style="margin-bottom: 10px; font-weight: bold;">Покупатель:</div>
+                        <div class="signature-line"></div>
+                        <div style="font-size: 12px; color: #666; margin-top: 5px;">подпись</div>
+                    </div>
+                </div>
+
+                <div style="margin-top: 30px; text-align: center; font-size: 12px; color: #999;">
+                    Товарный чек является подтверждением получения товара/услуги<br>
+                    Претензии принимаются только при наличии данного чека
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentOrderData = null;
+        let isEditMode = false;
+
+        // Обработка формы создания заказа
+        document.getElementById('orderForm')?.addEventListener('submit', async function(e) {
+            e.preventDefault();
+
+            const formData = new FormData(this);
+            formData.append('action', 'create_order');
+
+            try {
+                const response = await fetch(window.location.href, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    currentOrderData = result;
+                    isEditMode = false;
+
+                    const successMsg = document.getElementById('successMessage');
+                    successMsg.classList.add('show');
+
+                    this.reset();
+
+                    setTimeout(() => {
+                        successMsg.classList.remove('show');
+                    }, 3000);
+
+                    showSuccessModal(result);
+                } else {
+                    alert('Ошибка при создании заказа');
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                alert('Ошибка при создании заказа');
+            }
+        });
+
+        // Обработка формы редактирования
+        document.getElementById('editOrderForm')?.addEventListener('submit', async function(e) {
+            e.preventDefault();
+
+            const formData = new FormData(this);
+            formData.append('action', 'update_order');
+
+            try {
+                const response = await fetch(window.location.href, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    alert('Заказ успешно обновлён!');
+                    closeEditModal();
+                    location.reload();
+                } else {
+                    alert('Ошибка: ' + (result.error || 'Не удалось обновить'));
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                alert('Ошибка при обновлении заказа');
+            }
+        });
+
+        // Показать детали заказа
+        async function showOrderDetails(orderId) {
+            try {
+                const response = await fetch(`?key=<?= $adminKey ?>&api=get_order&order_id=${encodeURIComponent(orderId)}`);
+                const result = await response.json();
+
+                if (result.success) {
+                    currentOrderData = result;
+                    isEditMode = false;
+                    showSuccessModal(result);
+
+                    if (result.comments && result.comments.length > 0) {
+                        document.getElementById('commentSection').style.display = 'block';
+                        const container = document.getElementById('commentsContainer');
+                        container.innerHTML = '';
+                        result.comments.forEach(comment => {
+                            const div = document.createElement('div');
+                            div.className = 'comment-item';
+                            div.innerHTML = `
+                                <div>${comment.text}</div>
+                                <div class="comment-time">${new Date(comment.timestamp).toLocaleString('ru-RU')}</div>
+                            `;
+                            container.appendChild(div);
+                        });
+                    } else {
+                        document.getElementById('commentSection').style.display = 'block';
+                        document.getElementById('commentsContainer').innerHTML = '<p style="color: #6b7280; font-size: 12px;">Комментариев пока нет</p>';
+                    }
+                } else {
+                    alert('Ошибка: ' + (result.error || 'Заказ не найден'));
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                alert('Ошибка при загрузке заказа');
+            }
+        }
+
+        // Редактировать заказ
+        async function editOrder(orderId) {
+            try {
+                const response = await fetch(`?key=<?= $adminKey ?>&api=get_order&order_id=${encodeURIComponent(orderId)}`);
+                const result = await response.json();
+
+                if (result.success) {
+                    document.getElementById('edit-order-id').value = result.order_id;
+                    document.getElementById('edit-order-number').textContent = result.order_number;
+                    document.getElementById('edit-customer-name').value = result.customer_name;
+                    document.getElementById('edit-customer-phone').value = result.customer_phone;
+                    document.getElementById('edit-customer-email').value = result.customer_email || '';
+                    document.getElementById('edit-order-description').value = result.description;
+                    document.getElementById('edit-technical-details').value = result.technical || '';
+                    document.getElementById('edit-materials-provided').checked = result.materials_provided;
+                    document.getElementById('edit-materials-date').value = result.materials_date ? result.materials_date.split('.').reverse().join('-') : '';
+                    document.getElementById('edit-prepayment').value = result.prepayment;
+                    document.getElementById('edit-total-price').value = result.total;
+                    document.getElementById('edit-prepayment-paid').checked = result.prepayment_paid;
+                    document.getElementById('edit-ready-date').value = result.ready_date.split('.').reverse().join('-');
+
+                    document.getElementById('editModal').classList.add('active');
+                } else {
+                    alert('Ошибка: ' + (result.error || 'Заказ не найден'));
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                alert('Ошибка при загрузке заказа');
+            }
+        }
+
+        function closeEditModal() {
+            document.getElementById('editModal').classList.remove('active');
+        }
+
+        // Смена статуса
+        async function changeStatus(orderId, newStatus) {
+            try {
+                const formData = new FormData();
+                formData.append('action', 'update_status');
+                formData.append('order_id', orderId);
+                formData.append('status', newStatus);
+
+                const response = await fetch(window.location.href, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    location.reload();
+                } else {
+                    alert('Ошибка при смене статуса');
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                alert('Ошибка при смене статуса');
+            }
+        }
+
+        // Дублирование заказа
+        async function duplicateOrder(orderId) {
+            if (!confirm('Создать копию этого заказа?')) return;
+
+            try {
+                const formData = new FormData();
+                formData.append('action', 'duplicate_order');
+                formData.append('order_id', orderId);
+
+                const response = await fetch(window.location.href, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    alert(`Заказ ${result.new_order_number} успешно создан!`);
+                    location.reload();
+                } else {
+                    alert('Ошибка: ' + (result.error || 'Не удалось дублировать'));
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                alert('Ошибка при дублировании заказа');
+            }
+        }
+
+        // Добавить комментарий
+        async function addComment() {
+            const input = document.getElementById('commentInput');
+            const comment = input.value.trim();
+
+            if (!comment || !currentOrderData) return;
+
+            try {
+                const formData = new FormData();
+                formData.append('action', 'add_comment');
+                formData.append('order_id', currentOrderData.order_id);
+                formData.append('comment', comment);
+
+                const response = await fetch(window.location.href, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    input.value = '';
+                    showOrderDetails(currentOrderData.order_id);
+                } else {
+                    alert('Ошибка при добавлении комментария');
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                alert('Ошибка при добавлении комментария');
+            }
+        }
+
+        // WhatsApp
+        function sendWhatsApp(phone, orderId) {
+            if (!orderId) {
+                const cleanPhone = phone.replace(/[^0-9]/g, '');
+                window.open(`https://wa.me/${cleanPhone}`, '_blank');
+                return;
+            }
+
+            showOrderDetails(orderId);
+        }
+
+        function sendWhatsAppFromModal() {
+            if (!currentOrderData) return;
+
+            const phone = currentOrderData.customer_phone.replace(/[^0-9]/g, '');
+            const text = document.getElementById('notificationText').textContent;
+            const encoded = encodeURIComponent(text);
+
+            window.open(`https://wa.me/${phone}?text=${encoded}`, '_blank');
+        }
+
+        function showSuccessModal(data) {
+            const modal = document.getElementById('successModal');
+            const notificationText = document.getElementById('notificationText');
+            const modalOrderNumber = document.getElementById('modal-order-number');
+
+            modalOrderNumber.textContent = data.order_number;
+
+            let notification = `✅ ЗАКАЗ ПРИНЯТ!\n\n`;
+            notification += `Номер заказа: ${data.order_number}\n`;
+            notification += `Дата готовности: ${data.ready_date}\n\n`;
+            notification += `Что делаем:\n`;
+            notification += `${data.description}\n\n`;
+            if (data.technical) {
+                notification += `Технические данные:\n`;
+                notification += `${data.technical}\n\n`;
+            }
+            notification += `Сумма:\n`;
+            if (data.prepayment > 0) {
+                notification += `• Предоплата: ${formatPrice(data.prepayment)} ₽`;
+                if (data.prepayment_paid) {
+                    notification += ` ✓\n`;
+                } else {
+                    notification += `\n`;
+                }
+                notification += `• Осталось: ${formatPrice(data.remaining)} ₽\n\n`;
+            } else {
+                notification += `• Итого: ${formatPrice(data.total)} ₽\n\n`;
+            }
+            notification += `Забрать заказ:\n`;
+            notification += `📍 г. Сосновый Бор, ул. Красных Фортов, д. 49а\n`;
+            notification += `📞 8-952-200-39-90\n\n`;
+            notification += `Копировальный центр ПРИНТСС\n`;
+            notification += `принтсс.рф`;
+
+            notificationText.textContent = notification;
+            modal.classList.add('active');
+
+            fillReceiptData(data);
+        }
+
+        function fillReceiptData(data) {
+            document.getElementById('receipt-number').textContent = data.order_number;
+            document.getElementById('receipt-date').textContent = data.order_date || new Date().toLocaleDateString('ru-RU');
+            document.getElementById('receipt-description').textContent = data.description;
+            document.getElementById('receipt-total').textContent = formatPrice(data.total) + ' ₽';
+            document.getElementById('receipt-total-final').textContent = formatPrice(data.total) + ' ₽';
+            document.getElementById('receipt-customer').textContent = data.customer_name;
+            document.getElementById('receipt-phone').textContent = data.customer_phone;
+            document.getElementById('receipt-ready-date').textContent = data.ready_date;
+            document.getElementById('receipt-technical').textContent = data.technical || 'Согласно заказу';
+
+            if (data.prepayment > 0) {
+                document.getElementById('receipt-prepayment-block').style.display = 'block';
+                document.getElementById('receipt-prepayment').textContent = formatPrice(data.prepayment) + ' ₽' + (data.prepayment_paid ? ' ✓' : '');
+                document.getElementById('receipt-remaining').textContent = formatPrice(data.remaining) + ' ₽';
+            } else {
+                document.getElementById('receipt-prepayment-block').style.display = 'none';
+            }
+        }
+
+        function closeModal() {
+            const modal = document.getElementById('successModal');
+            modal.classList.remove('active');
+            currentOrderData = null;
+            document.getElementById('commentSection').style.display = 'none';
+        }
+
+        function copyNotification() {
+            const notificationText = document.getElementById('notificationText').textContent;
+
+            navigator.clipboard.writeText(notificationText).then(() => {
+                const btn = event.target.closest('button');
+                const originalHTML = btn.innerHTML;
+                btn.innerHTML = '<i class="fas fa-check"></i> Скопировано!';
+                btn.style.background = 'linear-gradient(135deg, #10b981, #047857)';
+
+                setTimeout(() => {
+                    btn.innerHTML = originalHTML;
+                    btn.style.background = '';
+                }, 2000);
+            }).catch(err => {
+                const textArea = document.createElement('textarea');
+                textArea.value = notificationText;
+                textArea.style.position = 'fixed';
+                textArea.style.left = '-999999px';
+                document.body.appendChild(textArea);
+                textArea.select();
+                try {
+                    document.execCommand('copy');
+                    const btn = event.target.closest('button');
+                    const originalHTML = btn.innerHTML;
+                    btn.innerHTML = '<i class="fas fa-check"></i> Скопировано!';
+                    btn.style.background = 'linear-gradient(135deg, #10b981, #047857)';
+                    setTimeout(() => {
+                        btn.innerHTML = originalHTML;
+                        btn.style.background = '';
+                    }, 2000);
+                } catch (err) {
+                    alert('Не удалось скопировать');
+                }
+                document.body.removeChild(textArea);
+            });
+        }
+
+        function printReceipt() {
+            if (!currentOrderData) {
+                alert('Данные заказа не загружены');
+                return;
+            }
+
+            const receiptPrint = document.getElementById('receiptPrint');
+            receiptPrint.style.display = 'block';
+
+            setTimeout(() => {
+                window.print();
+                setTimeout(() => {
+                    receiptPrint.style.display = 'none';
+                }, 100);
+            }, 100);
+        }
+
+        function formatPrice(price) {
+            return new Intl.NumberFormat('ru-RU').format(price);
+        }
+
+        // Фильтрация заказов печати
+        function filterOrders() {
+            const searchTerm = document.getElementById('searchInput')?.value.toLowerCase() || '';
+            const statusFilter = document.getElementById('statusFilter')?.value || '';
+            const dateFilter = document.getElementById('dateFilter')?.value || '';
+            const rows = document.querySelectorAll('#ordersTable tbody tr');
+
+            const today = new Date();
+            const weekAgo = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000);
+            const monthAgo = new Date(today.getTime() - 30 * 24 * 60 * 60 * 1000);
+
+            let visibleCount = 0;
+
+            rows.forEach(row => {
+                const orderId = (row.dataset.orderId || '').toLowerCase();
+                const customer = (row.dataset.customer || '').toLowerCase();
+                const phone = (row.dataset.phone || '').toLowerCase();
+                const status = row.dataset.status || '';
+                const orderDate = new Date(row.dataset.date || '1970-01-01');
+
+                const matchesSearch = orderId.includes(searchTerm) || 
+                                    customer.includes(searchTerm) || 
+                                    phone.includes(searchTerm);
+                const matchesStatus = !statusFilter || status === statusFilter;
+
+                let matchesDate = true;
+                if (dateFilter === 'today') {
+                    matchesDate = orderDate.toDateString() === today.toDateString();
+                } else if (dateFilter === 'week') {
+                    matchesDate = orderDate >= weekAgo;
+                } else if (dateFilter === 'month') {
+                    matchesDate = orderDate >= monthAgo;
+                }
+
+                const isVisible = matchesSearch && matchesStatus && matchesDate;
+                row.style.display = isVisible ? '' : 'none';
+                if (isVisible) visibleCount++;
+            });
+
+            const countEl = document.getElementById('ordersCount');
+            if (countEl) countEl.textContent = visibleCount;
+        }
+
+        // Фильтрация фотозаказов
+        function filterPhotoOrders() {
+            const searchTerm = document.getElementById('searchInputPhoto')?.value.toLowerCase() || '';
+            const statusFilter = document.getElementById('statusFilterPhoto')?.value || '';
+            const dateFilter = document.getElementById('dateFilterPhoto')?.value || '';
+            const rows = document.querySelectorAll('#ordersTablePhoto tbody tr');
+
+            const today = new Date();
+            const weekAgo = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000);
+            const monthAgo = new Date(today.getTime() - 30 * 24 * 60 * 60 * 1000);
+
+            let visibleCount = 0;
+
+            rows.forEach(row => {
+                const orderId = (row.dataset.orderId || '').toLowerCase();
+                const customer = (row.dataset.customer || '').toLowerCase();
+                const phone = (row.dataset.phone || '').toLowerCase();
+                const status = row.dataset.status || '';
+                const orderDate = new Date(row.dataset.date || '1970-01-01');
+
+                const matchesSearch = orderId.includes(searchTerm) || 
+                                    customer.includes(searchTerm) || 
+                                    phone.includes(searchTerm);
+                const matchesStatus = !statusFilter || status === statusFilter;
+
+                let matchesDate = true;
+                if (dateFilter === 'today') {
+                    matchesDate = orderDate.toDateString() === today.toDateString();
+                } else if (dateFilter === 'week') {
+                    matchesDate = orderDate >= weekAgo;
+                } else if (dateFilter === 'month') {
+                    matchesDate = orderDate >= monthAgo;
+                }
+
+                const isVisible = matchesSearch && matchesStatus && matchesDate;
+                row.style.display = isVisible ? '' : 'none';
+                if (isVisible) visibleCount++;
+            });
+
+            const countEl = document.getElementById('ordersCountPhoto');
+            if (countEl) countEl.textContent = visibleCount;
+        }
+
+        function refreshData() {
+            location.reload();
+        }
+
+        console.log('🚀 ПРИНТСС Админ PRO v4.5 ULTIMATE + PHOTO загружен!');
+        console.log('📊 Статистика:', {
+            total: <?= $totalOrders ?>,
+            photo: <?= count($orders) ?>,
+            print: <?= count($printOrders) ?>,
+            today: <?= count($todayOrders) ?>,
+            month: <?= count($monthOrders) ?>
+        });
+    </script>
+</body>
+</html>
