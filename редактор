@@ -1,2392 +1,304 @@
 <?php
-// Проверяем, вызван ли редактор через алиас
-$is_editor_mode = isset($_REQUEST['editor_mode']) && $_REQUEST['editor_mode'];
-$from_products = isset($_REQUEST['from_products']) && $_REQUEST['from_products'];
+/**
+ * ═══════════════════════════════════════════════════════════════
+ * MODULE METADATA
+ * ═══════════════════════════════════════════════════════════════
+ * @module_id       design
+ * @module_name     🎨 Дизайн
+ * @module_icon     fas fa-palette
+ * @module_order    100
+ * @module_version  1.0.0
+ * @module_author   Артём
+ * @module_enabled  true
+ * @module_access   admin
+ * @module_description Загрузка изображений и настройка темы
+ * ═══════════════════════════════════════════════════════════════
+ */
 
-// Получаем ID товара для редактирования
-$product_id = $_GET['id'] ?? $_POST['product_id'] ?? $_REQUEST['product_id'] ?? null;
-
-// Если есть ID товара, загружаем его данные
-$product_data = null;
-if ($product_id) {
-    if (function_exists('getProductById')) {
-        $product_data = getProductById($product_id);
-    } else {
-        // Базовая функция для получения товара
-        $demo_products = [
-            1 => [
-                'id' => 1,
-                'name' => 'Анубиас нана - неприхотливое аквариумное растение',
-                'latin_name' => 'Anubias barteri var. nana',
-                'description' => 'Неприхотливое медленнорастущее растение с жесткими темно-зелеными листьями. Идеально подходит для начинающих аквариумистов. Растет при слабом освещении, не требует подачи CO2. Можно крепить к корягам и камням.
-
-Особенности:
-• Проверенное качество и безопасность
-• Простота в установке и обслуживании
-• Совместимость с большинством аквариумных систем
-• Подходит для пресноводных аквариумов
-
-Рекомендуется специалистами и имеет множество положительных отзывов от покупателей.',
-                'short_description' => 'Неприхотливое аквариумное растение для переднего плана',
-                'price' => 450,
-                'old_price' => 600,
-                'category_id' => 1,
-                'sku' => 'PLT_ANU_9876',
-                'stock_quantity' => 15,
-                'status' => 1,
-                'main_image' => 'https://images.unsplash.com/photo-1416879595882-3373a0480b5b?w=400&h=400&fit=crop',
-                'gallery' => [
-                    'https://images.unsplash.com/photo-1535591273668-578e31182c4f?w=300&h=300&fit=crop',
-                    'https://images.unsplash.com/photo-1558618047-3c8c76ca7d13?w=300&h=300&fit=crop',
-                    'https://images.unsplash.com/photo-1524704654690-b56c05c78a00?w=300&h=300&fit=crop'
-                ],
-                'badges' => ['recommend', 'discount', 'eco'],
-                'tags' => 'анубиас, неприхотливые, медленнорастущие, тенелюбивые, передний план',
-                'size' => '10-15 см',
-                'temperature' => '20-28°C',
-                'ph_level' => '6.0-8.0',
-                'lighting' => 'слабое',
-                'difficulty' => 'легко',
-                'meta_title' => 'Анубиас нана - купить в АкваСбор от 450 руб',
-                'meta_description' => 'Анубиас нана из категории Растения. Лучшие цены, качественные товары, быстрая доставка. Заказать Анубиас нана в интернет-магазине АкваСбор.'
-            ]
-        ];
-        $product_data = $demo_products[$product_id] ?? null;
-    }
-}
-
-// Обработка сохранения товара
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_product'])) {
-    $success = false;
-    $error_message = '';
-
-    try {
-        // Собираем данные товара
-        $productData = [
-            'id' => $product_id,
-            'name' => $_POST['name'] ?? '',
-            'latin_name' => $_POST['latin_name'] ?? '',
-            'description' => $_POST['description'] ?? '',
-            'short_description' => $_POST['short_description'] ?? '',
-            'price' => floatval($_POST['price'] ?? 0),
-            'old_price' => floatval($_POST['old_price'] ?? 0),
-            'category_id' => intval($_POST['category_id'] ?? 0),
-            'sku' => $_POST['sku'] ?? '',
-            'stock_quantity' => intval($_POST['stock_quantity'] ?? 0),
-            'status' => intval($_POST['status'] ?? 1),
-            'main_image' => $_POST['main_image'] ?? '',
-            'gallery' => json_decode($_POST['gallery'] ?? '[]', true),
-            'badges' => json_decode($_POST['badges'] ?? '[]', true),
-            'tags' => $_POST['tags'] ?? '',
-            'size' => $_POST['size'] ?? '',
-            'temperature' => $_POST['temperature'] ?? '',
-            'ph_level' => $_POST['ph_level'] ?? '',
-            'lighting' => $_POST['lighting'] ?? '',
-            'difficulty' => $_POST['difficulty'] ?? '',
-            'meta_title' => $_POST['meta_title'] ?? '',
-            'meta_description' => $_POST['meta_description'] ?? ''
-        ];
-
-        // Если функция saveProduct существует, используем её
-        if (function_exists('saveProduct')) {
-            $result = saveProduct($productData);
-            if ($result['success']) {
-                $success = true;
-                $new_product_id = $result['product_id'];
-                $success_message = "Товар успешно сохранен! ID: $new_product_id";
-
-                // Обновляем данные товара для формы
-                $product_data = $productData;
-                $product_data['id'] = $new_product_id;
-                $product_id = $new_product_id;
-            } else {
-                $error_message = $result['error'] ?? 'Ошибка сохранения';
-            }
-        } else {
-            // Логируем данные
-            error_log('Сохранение товара: ' . json_encode($productData));
-            $success = true;
-            $new_product_id = $product_id ?: rand(1000, 9999);
-            $success_message = "Товар успешно сохранен! ID: $new_product_id";
-
-            // Обновляем данные товара для формы
-            $product_data = $productData;
-            $product_data['id'] = $new_product_id;
-            $product_id = $new_product_id;
-        }
-
-    } catch (Exception $e) {
-        $error_message = $e->getMessage();
-    }
-}
-
-// Базовые категории если функция не доступна
-if (!function_exists('getCategories')) {
-    function getCategories() {
-        return [
-            ['id' => 1, 'name' => 'Растения'],
-            ['id' => 2, 'name' => 'Рыбки'],
-            ['id' => 3, 'name' => 'Оборудование'],
-            ['id' => 4, 'name' => 'Декор'],
-            ['id' => 5, 'name' => 'Корма'],
-            ['id' => 6, 'name' => 'Химия для воды']
-        ];
-    }
-}
-
-$categories = getCategories();
-
-// Если нет ID товара, показываем список товаров для выбора
-if (!$product_id) {
-    ?>
-    <div class='page-header'>
-        <div class='d-flex justify-content-between align-items-center'>
-            <div>
-                <h1 class='h3 mb-1 text-gray-800'>
-                    <i class='fas fa-edit me-2 text-primary'></i>Редактор товаров
-                </h1>
-                <p class='text-muted mb-0'>Выберите товар для редактирования или создайте новый</p>
-            </div>
-            <div>
-                <a href='?page=products' class='btn btn-secondary me-2'>
-                    <i class='fas fa-list me-1'></i>Все товары
-                </a>
-                <a href='?page=add_product' class='btn btn-success'>
-                    <i class='fas fa-plus me-1'></i>Новый товар
-                </a>
-            </div>
-        </div>
-    </div>
-
-    <div class='content-card'>
-        <h4 class='mb-4'>
-            <i class='fas fa-search me-2'></i>Быстрый поиск товаров
-        </h4>
-
-        <div class='row mb-4'>
-            <div class='col-md-8'>
-                <div class='input-group'>
-                    <input type='text' class='form-control' id='productSearch' placeholder='Поиск товаров по названию...'>
-                    <button class='btn btn-outline-secondary' type='button' onclick='searchProducts()'>
-                        <i class='fas fa-search'></i>
-                    </button>
-                </div>
-            </div>
-            <div class='col-md-4'>
-                <select class='form-select' id='categoryFilter' onchange='filterByCategory()'>
-                    <option value=''>Все категории</option>
-                    <?php foreach ($categories as $category): ?>
-                        <option value='<?= $category['id'] ?>'><?= htmlspecialchars($category['name']) ?></option>
-                    <?php endforeach; ?>
-                </select>
-            </div>
-        </div>
-
-        <!-- Демо товары для выбора -->
-        <div class='row' id='productsList'>
-            <div class='col-lg-4 col-md-6 mb-4'>
-                <div class='card h-100 border-0 shadow-sm product-card' onclick='editProduct(1)' style='cursor: pointer;'>
-                    <div class='card-img-top' style='height: 200px; background: linear-gradient(45deg, #f8f9fc, #e2e6ea); display: flex; align-items: center; justify-content: center;'>
-                        <img src='https://images.unsplash.com/photo-1416879595882-3373a0480b5b?w=300&h=200&fit=crop' 
-                             alt='Анубиас нана' class='img-fluid rounded' style='max-height: 180px;'>
-                    </div>
-                    <div class='card-body'>
-                        <h6 class='card-title'>Анубиас нана</h6>
-                        <p class='card-text text-muted small'>Неприхотливое аквариумное растение</p>
-                        <div class='d-flex justify-content-between align-items-center'>
-                            <div>
-                                <span class='text-success fw-bold'>450 ₽</span>
-                                <small class='text-muted text-decoration-line-through ms-1'>600 ₽</small>
-                            </div>
-                            <div>
-                                <span class='badge bg-success me-1'>⭐ ТОП</span>
-                                <span class='badge bg-info'>💸 -25%</span>
-                            </div>
-                        </div>
-                    </div>
-                    <div class='card-footer bg-transparent border-0 pt-0'>
-                        <button class='btn btn-primary btn-sm w-100'>
-                            <i class='fas fa-edit me-1'></i>Редактировать
-                        </button>
-                    </div>
-                </div>
-            </div>
-
-            <div class='col-lg-4 col-md-6 mb-4'>
-                <div class='card h-100 border-0 shadow-sm product-card' onclick='editProduct(2)' style='cursor: pointer;'>
-                    <div class='card-img-top' style='height: 200px; background: linear-gradient(45deg, #f8f9fc, #e2e6ea); display: flex; align-items: center; justify-content: center;'>
-                        <img src='https://images.unsplash.com/photo-1544551763-46a013bb70d5?w=300&h=200&fit=crop' 
-                             alt='Гуппи' class='img-fluid rounded' style='max-height: 180px;'>
-                    </div>
-                    <div class='card-body'>
-                        <h6 class='card-title'>Гуппи обыкновенная</h6>
-                        <p class='card-text text-muted small'>Яркая живородящая рыбка</p>
-                        <div class='d-flex justify-content-between align-items-center'>
-                            <div>
-                                <span class='text-success fw-bold'>150 ₽</span>
-                            </div>
-                            <div>
-                                <span class='badge bg-warning text-dark'>🆕 Новинка</span>
-                            </div>
-                        </div>
-                    </div>
-                    <div class='card-footer bg-transparent border-0 pt-0'>
-                        <button class='btn btn-primary btn-sm w-100'>
-                            <i class='fas fa-edit me-1'></i>Редактировать
-                        </button>
-                    </div>
-                </div>
-            </div>
-
-            <div class='col-lg-4 col-md-6 mb-4'>
-                <div class='card h-100 border-0 shadow-sm product-card' onclick='editProduct(3)' style='cursor: pointer;'>
-                    <div class='card-img-top' style='height: 200px; background: linear-gradient(45deg, #f8f9fc, #e2e6ea); display: flex; align-items: center; justify-content: center;'>
-                        <img src='https://images.unsplash.com/photo-1559827260-dc66d52bef19?w=300&h=200&fit=crop' 
-                             alt='Фильтр' class='img-fluid rounded' style='max-height: 180px;'>
-                    </div>
-                    <div class='card-body'>
-                        <h6 class='card-title'>Фильтр внутренний</h6>
-                        <p class='card-text text-muted small'>Система очистки воды</p>
-                        <div class='d-flex justify-content-between align-items-center'>
-                            <div>
-                                <span class='text-success fw-bold'>1200 ₽</span>
-                            </div>
-                            <div>
-                                <span class='badge bg-dark'>💎 Премиум</span>
-                            </div>
-                        </div>
-                    </div>
-                    <div class='card-footer bg-transparent border-0 pt-0'>
-                        <button class='btn btn-primary btn-sm w-100'>
-                            <i class='fas fa-edit me-1'></i>Редактировать
-                        </button>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- Если нет товаров -->
-        <div class='text-center py-5' id='noProducts' style='display: none;'>
-            <div class='mb-4'>
-                <i class='fas fa-search fa-4x text-muted mb-3'></i>
-                <h4 class='text-muted'>Товары не найдены</h4>
-                <p class='text-muted'>Попробуйте изменить условия поиска или создайте новый товар</p>
-            </div>
-            <a href='?page=add_product' class='btn btn-primary'>
-                <i class='fas fa-plus me-1'></i>Создать новый товар
-            </a>
-        </div>
-    </div>
-
-    <style>
-    .product-card {
-        transition: all 0.3s ease;
-        border-radius: 12px !important;
-    }
-
-    .product-card:hover {
-        transform: translateY(-5px);
-        box-shadow: 0 8px 25px rgba(0,0,0,0.15) !important;
-    }
-
-    .card-img-top {
-        border-radius: 12px 12px 0 0 !important;
-    }
-
-    .content-card {
-        background: white;
-        border-radius: 12px;
-        padding: 2rem;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.08);
-        border: 1px solid #E2E8F0;
-    }
-    </style>
-
-    <script>
-    function editProduct(id) {
-        window.location.href = '?page=product_editor&id=' + id;
-    }
-
-    function searchProducts() {
-        const query = document.getElementById('productSearch').value.toLowerCase();
-        const products = document.querySelectorAll('.product-card');
-        let visibleCount = 0;
-
-        products.forEach(product => {
-            const title = product.querySelector('.card-title').textContent.toLowerCase();
-            const description = product.querySelector('.card-text').textContent.toLowerCase();
-
-            if (title.includes(query) || description.includes(query)) {
-                product.parentElement.style.display = 'block';
-                visibleCount++;
-            } else {
-                product.parentElement.style.display = 'none';
-            }
-        });
-
-        document.getElementById('noProducts').style.display = visibleCount === 0 ? 'block' : 'none';
-    }
-
-    function filterByCategory() {
-        const category = document.getElementById('categoryFilter').value;
-        // Здесь можно добавить фильтрацию по категориям
-        console.log('Фильтр по категории:', category);
-    }
-
-    // Поиск в реальном времени
-    document.getElementById('productSearch').addEventListener('input', function() {
-        searchProducts();
-    });
-    </script>
-
-    <?php
-    return; // Останавливаем выполнение, показываем только список товаров
+if (!defined('ADMIN_CORE_LOADED')) {
+    die('Direct access not allowed');
 }
 ?>
 
-<!DOCTYPE html>
-<html lang='ru'>
-<head>
-    <meta charset='UTF-8'>
-    <meta name='viewport' content='width=device-width, initial-scale=1.0'>
-    <title><?= $product_data ? 'Редактирование товара' : 'Новый товар' ?> - ИИ Редактор</title>
-</head>
-<body>
-
-<!-- Показать уведомления сохранения -->
-<?php if (isset($success_message)): ?>
-<script>
-document.addEventListener('DOMContentLoaded', function() {
-    showNotification('✅ <?= addslashes($success_message) ?>', 'success', 5000);
-
-    // Редирект через 3 секунды если пришли из списка товаров
-    <?php if ($from_products): ?>
-    setTimeout(function() {
-        if (confirm('Товар сохранен! Вернуться к списку товаров?')) {
-            window.location.href = '?page=products';
-        }
-    }, 3000);
-    <?php endif; ?>
-});
-</script>
-<?php endif; ?>
-
-<?php if (isset($error_message) && $error_message): ?>
-<script>
-document.addEventListener('DOMContentLoaded', function() {
-    showNotification('❌ Ошибка сохранения: <?= addslashes($error_message) ?>', 'error', 8000);
-});
-</script>
-<?php endif; ?>
-
-<!-- Модальное окно подтверждения сброса -->
-<div class='modal fade' id='confirmResetModal' tabindex='-1'>
-    <div class='modal-dialog'>
-        <div class='modal-content'>
-            <div class='modal-header bg-warning text-dark'>
-                <h5 class='modal-title'>
-                    <i class='fas fa-exclamation-triangle me-2'></i>🗑️ Подтверждение сброса
-                </h5>
-                <button type='button' class='btn-close' data-bs-dismiss='modal'></button>
-            </div>
-            <div class='modal-body'>
-                <p class='mb-3'><strong>Вы уверены, что хотите очистить всю форму?</strong></p>
-                <div class='alert alert-warning'>
-                    <i class='fas fa-exclamation-circle me-2'></i>Все введенные данные будут потеряны!
-                </div>
-                <p class='text-muted'>💡 Рекомендуем сначала сохранить черновик.</p>
-            </div>
-            <div class='modal-footer'>
-                <button type='button' class='btn btn-secondary' data-bs-dismiss='modal'>
-                    <i class='fas fa-times me-1'></i>Отмена
-                </button>
-                <button type='button' class='btn btn-outline-info me-2' onclick='saveAsDraft(); bootstrap.Modal.getInstance(document.getElementById("confirmResetModal")).hide();'>
-                    <i class='fas fa-save me-1'></i>Сначала сохранить черновик
-                </button>
-                <button type='button' class='btn btn-danger' onclick='confirmReset(); bootstrap.Modal.getInstance(document.getElementById("confirmResetModal")).hide();'>
-                    <i class='fas fa-trash me-1'></i>Да, очистить форму
-                </button>
-            </div>
-        </div>
-    </div>
-</div>
-
-<div class='page-header'>
-    <div class='d-flex justify-content-between align-items-center'>
-        <div>
-            <h1 class='h3 mb-1 text-gray-800'>
-                🚀 <?= $product_data ? 'Редактирование товара' : 'Новый товар' ?> с ИИ
-            </h1>
-            <nav aria-label='breadcrumb'>
-                <ol class='breadcrumb'>
-                    <li class='breadcrumb-item'><a href='?page=dashboard'>Главная</a></li>
-                    <li class='breadcrumb-item'><a href='?page=products'>Товары</a></li>
-                    <li class='breadcrumb-item active'><?= $product_data ? 'Редактировать товар' : 'Новый товар' ?></li>
-                </ol>
-            </nav>
-        </div>
-        <div>
-            <a href='?page=products' class='btn btn-secondary me-2'>
-                <i class='fas fa-arrow-left me-1'></i>Назад к товарам
-            </a>
-            <a href='?page=product_editor' class='btn btn-info me-2'>
-                <i class='fas fa-list me-1'></i>Выбрать другой товар
-            </a>
-            <button class='btn btn-success' onclick='previewProduct()'>
-                <i class='fas fa-eye me-1'></i>Просмотр товара
-            </button>
-        </div>
-    </div>
-</div>
-
-<!-- ИИ Уведомления -->
-<div id='aiNotifications'></div>
-
 <div class='row'>
-    <!-- Основная форма -->
-    <div class='col-xl-8 col-lg-7'>
-        <form id='productForm' method='POST' action=''>
-            <input type='hidden' name='save_product' value='1'>
-            <input type='hidden' id='productId' name='product_id' value='<?= htmlspecialchars($product_id ?? '') ?>'>
+  <!-- Загрузка изображений -->
+  <div class='card'>
+    <h3 style='margin-bottom:20px'>🖼️ Изображения сайта</h3>
 
-            <!-- Основная информация -->
-            <div class='card shadow mb-4'>
-                <div class='card-header py-3 d-flex justify-content-between align-items-center'>
-                    <h6 class='m-0 font-weight-bold text-primary'>
-                        <i class='fas fa-info-circle me-2'></i>Основная информация
-                    </h6>
-                    <div class='dropdown'>
-                        <button class='btn btn-sm btn-outline-primary dropdown-toggle' type='button' data-bs-toggle='dropdown'>
-                            <i class='fas fa-robot me-1'></i>ИИ Помощник
-                        </button>
-                        <div class='dropdown-menu'>
-                            <a class='dropdown-item' href='#' onclick='aiGenerateAll()'>
-                                <i class='fas fa-magic me-2'></i>Заполнить всё автоматически
-                            </a>
-                            <a class='dropdown-item' href='#' onclick='aiSuggestName()'>
-                                <i class='fas fa-tag me-2'></i>Предложить название
-                            </a>
-                            <a class='dropdown-item' href='#' onclick='showTemplates()'>
-                                <i class='fas fa-file-template me-2'></i>Шаблоны товаров
-                            </a>
-                        </div>
-                    </div>
-                </div>
-                <div class='card-body'>
-                    <div class='row'>
-                        <div class='col-md-8'>
-                            <div class='form-group mb-3'>
-                                <label class='form-label fw-semibold'>
-                                    Название товара <span class='text-danger'>*</span>
-                                    <i class='fas fa-question-circle text-muted ms-1' title='Введите полное название товара'></i>
-                                </label>
-                                <input type='text' class='form-control form-control-lg' name='name' id='productName' required
-                                       placeholder='Например: Анубиас нана - неприхотливое аквариумное растение'
-                                       value='<?= htmlspecialchars($product_data['name'] ?? '') ?>'>
-                                <div class='form-text d-flex justify-content-between'>
-                                    <span>Символов: <span id='nameLength' class='fw-bold text-primary'>0</span>/100</span>
-                                    <span id='nameSeoScore' class='text-muted'>Введите название</span>
-                                </div>
-                            </div>
-                        </div>
-                        <div class='col-md-4'>
-                            <div class='form-group mb-3'>
-                                <label class='form-label fw-semibold'>Артикул (SKU)</label>
-                                <div class='input-group'>
-                                    <input type='text' class='form-control' name='sku' id='productSKU'
-                                           placeholder='Автогенерация' value='<?= htmlspecialchars($product_data['sku'] ?? '') ?>'>
-                                    <button type='button' class='btn btn-outline-secondary' onclick='generateSKU()' title='Сгенерировать артикул'>
-                                        <i class='fas fa-sync'></i>
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class='row'>
-                        <div class='col-md-4'>
-                            <div class='form-group mb-3'>
-                                <label class='form-label fw-semibold'>Категория <span class='text-danger'>*</span></label>
-                                <select class='form-select' name='category_id' id='productCategory' required>
-                                    <option value=''>Выберите категорию</option>
-                                    <?php foreach ($categories as $category): ?>
-                                        <option value='<?= $category['id'] ?>'
-                                            <?= ($product_data['category_id'] ?? '') == $category['id'] ? 'selected' : '' ?>>
-                                            <?= htmlspecialchars($category['name']) ?>
-                                        </option>
-                                    <?php endforeach; ?>
-                                </select>
-                            </div>
-                        </div>
-                        <div class='col-md-4'>
-                            <div class='form-group mb-3'>
-                                <label class='form-label fw-semibold'>
-                                    Цена <span class='text-danger'>*</span>
-                                    <button type='button' class='btn btn-sm btn-outline-warning ms-1' onclick='aiSuggestPrice()' title='ИИ предложит оптимальную цену'>
-                                        <i class='fas fa-robot'></i>
-                                    </button>
-                                </label>
-                                <div class='input-group'>
-                                    <input type='number' class='form-control' name='price' id='productPrice' required
-                                           min='0' step='0.01' placeholder='0' value='<?= $product_data['price'] ?? '' ?>'>
-                                    <span class='input-group-text'>₽</span>
-                                </div>
-                            </div>
-                        </div>
-                        <div class='col-md-4'>
-                            <div class='form-group mb-3'>
-                                <label class='form-label fw-semibold'>Старая цена (для скидки)</label>
-                                <div class='input-group'>
-                                    <input type='number' class='form-control' name='old_price' id='productOldPrice'
-                                           min='0' step='0.01' placeholder='0' value='<?= $product_data['old_price'] ?? '' ?>'>
-                                    <span class='input-group-text'>₽</span>
-                                </div>
-                                <div class='form-text text-muted' id='discountInfo'>
-                                    <small>Укажите старую цену для отображения скидки</small>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class='row'>
-                        <div class='col-md-6'>
-                            <div class='form-group mb-3'>
-                                <label class='form-label fw-semibold'>Латинское/научное название</label>
-                                <input type='text' class='form-control' name='latin_name' id='productLatinName'
-                                       placeholder='Например: Anubias barteri var. nana' value='<?= htmlspecialchars($product_data['latin_name'] ?? '') ?>'>
-                            </div>
-                        </div>
-                        <div class='col-md-3'>
-                            <div class='form-group mb-3'>
-                                <label class='form-label fw-semibold'>Сложность ухода</label>
-                                <select class='form-select' name='difficulty'>
-                                    <option value='легко' <?= ($product_data['difficulty'] ?? '') == 'легко' ? 'selected' : '' ?>>🟢 Легко</option>
-                                    <option value='средне' <?= ($product_data['difficulty'] ?? '') == 'средне' ? 'selected' : '' ?>>🟡 Средне</option>
-                                    <option value='сложно' <?= ($product_data['difficulty'] ?? '') == 'сложно' ? 'selected' : '' ?>>🔴 Сложно</option>
-                                    <option value='экспертный' <?= ($product_data['difficulty'] ?? '') == 'экспертный' ? 'selected' : '' ?>>🟣 Экспертный</option>
-                                </select>
-                            </div>
-                        </div>
-                        <div class='col-md-3'>
-                            <div class='form-group mb-3'>
-                                <label class='form-label fw-semibold'>Количество на складе</label>
-                                <input type='number' class='form-control' name='stock_quantity'
-                                       min='0' value='<?= $product_data['stock_quantity'] ?? '' ?>' placeholder='0'>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Описания -->
-            <div class='card shadow mb-4'>
-                <div class='card-header py-3 d-flex justify-content-between align-items-center'>
-                    <h6 class='m-0 font-weight-bold text-primary'>
-                        <i class='fas fa-file-text me-2'></i>Описания и контент
-                    </h6>
-                    <div class='btn-group' role='group'>
-                        <button type='button' class='btn btn-sm btn-outline-primary' onclick='aiGenerateDescription()'>
-                            <i class='fas fa-robot me-1'></i>ИИ генерация
-                        </button>
-                        <button type='button' class='btn btn-sm btn-outline-success' onclick='aiImproveDescription()'>
-                            <i class='fas fa-magic me-1'></i>Улучшить
-                        </button>
-                    </div>
-                </div>
-                <div class='card-body'>
-                    <div class='form-group mb-3'>
-                        <label class='form-label fw-semibold'>Краткое описание</label>
-                        <textarea class='form-control' name='short_description' id='productShortDescription' rows='2'
-                                  placeholder='Краткое описание для каталога (до 150 символов)'><?= htmlspecialchars($product_data['short_description'] ?? '') ?></textarea>
-                        <div class='form-text'>
-                            <span>Символов: <span id='shortDescLength'>0</span>/150</span>
-                            <span class='ms-3 text-muted'>Отображается в каталоге товаров</span>
-                        </div>
-                    </div>
-
-                    <div class='form-group mb-3'>
-                        <label class='form-label fw-semibold'>
-                            Полное описание <span class='text-danger'>*</span>
-                            <button type='button' class='btn btn-sm btn-outline-warning ms-1' onclick='aiAnalyzeDescription()' title='ИИ анализ читабельности'>
-                                <i class='fas fa-search'></i>
-                            </button>
-                        </label>
-                        <textarea class='form-control' name='description' id='productDescription' rows='8' required
-                                  placeholder='Подробное описание товара...'><?= htmlspecialchars($product_data['description'] ?? '') ?></textarea>
-                        <div class='form-text d-flex justify-content-between'>
-                            <span>Символов: <span id='descLength' class='fw-bold'>0</span></span>
-                            <span>Читабельность: <span id='readabilityScore' class='fw-bold text-muted'>-</span></span>
-                            <span>SEO: <span id='seoAnalysis' class='fw-bold text-muted'>-</span></span>
-                        </div>
-                    </div>
-
-                    <div class='form-group mb-0'>
-                        <label class='form-label fw-semibold'>
-                            Теги (через запятую)
-                            <button type='button' class='btn btn-sm btn-outline-info ms-1' onclick='aiGenerateTags()' title='ИИ предложит теги'>
-                                <i class='fas fa-hashtag'></i>
-                            </button>
-                        </label>
-                        <input type='text' class='form-control' name='tags' id='productTags'
-                               placeholder='аквариум, растения, декор, неприхотливые'
-                               value='<?= htmlspecialchars($product_data['tags'] ?? '') ?>'>
-                        <div class='form-text'>Помогают покупателям найти товар через поиск</div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Изображения с улучшенным Drag & Drop -->
-            <div class='card shadow mb-4'>
-                <div class='card-header py-3 d-flex justify-content-between align-items-center'>
-                    <h6 class='m-0 font-weight-bold text-primary'>
-                        <i class='fas fa-images me-2'></i>Изображения товара
-                    </h6>
-                    <div class='dropdown'>
-                        <button class='btn btn-sm btn-outline-info dropdown-toggle' type='button' data-bs-toggle='dropdown'>
-                            <i class='fas fa-tools me-1'></i>ИИ Инструменты
-                        </button>
-                        <div class='dropdown-menu'>
-                            <a class='dropdown-item' href='#' onclick='aiGenerateImage()'>
-                                <i class='fas fa-magic me-2'></i>Сгенерировать изображение
-                            </a>
-                            <a class='dropdown-item' href='#' onclick='aiEnhanceImages()'>
-                                <i class='fas fa-wand-magic-sparkles me-2'></i>Улучшить качество
-                            </a>
-                            <a class='dropdown-item' href='#' onclick='aiRemoveBackground()'>
-                                <i class='fas fa-cut me-2'></i>Удалить фон
-                            </a>
-                            <a class='dropdown-item' href='#' onclick='aiOptimizeImages()'>
-                                <i class='fas fa-compress me-2'></i>Оптимизировать размер
-                            </a>
-                        </div>
-                    </div>
-                </div>
-                <div class='card-body'>
-                    <div class='row'>
-                        <!-- Основное изображение -->
-                        <div class='col-lg-6'>
-                            <div class='mb-3'>
-                                <label class='form-label fw-semibold'>
-                                    Основное изображение <span class='text-danger'>*</span>
-                                    <small class='text-muted'>(отображается в каталоге)</small>
-                                </label>
-                                <div class='image-upload-area <?= !empty($product_data['main_image']) ? 'has-image' : '' ?>' id='mainImageUpload'>
-                                    <?php if (!empty($product_data['main_image'])): ?>
-                                    <div class='image-preview-container'>
-                                        <img src='<?= htmlspecialchars($product_data['main_image']) ?>' alt='Основное изображение' class='img-fluid'>
-                                        <div class='image-actions'>
-                                            <button type='button' class='btn btn-sm btn-primary' onclick='cropImage("main")' title='Обрезать'>
-                                                <i class='fas fa-crop'></i>
-                                            </button>
-                                            <button type='button' class='btn btn-sm btn-warning' onclick='aiEnhanceSpecificImage("main")' title='ИИ улучшение'>
-                                                <i class='fas fa-sparkles'></i>
-                                            </button>
-                                            <button type='button' class='btn btn-sm btn-danger' onclick='removeMainImage()' title='Удалить'>
-                                                <i class='fas fa-times'></i>
-                                            </button>
-                                        </div>
-                                    </div>
-                                    <?php else: ?>
-                                    <div class='upload-placeholder'>
-                                        <i class='fas fa-cloud-upload-alt fa-3x text-primary mb-3'></i>
-                                        <h5>Перетащите изображение сюда</h5>
-                                        <p class='text-muted mb-3'>или нажмите для выбора файла</p>
-                                        <button type='button' class='btn btn-primary'>
-                                            <i class='fas fa-folder-open me-1'></i>Выбрать файл
-                                        </button>
-                                        <p class='small text-muted mt-2'>
-                                            JPG, PNG, GIF, WebP • Максимум 10MB<br>
-                                            Рекомендуемый размер: 800x600px
-                                        </p>
-                                    </div>
-                                    <?php endif; ?>
-                                </div>
-                                <input type='hidden' name='main_image' id='mainImagePath' value='<?= htmlspecialchars($product_data['main_image'] ?? '') ?>'>
-
-                                <!-- Быстрые демо изображения -->
-                                <div class='mt-3'>
-                                    <small class='text-muted d-block mb-2'>Быстрая замена демо изображениями:</small>
-                                    <div class='d-flex gap-2 flex-wrap'>
-                                        <button type='button' class='btn btn-outline-success btn-sm' onclick='setDemoImage("plant")'>
-                                            🌿 Растение
-                                        </button>
-                                        <button type='button' class='btn btn-outline-info btn-sm' onclick='setDemoImage("fish")'>
-                                            🐠 Рыбка
-                                        </button>
-                                        <button type='button' class='btn btn-outline-warning btn-sm' onclick='setDemoImage("equipment")'>
-                                            ⚙️ Оборудование
-                                        </button>
-                                        <button type='button' class='btn btn-outline-secondary btn-sm' onclick='setDemoImage("decoration")'>
-                                            🪨 Декор
-                                        </button>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-
-                        <!-- Галерея -->
-                        <div class='col-lg-6'>
-                            <div class='mb-3'>
-                                <label class='form-label fw-semibold'>
-                                    Галерея изображений
-                                    <small class='text-muted'>(дополнительные фото)</small>
-                                    <span class='badge bg-primary ms-1' id='galleryCount'>0</span>
-                                </label>
-
-                                <!-- Drag & Drop зона для галереи -->
-                                <div class='image-upload-area' id='galleryUpload'>
-                                    <div class='upload-placeholder'>
-                                        <i class='fas fa-cloud-upload-alt fa-3x text-primary mb-3'></i>
-                                        <h6>Перетащите файлы сюда</h6>
-                                        <p class='text-muted mb-3'>Поддержка множественного выбора</p>
-                                        <button type='button' class='btn btn-primary'>
-                                            <i class='fas fa-folder-open me-1'></i>Выбрать файлы
-                                        </button>
-                                        <p class='small text-muted mt-2'>
-                                            JPG, PNG, GIF, WebP • Макс. 5MB каждый<br>
-                                            До 10 изображений
-                                        </p>
-                                    </div>
-                                </div>
-
-                                <!-- Превью галереи -->
-                                <div id='galleryPreview' class='gallery-preview mt-3'>
-                                    <?php if (!empty($product_data['gallery']) && is_array($product_data['gallery'])): ?>
-                                        <?php foreach ($product_data['gallery'] as $index => $image): ?>
-                                        <div class='gallery-item'>
-                                            <img src='<?= htmlspecialchars($image) ?>' alt='Галерея <?= $index + 1 ?>'>
-                                            <div class='gallery-overlay'>
-                                                <button type='button' class='btn btn-sm btn-primary' onclick='editImage(<?= $index ?>)' title='Редактировать'>
-                                                    <i class='fas fa-edit'></i>
-                                                </button>
-                                                <button type='button' class='btn btn-sm btn-warning' onclick='aiEnhanceSpecificImage(<?= $index ?>)' title='ИИ улучшение'>
-                                                    <i class='fas fa-sparkles'></i>
-                                                </button>
-                                            </div>
-                                            <button type='button' class='remove-btn' onclick='removeFromGallery(<?= $index ?>)' title='Удалить'>
-                                                <i class='fas fa-times'></i>
-                                            </button>
-                                        </div>
-                                        <?php endforeach; ?>
-                                    <?php endif; ?>
-                                </div>
-                                <input type='hidden' name='gallery' id='galleryPaths' value='<?= htmlspecialchars(json_encode($product_data['gallery'] ?? [])) ?>'>
-
-                                <!-- Быстрые действия для галереи -->
-                                <div class='mt-3'>
-                                    <div class='d-flex justify-content-between align-items-center'>
-                                        <small class='text-muted'>Быстрые действия:</small>
-                                        <div class='btn-group btn-group-sm'>
-                                            <button type='button' class='btn btn-outline-primary' onclick='addDemoToGallery("detail1")'>
-                                                📸 Детали
-                                            </button>
-                                            <button type='button' class='btn btn-outline-info' onclick='addDemoToGallery("detail2")'>
-                                                🔍 Крупный план
-                                            </button>
-                                            <button type='button' class='btn btn-outline-success' onclick='addDemoToGallery("usage")'>
-                                                💡 В использовании
-                                            </button>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Кнопки сохранения -->
-            <div class='card shadow mb-4'>
-                <div class='card-body'>
-                    <div class='d-flex justify-content-between align-items-center'>
-                        <div>
-                            <button type='button' class='btn btn-outline-secondary me-2' onclick='saveAsDraft()'>
-                                <i class='fas fa-save me-1'></i>Сохранить черновик
-                            </button>
-                            <button type='button' class='btn btn-outline-info me-2' onclick='previewProduct()'>
-                                <i class='fas fa-eye me-1'></i>Предпросмотр
-                            </button>
-                            <button type='button' class='btn btn-outline-warning' onclick='aiValidateForm()'>
-                                <i class='fas fa-check-double me-1'></i>ИИ проверка
-                            </button>
-                        </div>
-                        <div>
-                            <button type='button' class='btn btn-secondary me-2' onclick='showConfirmResetModal()'>
-                                <i class='fas fa-undo me-1'></i>Сбросить
-                            </button>
-                            <button type='submit' class='btn btn-success' onclick='return validateForm()'>
-                                <i class='fas fa-save me-1'></i><?= $product_data ? 'Обновить товар' : 'Сохранить товар' ?>
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-        </form>
-    </div>
-
-    <!-- Боковая панель (аналогично создателю товаров) -->
-    <div class='col-xl-4 col-lg-5'>
-
-        <!-- ИИ Чат-помощник -->
-        <div class='card shadow mb-4'>
-            <div class='card-header py-3'>
-                <h6 class='m-0 font-weight-bold text-primary'>
-                    <i class='fas fa-robot me-2'></i>🤖 ИИ Чат-Помощник
-                    <div class='float-end'>
-                        <span class='badge bg-success'>Онлайн</span>
-                    </div>
-                </h6>
-            </div>
-            <div class='card-body p-0'>
-                <div class='ai-chat-container' id='aiChatContainer' style='height: 300px; overflow-y: auto; padding: 1rem;'>
-                    <div class='ai-message mb-3'>
-                        <div class='d-flex'>
-                            <div class='ai-avatar bg-primary text-white rounded-circle d-flex align-items-center justify-content-center me-3' style='width: 35px; height: 35px; font-size: 14px;'>
-                                🤖
-                            </div>
-                            <div class='ai-message-content'>
-                                <div class='bg-light rounded p-2'>
-                                    <strong>ИИ Помощник:</strong><br>
-                                    <?php if ($product_data): ?>
-                                    Редактируем товар '<?= htmlspecialchars($product_data['name']) ?>'! 🛠️
-                                    <br><br>Готов помочь с оптимизацией:
-                                    <?php else: ?>
-                                    Создаем новый товар! 🚀
-                                    <br><br>Могу помочь:
-                                    <?php endif; ?>
-                                    <br>• Улучшить описание
-                                    <br>• Оптимизировать изображения
-                                    <br>• Проанализировать SEO
-                                    <br>• Предложить теги
-                                    <br><br>С чего начнем?
-                                </div>
-                                <small class='text-muted'>Только что</small>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                <div class='p-3 border-top bg-light'>
-                    <div class='input-group'>
-                        <input type='text' class='form-control' id='aiChatInput' placeholder='Спросите ИИ о товаре...'>
-                        <button class='btn btn-primary' onclick='sendAIMessage()'>
-                            <i class='fas fa-paper-plane'></i>
-                        </button>
-                    </div>
-
-                    <!-- Быстрые команды -->
-                    <div class='quick-commands mt-2'>
-                        <div class='d-flex flex-wrap gap-1'>
-                            <button class='btn btn-outline-primary btn-sm' onclick='aiQuickCommand("improve")'>
-                                Улучшить всё
-                            </button>
-                            <button class='btn btn-outline-success btn-sm' onclick='aiQuickCommand("seo")'>
-                                SEO анализ
-                            </button>
-                            <button class='btn btn-outline-info btn-sm' onclick='aiQuickCommand("price")'>
-                                Цена
-                            </button>
-                            <button class='btn btn-outline-warning btn-sm' onclick='aiQuickCommand("images")'>
-                                Фото
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            </div>
+    <h4 style='margin-bottom:12px'>Логотип</h4>
+    <form method='post' enctype='multipart/form-data' id='logoForm'>
+      <input type='hidden' name='admin_upload' value='1'>
+      <input type='hidden' name='what' value='logo'>
+      <div class='drop <?=!empty($cfg['logo']) ? 'has-image' : ''?>' id='logoDrop'>
+        <input type='file' name='file' accept='image/*' onchange='handleFileUpload(this, "logoDrop", "logoForm")'>
+        <button type='button' class='drop-remove' onclick='removeImage("logoDrop", "logo")'>✕</button>
+        <div class='drop-content'>
+          <?php if(!empty($cfg['logo'])): ?>
+            <img src='<?=esc($cfg['logo'])?>' class='drop-preview' alt='Логотип'>
+            <div class='drop-text'>Логотип загружен</div>
+            <div class='drop-hint'>Нажмите для замены</div>
+          <?php else: ?>
+            <div class='drop-icon'>🖼️</div>
+            <div class='drop-text'>Загрузить логотип</div>
+            <div class='drop-hint'>PNG, JPG, SVG до 10 МБ</div>
+          <?php endif; ?>
         </div>
+      </div>
+    </form>
 
-        <!-- Характеристики -->
-        <div class='card shadow mb-4'>
-            <div class='card-header py-3'>
-                <h6 class='m-0 font-weight-bold text-primary'>
-                    <i class='fas fa-cogs me-2'></i>🔧 Характеристики
-                </h6>
-            </div>
-            <div class='card-body'>
-                <div class='row'>
-                    <div class='col-6'>
-                        <div class='form-group mb-3'>
-                            <label class='form-label small'>Размер</label>
-                            <input type='text' class='form-control form-control-sm' name='size'
-                                   placeholder='10-15 см' value='<?= htmlspecialchars($product_data['size'] ?? '') ?>'>
-                        </div>
-                    </div>
-                    <div class='col-6'>
-                        <div class='form-group mb-3'>
-                            <label class='form-label small'>Температура</label>
-                            <input type='text' class='form-control form-control-sm' name='temperature'
-                                   placeholder='22-26°C' value='<?= htmlspecialchars($product_data['temperature'] ?? '') ?>'>
-                        </div>
-                    </div>
-                </div>
-                <div class='row'>
-                    <div class='col-6'>
-                        <div class='form-group mb-3'>
-                            <label class='form-label small'>pH уровень</label>
-                            <input type='text' class='form-control form-control-sm' name='ph_level'
-                                   placeholder='6.0-7.5' value='<?= htmlspecialchars($product_data['ph_level'] ?? '') ?>'>
-                        </div>
-                    </div>
-                    <div class='col-6'>
-                        <div class='form-group mb-3'>
-                            <label class='form-label small'>Освещение</label>
-                            <select class='form-select form-select-sm' name='lighting'>
-                                <option value=''>Выберите</option>
-                                <option value='слабое' <?= ($product_data['lighting'] ?? '') == 'слабое' ? 'selected' : '' ?>>Слабое</option>
-                                <option value='среднее' <?= ($product_data['lighting'] ?? '') == 'среднее' ? 'selected' : '' ?>>Среднее</option>
-                                <option value='яркое' <?= ($product_data['lighting'] ?? '') == 'яркое' ? 'selected' : '' ?>>Яркое</option>
-                            </select>
-                        </div>
-                    </div>
-                </div>
-            </div>
+    <h4 style='margin-top:24px;margin-bottom:12px'>Hero изображение</h4>
+    <form method='post' enctype='multipart/form-data' id='heroForm'>
+      <input type='hidden' name='admin_upload' value='1'>
+      <input type='hidden' name='what' value='hero'>
+      <div class='drop <?=($cfg['hero_mode']==='image'&&!empty($cfg['hero_image'])) ? 'has-image' : ''?>' id='heroDrop'>
+        <input type='file' name='file' accept='image/*' onchange='handleFileUpload(this, "heroDrop", "heroForm")'>
+        <button type='button' class='drop-remove' onclick='removeImage("heroDrop", "hero")'>✕</button>
+        <div class='drop-content'>
+          <?php if($cfg['hero_mode']==='image'&&!empty($cfg['hero_image'])): ?>
+            <img src='<?=esc($cfg['hero_image'])?>' class='drop-preview' alt='Hero изображение'>
+            <div class='drop-text'>Hero изображение загружено</div>
+            <div class='drop-hint'>Нажмите для замены</div>
+          <?php else: ?>
+            <div class='drop-icon'>🎨</div>
+            <div class='drop-text'>Загрузить hero изображение</div>
+            <div class='drop-hint'>PNG, JPG до 10 МБ</div>
+          <?php endif; ?>
         </div>
+      </div>
+    </form>
+  </div>
 
-        <!-- Ярлыки товара -->
-        <div class='card shadow mb-4'>
-            <div class='card-header py-3'>
-                <h6 class='m-0 font-weight-bold text-primary'>🏷️ Ярлыки товара</h6>
-            </div>
-            <div class='card-body'>
-                <div class='badges-container'>
-                    <?php
-                    $current_badges = $product_data['badges'] ?? [];
-                    if (!is_array($current_badges)) {
-                        $current_badges = json_decode($current_badges, true) ?: [];
-                    }
-                    ?>
-                    <div class='form-check mb-2'>
-                        <input class='form-check-input' type='checkbox' id='badge_new' value='new' onchange='updateBadges()'
-                               <?= in_array('new', $current_badges) ? 'checked' : '' ?>>
-                        <label class='form-check-label' for='badge_new'>
-                            <span class='badge bg-success'>🆕 Новинка</span>
-                        </label>
-                    </div>
-                    <div class='form-check mb-2'>
-                        <input class='form-check-input' type='checkbox' id='badge_hit' value='hit' onchange='updateBadges()'
-                               <?= in_array('hit', $current_badges) ? 'checked' : '' ?>>
-                        <label class='form-check-label' for='badge_hit'>
-                            <span class='badge bg-danger'>🔥 Хит продаж</span>
-                        </label>
-                    </div>
-                    <div class='form-check mb-2'>
-                        <input class='form-check-input' type='checkbox' id='badge_recommend' value='recommend' onchange='updateBadges()'
-                               <?= in_array('recommend', $current_badges) ? 'checked' : '' ?>>
-                        <label class='form-check-label' for='badge_recommend'>
-                            <span class='badge bg-warning text-dark'>⭐ Рекомендуем</span>
-                        </label>
-                    </div>
-                    <div class='form-check mb-2'>
-                        <input class='form-check-input' type='checkbox' id='badge_discount' value='discount' onchange='updateBadges()'
-                               <?= in_array('discount', $current_badges) ? 'checked' : '' ?>>
-                        <label class='form-check-label' for='badge_discount'>
-                            <span class='badge bg-info'>💸 Скидка</span>
-                        </label>
-                    </div>
-                    <div class='form-check mb-2'>
-                        <input class='form-check-input' type='checkbox' id='badge_premium' value='premium' onchange='updateBadges()'
-                               <?= in_array('premium', $current_badges) ? 'checked' : '' ?>>
-                        <label class='form-check-label' for='badge_premium'>
-                            <span class='badge bg-dark'>💎 Премиум</span>
-                        </label>
-                    </div>
-                    <div class='form-check mb-2'>
-                        <input class='form-check-input' type='checkbox' id='badge_eco' value='eco' onchange='updateBadges()'
-                               <?= in_array('eco', $current_badges) ? 'checked' : '' ?>>
-                        <label class='form-check-label' for='badge_eco'>
-                            <span class='badge bg-success'>🌿 Эко</span>
-                        </label>
-                    </div>
-                </div>
-                <input type='hidden' name='badges' id='selectedBadges' value='<?= htmlspecialchars(json_encode($current_badges)) ?>'>
-            </div>
+  <!-- Цветовая схема -->
+  <div class='card'>
+    <h3 style='margin-bottom:20px'>🎨 Цветовая схема и стили</h3>
+    <form method='post'>
+      <div class='form-row'>
+        <div class='form-group'>
+          <label>Основной цвет бренда</label>
+          <input type='color' name='theme[brand]' value='<?=esc($cfg['theme']['brand'])?>'>
         </div>
-
-        <!-- SEO настройки -->
-        <div class='card shadow mb-4'>
-            <div class='card-header py-3 d-flex justify-content-between align-items-center'>
-                <h6 class='m-0 font-weight-bold text-primary'>🎯 SEO настройки</h6>
-                <div class='seo-score'>
-                    <span class='badge bg-success'>85/100</span>
-                </div>
-            </div>
-            <div class='card-body'>
-                <div class='form-group mb-3'>
-                    <label class='form-label small'>Meta Title</label>
-                    <input type='text' class='form-control form-control-sm' name='meta_title' maxlength='60'
-                           value='<?= htmlspecialchars($product_data['meta_title'] ?? '') ?>'>
-                    <small class='text-muted'>Символов: <span id='metaTitleLength'>0</span>/60</small>
-                </div>
-                <div class='form-group mb-3'>
-                    <label class='form-label small'>Meta Description</label>
-                    <textarea class='form-control form-control-sm' name='meta_description' rows='3' maxlength='160'><?= htmlspecialchars($product_data['meta_description'] ?? '') ?></textarea>
-                    <small class='text-muted'>Символов: <span id='metaDescLength'>0</span>/160</small>
-                </div>
-
-                <div class='d-grid gap-2'>
-                    <button type='button' class='btn btn-sm btn-outline-primary' onclick='generateSEO()'>
-                        <i class='fas fa-search me-1'></i>Автогенерация SEO
-                    </button>
-                    <button type='button' class='btn btn-sm btn-outline-success' onclick='aiOptimizeSEO()'>
-                        <i class='fas fa-robot me-1'></i>ИИ оптимизация SEO
-                    </button>
-                </div>
-            </div>
+        <div class='form-group'>
+          <label>Акцентный цвет</label>
+          <input type='color' name='theme[accent]' value='<?=esc($cfg['theme']['accent'])?>'>
         </div>
+      </div>
 
-        <!-- Живой предпросмотр -->
-        <div class='card shadow mb-4'>
-            <div class='card-header py-3'>
-                <h6 class='m-0 font-weight-bold text-primary'>
-                    <i class='fas fa-eye me-2'></i>👁️ Живой предпросмотр
-                </h6>
-            </div>
-            <div class='card-body'>
-                <div class='product-preview' id='productPreview'>
-                    <div class='preview-badges mb-2' id='previewBadges'></div>
-                    <div class='preview-image mb-2'>
-                        <div class='ratio ratio-1x1 bg-light rounded d-flex align-items-center justify-content-center border'>
-                            <img id='previewImage' src='<?= htmlspecialchars($product_data['main_image'] ?? '') ?>'
-                                 style='width: 100%; height: 100%; object-fit: cover; border-radius: 0.5rem; <?= empty($product_data['main_image']) ? 'display: none;' : '' ?>'>
-                            <i class='fas fa-fish fa-3x text-muted' id='previewPlaceholder' <?= !empty($product_data['main_image']) ? 'style="display: none;"' : '' ?>></i>
-                        </div>
-                    </div>
-                    <h6 class='preview-name fw-bold mb-1' id='previewName'><?= htmlspecialchars($product_data['name'] ?? 'Название товара') ?></h6>
-                    <p class='preview-description text-muted small mb-2' id='previewDescription'>
-                        <?= htmlspecialchars(mb_substr($product_data['short_description'] ?? $product_data['description'] ?? 'Описание появится здесь...', 0, 120)) ?>
-                    </p>
-                    <div class='d-flex justify-content-between align-items-center'>
-                        <div>
-                            <span class='preview-price fw-bold text-success' id='previewPrice'><?= number_format($product_data['price'] ?? 0, 0, ',', ' ') ?> ₽</span>
-                            <small class='preview-old-price text-muted text-decoration-line-through ms-1' id='previewOldPrice'
-                                   <?= empty($product_data['old_price']) || $product_data['old_price'] <= ($product_data['price'] ?? 0) ? 'style="display: none;"' : '' ?>>
-                                <?= number_format($product_data['old_price'] ?? 0, 0, ',', ' ') ?> ₽
-                            </small>
-                        </div>
-                        <small class='text-muted' id='previewCategory'>
-                            <?php
-                            if (!empty($product_data['category_id'])) {
-                                foreach ($categories as $cat) {
-                                    if ($cat['id'] == $product_data['category_id']) {
-                                        echo htmlspecialchars($cat['name']);
-                                        break;
-                                    }
-                                }
-                            } else {
-                                echo 'Категория';
-                            }
-                            ?>
-                        </small>
-                    </div>
-                    <div class='preview-specs mt-2' id='previewSpecs'>
-                        <?php
-                        $specs = [];
-                        if (!empty($product_data['size'])) $specs[] = '📏 ' . htmlspecialchars($product_data['size']);
-                        if (!empty($product_data['temperature'])) $specs[] = '🌡️ ' . htmlspecialchars($product_data['temperature']);
-                        if (!empty($product_data['ph_level'])) $specs[] = '💧 ' . htmlspecialchars($product_data['ph_level']);
-                        if (!empty($specs)):
-                        ?>
-                        <small class='text-muted d-block'><?= implode(' • ', $specs) ?></small>
-                        <?php endif; ?>
-                    </div>
-                </div>
-            </div>
+      <div class='form-row'>
+        <div class='form-group'>
+          <label>Цвет фона</label>
+          <input type='color' name='theme[bg]' value='<?=esc($cfg['theme']['bg'])?>'>
         </div>
+        <div class='form-group'>
+          <label>Цвет текста</label>
+          <input type='color' name='theme[text]' value='<?=esc($cfg['theme']['text'])?>'>
+        </div>
+      </div>
 
-    </div>
+      <div class='form-group'>
+        <label>Цвет приглушенного текста</label>
+        <input type='color' name='theme[muted]' value='<?=esc($cfg['theme']['muted'])?>'>
+      </div>
+
+      <h4 style='margin-top:24px;margin-bottom:12px'>Эффекты и размеры</h4>
+      <div class='form-row'>
+        <div class='form-group'>
+          <label>Прозрачность карточек: <strong><?=esc($cfg['theme']['card_opacity'])?></strong></label>
+          <input type='range' name='theme[card_opacity]' min='0.3' max='1' step='0.05' value='<?=esc($cfg['theme']['card_opacity'])?>' oninput='this.previousElementSibling.querySelector("strong").textContent=this.value'>
+        </div>
+        <div class='form-group'>
+          <label>Размытие стекла: <strong><?=esc($cfg['theme']['blur'])?>px</strong></label>
+          <input type='range' name='theme[blur]' min='0' max='30' value='<?=esc($cfg['theme']['blur'])?>' oninput='this.previousElementSibling.querySelector("strong").textContent=this.value+"px"'>
+        </div>
+      </div>
+
+      <div class='form-row'>
+        <div class='form-group'>
+          <label>Радиус скругления: <strong><?=esc($cfg['theme']['radius'])?>px</strong></label>
+          <input type='range' name='theme[radius]' min='0' max='28' value='<?=esc($cfg['theme']['radius'])?>' oninput='this.previousElementSibling.querySelector("strong").textContent=this.value+"px"'>
+        </div>
+        <div class='form-group'>
+          <label>Сила теней: <strong><?=esc($cfg['theme']['shadow'])?></strong></label>
+          <input type='range' name='theme[shadow]' min='0' max='0.5' step='0.01' value='<?=esc($cfg['theme']['shadow'])?>' oninput='this.previousElementSibling.querySelector("strong").textContent=this.value'>
+        </div>
+      </div>
+
+      <div class='form-group'>
+        <label>Ширина контейнера: <strong><?=esc($cfg['theme']['container'])?>px</strong></label>
+        <input type='range' name='theme[container]' min='900' max='1400' step='50' value='<?=esc($cfg['theme']['container'])?>' oninput='this.previousElementSibling.querySelector("strong").textContent=this.value+"px"'>
+      </div>
+
+      <button class='btn-success' name='admin_save' value='1'>🎨 Применить дизайн</button>
+    </form>
+  </div>
 </div>
 
 <style>
-/* Стили из создателя товаров (все те же стили) */
-.page-header {
-    background: #fff;
-    padding: 1.5rem 0;
-    margin-bottom: 1.5rem;
-    border-bottom: 1px solid #e3e6f0;
+/* Drag&Drop Стили */
+.drop{
+  position:relative;
+  display:grid;
+  place-items:center;
+  min-height:150px;
+  border:2px dashed rgba(255,255,255,.25);
+  border-radius:10px;
+  background:#0f1624;
+  cursor:pointer;
+  transition:all 0.3s;
+  margin-bottom:20px;
 }
-
-.breadcrumb {
-    background: none;
-    padding: 0;
-    margin: 0;
-    font-size: 0.85rem;
+.drop.hover{
+  background:#0c1220;
+  border-color:var(--brand);
 }
-
-.breadcrumb-item + .breadcrumb-item::before {
-    color: #858796;
-    content: '›';
+.drop input[type=file]{
+  position:absolute;
+  inset:0;
+  opacity:0;
+  cursor:pointer;
 }
-
-.card {
-    border: 1px solid #e3e6f0;
-    border-radius: 0.5rem;
-    transition: all 0.3s ease;
+.drop-content{
+  text-align:center;
+  pointer-events:none;
 }
-
-.card:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 4px 15px rgba(0,0,0,0.1) !important;
+.drop-icon{
+  font-size:32px;
+  margin-bottom:8px;
+  opacity:0.7;
 }
-
-.card-header {
-    background-color: #f8f9fc;
-    border-bottom: 1px solid #e3e6f0;
+.drop-text{
+  font-size:14px;
+  font-weight:600;
+  margin-bottom:4px;
 }
-
-.form-control, .form-select {
-    border-color: #d1d3e2;
-    font-size: 0.9rem;
-    transition: all 0.3s ease;
+.drop-hint{
+  font-size:11px;
+  opacity:0.6;
 }
-
-.form-control:focus, .form-select:focus {
-    border-color: #4e73df;
-    box-shadow: 0 0 0 0.2rem rgba(78, 115, 223, 0.25);
+.drop.has-image{
+  border-style:solid;
+  border-color:var(--brand);
 }
-
-.image-upload-area {
-    border: 3px dashed #d1d3e2;
-    border-radius: 12px;
-    padding: 2rem;
-    text-align: center;
-    cursor: pointer;
-    transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
-    background: linear-gradient(135deg, #f8f9fc 0%, #f1f3ff 100%);
-    min-height: 200px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    position: relative;
-    overflow: hidden;
+.drop-preview{
+  max-width:100%;
+  max-height:100px;
+  border-radius:6px;
+  margin-bottom:8px;
 }
-
-.image-upload-area:hover {
-    border-color: #4e73df;
-    background: linear-gradient(135deg, #f0f2ff 0%, #e8ecff 100%);
-    transform: translateY(-5px);
-    box-shadow: 0 10px 25px rgba(78, 115, 223, 0.2);
+.drop-remove{
+  position:absolute;
+  top:8px;
+  right:8px;
+  background:rgba(255,0,0,.8);
+  color:#fff;
+  border:none;
+  border-radius:50%;
+  width:28px;
+  height:28px;
+  cursor:pointer;
+  font-size:14px;
+  display:none;
+  z-index:10;
 }
-
-.image-upload-area.dragover {
-    border-color: #36b9cc;
-    background: linear-gradient(135deg, #e8f4f8 0%, #d4edda 100%);
-    border-style: solid;
-    transform: scale(1.02);
-}
-
-.image-upload-area.has-image {
-    padding: 1rem;
-    min-height: auto;
-}
-
-.image-preview-container {
-    position: relative;
-    display: inline-block;
-    border-radius: 12px;
-    overflow: hidden;
-    box-shadow: 0 4px 15px rgba(0,0,0,0.1);
-    transition: all 0.3s ease;
-}
-
-.image-preview-container:hover {
-    transform: scale(1.02);
-    box-shadow: 0 8px 25px rgba(0,0,0,0.15);
-}
-
-.image-preview-container img {
-    width: 100%;
-    height: auto;
-    display: block;
-    border-radius: 12px;
-    transition: all 0.3s ease;
-}
-
-.image-actions {
-    position: absolute;
-    top: 10px;
-    right: 10px;
-    display: flex;
-    gap: 5px;
-    opacity: 0;
-    transition: all 0.3s ease;
-}
-
-.image-preview-container:hover .image-actions {
-    opacity: 1;
-}
-
-.image-actions .btn {
-    width: 32px;
-    height: 32px;
-    padding: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 12px;
-    border-radius: 50%;
-    backdrop-filter: blur(10px);
-    background: rgba(255,255,255,0.9);
-    border: 1px solid rgba(255,255,255,0.3);
-}
-
-.gallery-preview {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
-    gap: 15px;
-}
-
-.gallery-item {
-    position: relative;
-    border-radius: 12px;
-    overflow: hidden;
-    border: 2px solid #e3e6f0;
-    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-    background: #fff;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.05);
-}
-
-.gallery-item:hover {
-    border-color: #4e73df;
-    transform: translateY(-5px);
-    box-shadow: 0 8px 20px rgba(78, 115, 223, 0.3);
-}
-
-.gallery-item img {
-    width: 100%;
-    height: 120px;
-    object-fit: cover;
-    transition: all 0.3s ease;
-}
-
-.gallery-item:hover img {
-    transform: scale(1.05);
-}
-
-.gallery-overlay {
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background: rgba(0,0,0,0.6);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 5px;
-    opacity: 0;
-    transition: all 0.3s ease;
-}
-
-.gallery-item:hover .gallery-overlay {
-    opacity: 1;
-}
-
-.remove-btn {
-    position: absolute;
-    top: 5px;
-    right: 5px;
-    width: 24px;
-    height: 24px;
-    border-radius: 50%;
-    background: rgba(220, 53, 69, 0.9);
-    color: white;
-    border: none;
-    font-size: 12px;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    opacity: 0;
-    transition: all 0.3s ease;
-    backdrop-filter: blur(10px);
-}
-
-.gallery-item:hover .remove-btn {
-    opacity: 1;
-}
-
-.remove-btn:hover {
-    background: rgba(220, 53, 69, 1);
-    transform: scale(1.1);
-}
-
-.ai-chat-container {
-    background: linear-gradient(135deg, #f8f9fc 0%, #f1f3ff 100%);
-}
-
-.ai-avatar {
-    flex-shrink: 0;
-    background: linear-gradient(135deg, #4e73df, #36b9cc) !important;
-    animation: pulse-avatar 2s infinite;
-}
-
-@keyframes pulse-avatar {
-    0%, 100% { transform: scale(1); }
-    50% { transform: scale(1.05); }
-}
-
-.ai-message-content .bg-light {
-    background: rgba(255,255,255,0.8) !important;
-    backdrop-filter: blur(10px);
-    border: 1px solid rgba(255,255,255,0.3);
-}
-
-.quick-commands .btn {
-    font-size: 0.75rem;
-    padding: 0.25rem 0.5rem;
-}
-
-.btn {
-    font-size: 0.875rem;
-    border-radius: 8px;
-    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-    font-weight: 500;
-}
-
-.btn:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-}
-
-.text-gray-800 { color: #5a5c69 !important; }
-.font-weight-bold { font-weight: 700 !important; }
-.fw-semibold { font-weight: 600 !important; }
-
-/* Адаптивность */
-@media (max-width: 768px) {
-    .page-header {
-        padding: 1rem 0;
-        text-align: center;
-    }
-
-    .page-header .d-flex {
-        flex-direction: column;
-        gap: 1rem;
-    }
-
-    .card-body {
-        padding: 1rem;
-    }
-
-    .image-upload-area {
-        min-height: 150px;
-        padding: 1.5rem;
-    }
-
-    .gallery-preview {
-        grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
-        gap: 10px;
-    }
-
-    .ai-chat-container {
-        height: 250px !important;
-    }
+.drop.has-image .drop-remove{
+  display:block;
 }
 </style>
 
 <script>
-// Глобальные переменные
-let galleryImages = <?= json_encode($product_data['gallery'] ?? []) ?>;
-let currentProductId = '<?= $product_id ?? '' ?>';
+function handleFileUpload(input, dropId, formId) {
+  if (input.files && input.files[0]) {
+    const file = input.files[0];
+    const drop = document.getElementById(dropId);
+    const form = document.getElementById(formId);
 
-// Преобразуем галерею в правильный формат
-if (Array.isArray(galleryImages)) {
-    galleryImages = galleryImages.map((url, index) => ({
-        url: url,
-        name: `gallery_${index + 1}.jpg`,
-        size: 245760,
-        alt: 'Изображение товара ' + (index + 1)
-    }));
+    if (file.size > 10 * 1024 * 1024) {
+      alert('Файл слишком большой! Максимум 10 МБ.');
+      input.value = '';
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = function(e) {
+      const content = drop.querySelector('.drop-content');
+      content.innerHTML = `
+        <img src='${e.target.result}' class='drop-preview' alt='Превью'>
+        <div class='drop-text'>Файл готов к загрузке</div>
+        <div class='drop-hint'>Нажмите для замены</div>
+      `;
+      drop.classList.add('has-image');
+    };
+    reader.readAsDataURL(file);
+
+    setTimeout(() => {
+      form.submit();
+    }, 500);
+  }
 }
 
-// Демо изображения высокого качества
-const demoImages = {
-    plant: 'https://images.unsplash.com/photo-1416879595882-3373a0480b5b?w=400&h=400&fit=crop',
-    fish: 'https://images.unsplash.com/photo-1544551763-46a013bb70d5?w=400&h=400&fit=crop',
-    equipment: 'https://images.unsplash.com/photo-1559827260-dc66d52bef19?w=400&h=400&fit=crop',
-    decoration: 'https://images.unsplash.com/photo-1583212292454-1fe6229603b7?w=400&h=400&fit=crop',
-    detail1: 'https://images.unsplash.com/photo-1535591273668-578e31182c4f?w=300&h=300&fit=crop',
-    detail2: 'https://images.unsplash.com/photo-1558618047-3c8c76ca7d13?w=300&h=300&fit=crop',
-    usage: 'https://images.unsplash.com/photo-1524704654690-b56c05c78a00?w=300&h=300&fit=crop'
-};
+function removeImage(dropId, type) {
+  if (confirm('Удалить изображение?')) {
+    const drop = document.getElementById(dropId);
 
-// Инициализация при загрузке
-document.addEventListener('DOMContentLoaded', function() {
-    console.log('🚀 Инициализация ИИ редактора товаров...');
+    if (type === 'logo') {
+      drop.querySelector('.drop-content').innerHTML = `
+        <div class='drop-icon'>🖼️</div>
+        <div class='drop-text'>Загрузить логотип</div>
+        <div class='drop-hint'>PNG, JPG, SVG до 10 МБ</div>
+      `;
+    } else {
+      drop.querySelector('.drop-content').innerHTML = `
+        <div class='drop-icon'>🎨</div>
+        <div class='drop-text'>Загрузить hero изображение</div>
+        <div class='drop-hint'>PNG, JPG до 10 МБ</div>
+      `;
+    }
 
-    initAdvancedImageUploads();
-    initSmartFormTracking();
-    initAIPersonality();
-    updateLivePreview();
-    updateBadges();
-    updateGalleryCount();
+    drop.classList.remove('has-image');
 
-    console.log(`🔧 Редактор инициализирован для товара ID: ${currentProductId || 'новый'}`);
+    const form = new FormData();
+    form.append('admin_save', '1');
+    form.append(type === 'logo' ? 'logo' : 'hero_image', '');
+    form.append(type === 'logo' ? 'logo' : 'hero_mode', type === 'logo' ? '' : 'svg');
+
+    fetch(location.href, {
+      method: 'POST',
+      body: form
+    }).then(() => {
+      location.reload();
+    });
+  }
+}
+
+document.querySelectorAll('.drop').forEach(drop => {
+  ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+    drop.addEventListener(eventName, preventDefaults, false);
+  });
+
+  ['dragenter', 'dragover'].forEach(eventName => {
+    drop.addEventListener(eventName, () => drop.classList.add('hover'), false);
+  });
+
+  ['dragleave', 'drop'].forEach(eventName => {
+    drop.addEventListener(eventName, () => drop.classList.remove('hover'), false);
+  });
+
+  drop.addEventListener('drop', handleDrop, false);
 });
 
-// Весь JavaScript код такой же как в создателе товаров, только с небольшими изменениями...
-// (Копируем все функции из add_product.php с минимальными изменениями)
-
-// Валидация формы перед отправкой
-function validateForm() {
-    const name = document.getElementById('productName').value.trim();
-    const category = document.getElementById('productCategory').value;
-    const price = document.getElementById('productPrice').value;
-    const description = document.getElementById('productDescription').value.trim();
-
-    if (!name) {
-        showNotification('❌ Укажите название товара', 'error');
-        document.getElementById('productName').focus();
-        return false;
-    }
-
-    if (!category) {
-        showNotification('❌ Выберите категорию товара', 'error');
-        document.getElementById('productCategory').focus();
-        return false;
-    }
-
-    if (!price || parseFloat(price) <= 0) {
-        showNotification('❌ Укажите корректную цену товара', 'error');
-        document.getElementById('productPrice').focus();
-        return false;
-    }
-
-    if (!description) {
-        showNotification('❌ Добавьте описание товара', 'error');
-        document.getElementById('productDescription').focus();
-        return false;
-    }
-
-    showNotification('💾 Обновляю товар...', 'info');
-    return true;
+function preventDefaults(e) {
+  e.preventDefault();
+  e.stopPropagation();
 }
 
-// Показать модальное окно подтверждения сброса
-function showConfirmResetModal() {
-    const modal = new bootstrap.Modal(document.getElementById('confirmResetModal'));
-    modal.show();
+function handleDrop(e) {
+  const dt = e.dataTransfer;
+  const files = dt.files;
+  const input = e.target.querySelector('input[type="file"]');
+
+  if (files.length > 0) {
+    input.files = files;
+    const changeEvent = new Event('change', { bubbles: true });
+    input.dispatchEvent(changeEvent);
+  }
 }
-
-// Сброс формы с подтверждением
-function confirmReset() {
-    const form = document.getElementById('productForm');
-
-    // Сбрасываем все поля
-    form.reset();
-
-    // Очищаем дополнительные данные
-    galleryImages = [];
-    updateGalleryPreview();
-    updateGalleryInput();
-    updateGalleryCount();
-    document.getElementById('selectedBadges').value = '[]';
-    document.getElementById('mainImagePath').value = '';
-    removeMainImage();
-    updateLivePreview();
-
-    // Очищаем чат
-    const container = document.getElementById('aiChatContainer');
-    container.innerHTML = `
-        <div class='ai-message mb-3'>
-            <div class='d-flex'>
-                <div class='ai-avatar bg-primary text-white rounded-circle d-flex align-items-center justify-content-center me-3' style='width: 35px; height: 35px; font-size: 14px;'>
-                    🤖
-                </div>
-                <div class='ai-message-content'>
-                    <div class='bg-light rounded p-2'>
-                        <strong>ИИ Помощник:</strong><br>
-                        Форма очищена! 🧹 Готов помочь создать новый потрясающий товар.
-                        <br><br>Начнем с названия товара? 🚀
-                    </div>
-                    <small class='text-muted'>Только что</small>
-                </div>
-            </div>
-        </div>
-    `;
-
-    showNotification('🧹 Форма очищена! Можете начинать заново', 'info');
-}
-
-// Остальные функции такие же как в add_product.php...
-// (Для экономии места, включаем основные функции)
-
-// Функции работы с изображениями
-function initAdvancedImageUploads() {
-    const mainUpload = document.getElementById('mainImageUpload');
-    const galleryUpload = document.getElementById('galleryUpload');
-
-    if (mainUpload) setupDragAndDrop(mainUpload, 'main');
-    if (galleryUpload) setupDragAndDrop(galleryUpload, 'gallery');
-}
-
-function setupDragAndDrop(element, type) {
-    element.addEventListener('click', (e) => {
-        if (!e.target.closest('.btn-danger') && !e.target.closest('.image-actions') && !e.target.closest('.remove-btn')) {
-            selectFiles(type);
-        }
-    });
-
-    ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
-        element.addEventListener(eventName, (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-        }, false);
-    });
-
-    element.addEventListener('dragover', () => element.classList.add('dragover'));
-    element.addEventListener('dragleave', () => element.classList.remove('dragover'));
-    element.addEventListener('drop', (e) => {
-        element.classList.remove('dragover');
-        const files = Array.from(e.dataTransfer.files);
-        if (files.length > 0) processFiles(files, type);
-    });
-}
-
-function selectFiles(type) {
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = 'image/*';
-    input.multiple = type === 'gallery';
-
-    input.onchange = (e) => {
-        const files = Array.from(e.target.files);
-        if (files.length > 0) processFiles(files, type);
-    };
-
-    input.click();
-}
-
-async function processFiles(files, type) {
-    const validFiles = files.filter(file => {
-        if (!file.type.startsWith('image/')) {
-            showNotification(`❌ Файл ${file.name} не является изображением`, 'error');
-            return false;
-        }
-        if (file.size > 10 * 1024 * 1024) {
-            showNotification(`❌ Файл ${file.name} слишком большой (максимум 10MB)`, 'error');
-            return false;
-        }
-        return true;
-    });
-
-    if (validFiles.length === 0) return;
-
-    for (let file of validFiles) {
-        const reader = new FileReader();
-        reader.onload = function(e) {
-            const imageData = {
-                url: e.target.result,
-                name: file.name,
-                size: file.size
-            };
-
-            if (type === 'main') {
-                setMainImage(imageData);
-            } else {
-                addToGallery(imageData);
-            }
-            updateLivePreview();
-        };
-        reader.readAsDataURL(file);
-    }
-
-    addAIMessage(`📸 Загружено ${validFiles.length} изображений! Отличная работа.`);
-}
-
-function setDemoImage(type) {
-    const imageUrl = demoImages[type];
-    if (!imageUrl) return;
-
-    const imageData = {
-        url: imageUrl,
-        name: `demo_${type}.jpg`,
-        size: 245760
-    };
-
-    setMainImage(imageData);
-    updateLivePreview();
-
-    const typeNames = {
-        plant: '🌿 растения',
-        fish: '🐠 рыбки',
-        equipment: '⚙️ оборудования',
-        decoration: '🪨 декора'
-    };
-
-    showNotification(`Установлено демо изображение ${typeNames[type]}!`, 'success');
-    addAIMessage(`🖼️ Установил красивое демо изображение ${typeNames[type]}!`);
-}
-
-function setMainImage(imageData) {
-    const mainUpload = document.getElementById('mainImageUpload');
-    const mainPath = document.getElementById('mainImagePath');
-
-    mainUpload.innerHTML = `
-        <div class='image-preview-container'>
-            <img src='${imageData.url}' alt='Основное изображение' class='img-fluid'>
-            <div class='image-actions'>
-                <button type='button' class='btn btn-primary' onclick='cropImage("main")' title='Обрезать'>
-                    <i class='fas fa-crop'></i>
-                </button>
-                <button type='button' class='btn btn-warning' onclick='aiEnhanceSpecificImage("main")' title='ИИ улучшение'>
-                    <i class='fas fa-sparkles'></i>
-                </button>
-                <button type='button' class='btn btn-danger' onclick='removeMainImage()' title='Удалить'>
-                    <i class='fas fa-times'></i>
-                </button>
-            </div>
-        </div>
-    `;
-
-    mainUpload.classList.add('has-image');
-    mainPath.value = imageData.url;
-}
-
-function removeMainImage() {
-    const mainUpload = document.getElementById('mainImageUpload');
-    const mainPath = document.getElementById('mainImagePath');
-
-    mainUpload.innerHTML = `
-        <div class='upload-placeholder'>
-            <i class='fas fa-cloud-upload-alt fa-3x text-primary mb-3'></i>
-            <h5>Перетащите изображение сюда</h5>
-            <p class='text-muted mb-3'>или нажмите для выбора файла</p>
-            <button type='button' class='btn btn-primary'>
-                <i class='fas fa-folder-open me-1'></i>Выбрать файл
-            </button>
-            <p class='small text-muted mt-2'>
-                JPG, PNG, GIF, WebP • Максимум 10MB<br>
-                Рекомендуемый размер: 800x600px
-            </p>
-        </div>
-    `;
-
-    mainUpload.classList.remove('has-image');
-    mainPath.value = '';
-    updateLivePreview();
-}
-
-function addDemoToGallery(type) {
-    const imageUrl = demoImages[type];
-    if (!imageUrl) return;
-
-    const imageData = {
-        url: imageUrl,
-        name: `gallery_${type}.jpg`,
-        size: 198432
-    };
-
-    addToGallery(imageData);
-    updateLivePreview();
-
-    const typeNames = {
-        detail1: '📸 деталей',
-        detail2: '🔍 крупного плана',
-        usage: '💡 использования'
-    };
-
-    showNotification(`Добавлено фото ${typeNames[type]} в галерею!`, 'success');
-}
-
-function addToGallery(imageData) {
-    galleryImages.push(imageData);
-    updateGalleryPreview();
-    updateGalleryInput();
-    updateGalleryCount();
-}
-
-function updateGalleryPreview() {
-    const preview = document.getElementById('galleryPreview');
-
-    if (galleryImages.length === 0) {
-        preview.innerHTML = '<p class="text-muted text-center py-4">Галерея пуста. Добавьте изображения!</p>';
-        return;
-    }
-
-    preview.innerHTML = galleryImages.map((imageData, index) => `
-        <div class='gallery-item' style='animation-delay: ${index * 0.1}s'>
-            <img src='${imageData.url || imageData}' alt='${imageData.alt || 'Галерея ' + (index + 1)}' title='${imageData.name || 'gallery_' + (index + 1)}'>
-            <div class='gallery-overlay'>
-                <button type='button' class='btn btn-sm btn-primary' onclick='editImage(${index})' title='Редактировать'>
-                    <i class='fas fa-edit'></i>
-                </button>
-                <button type='button' class='btn btn-sm btn-warning' onclick='aiEnhanceSpecificImage(${index})' title='ИИ улучшение'>
-                    <i class='fas fa-sparkles'></i>
-                </button>
-            </div>
-            <button type='button' class='remove-btn' onclick='removeFromGallery(${index})' title='Удалить'>
-                <i class='fas fa-times'></i>
-            </button>
-        </div>
-    `).join('');
-}
-
-function removeFromGallery(index) {
-    const removedImage = galleryImages.splice(index, 1)[0];
-    updateGalleryPreview();
-    updateGalleryInput();
-    updateGalleryCount();
-    updateLivePreview();
-
-    showNotification(`🗑️ Изображение удалено из галереи`, 'info');
-}
-
-function updateGalleryInput() {
-    const urls = galleryImages.map(img => img.url || img);
-    document.getElementById('galleryPaths').value = JSON.stringify(urls);
-}
-
-function updateGalleryCount() {
-    const countEl = document.getElementById('galleryCount');
-    if (countEl) {
-        countEl.textContent = galleryImages.length;
-    }
-}
-
-// ИИ система
-function initAIPersonality() {
-    const input = document.getElementById('aiChatInput');
-    if (input) {
-        input.addEventListener('keypress', function(e) {
-            if (e.key === 'Enter') sendAIMessage();
-        });
-    }
-}
-
-function sendAIMessage() {
-    const input = document.getElementById('aiChatInput');
-    const message = input.value.trim();
-
-    if (!message) return;
-
-    addUserMessage(message);
-    input.value = '';
-
-    addAIMessage('🤔 Анализирую...', true);
-
-    setTimeout(() => {
-        removeTemporaryMessages();
-        processAIRequest(message);
-    }, 1500);
-}
-
-function addUserMessage(message) {
-    const container = document.getElementById('aiChatContainer');
-    const messageDiv = document.createElement('div');
-    messageDiv.className = 'user-message mb-3';
-
-    messageDiv.innerHTML = `
-        <div class='d-flex justify-content-end'>
-            <div class='user-message-content'>
-                <div class='bg-primary text-white rounded p-2' style='max-width: 250px;'>
-                    ${escapeHtml(message)}
-                </div>
-                <small class='text-muted float-end'>Только что</small>
-            </div>
-            <div class='user-avatar bg-secondary text-white rounded-circle d-flex align-items-center justify-content-center ms-3' style='width: 35px; height: 35px; font-size: 14px;'>
-                👤
-            </div>
-        </div>
-    `;
-
-    container.appendChild(messageDiv);
-    container.scrollTop = container.scrollHeight;
-}
-
-function addAIMessage(message, isTemporary = false) {
-    const container = document.getElementById('aiChatContainer');
-    const messageDiv = document.createElement('div');
-    messageDiv.className = `ai-message mb-3 ${isTemporary ? 'temporary' : ''}`;
-
-    messageDiv.innerHTML = `
-        <div class='d-flex'>
-            <div class='ai-avatar bg-primary text-white rounded-circle d-flex align-items-center justify-content-center me-3' style='width: 35px; height: 35px; font-size: 14px;'>
-                🤖
-            </div>
-            <div class='ai-message-content'>
-                <div class='bg-light rounded p-2' style='max-width: 280px;'>
-                    <strong>ИИ Помощник:</strong><br>
-                    ${message.replace(/\\n/g, '<br>')}
-                </div>
-                <small class='text-muted'>Только что</small>
-            </div>
-        </div>
-    `;
-
-    container.appendChild(messageDiv);
-    container.scrollTop = container.scrollHeight;
-}
-
-function removeTemporaryMessages() {
-    const tempMessages = document.querySelectorAll('.temporary');
-    tempMessages.forEach(msg => msg.remove());
-}
-
-function processAIRequest(message) {
-    const lowerMessage = message.toLowerCase();
-    let response = '';
-
-    if (lowerMessage.includes('цена') || lowerMessage.includes('стоимость')) {
-        response = 'Для определения оптимальной цены рекомендую изучить конкурентов. Могу предложить цену на основе категории!';
-    } else if (lowerMessage.includes('описание')) {
-        response = 'Отличное описание должно включать назначение, преимущества и характеристики. Хотите, чтобы я сгенерировал описание?';
-    } else if (lowerMessage.includes('фото') || lowerMessage.includes('изображение')) {
-        response = 'Качественные фотографии критически важны! Можете использовать готовые демо изображения выше.';
-    } else {
-        const responses = [
-            'Отличная идея! Давайте улучшим этот товар. Что именно вас интересует?',
-            'Понял вас! Могу помочь с оптимизацией всех полей. С чего начнем?',
-            'Хороший подход! Не забудьте про качественные фотографии - они повышают продажи на 40%.'
-        ];
-        response = responses[Math.floor(Math.random() * responses.length)];
-    }
-
-    addAIMessage(response);
-}
-
-function aiQuickCommand(command) {
-    switch(command) {
-        case 'improve':
-            addUserMessage('Улучши все поля товара');
-            setTimeout(() => {
-                addAIMessage('🚀 Запускаю полную оптимизацию товара!', true);
-                setTimeout(() => {
-                    removeTemporaryMessages();
-                    aiGenerateAll();
-                }, 2000);
-            }, 500);
-            break;
-
-        case 'seo':
-            addUserMessage('Проведи SEO анализ');
-            setTimeout(() => processAIRequest('seo анализ'), 1000);
-            break;
-
-        case 'price':
-            addUserMessage('Проанализируй цену товара');
-            setTimeout(() => processAIRequest('анализ цены'), 1000);
-            break;
-
-        case 'images':
-            addUserMessage('Как улучшить фотографии?');
-            setTimeout(() => processAIRequest('анализ изображений'), 1000);
-            break;
-    }
-}
-
-function initSmartFormTracking() {
-    const form = document.getElementById('productForm');
-    const inputs = form.querySelectorAll('input, select, textarea');
-
-    inputs.forEach(input => {
-        input.addEventListener('input', debounce(updateLivePreview, 300));
-        input.addEventListener('change', updateLivePreview);
-    });
-
-    setupSpecialFieldHandlers();
-}
-
-function setupSpecialFieldHandlers() {
-    const nameField = document.getElementById('productName');
-    if (nameField) {
-        nameField.addEventListener('input', function() {
-            const length = this.value.length;
-            const lengthEl = document.getElementById('nameLength');
-            const seoEl = document.getElementById('nameSeoScore');
-
-            if (lengthEl) lengthEl.textContent = length;
-
-            if (seoEl) {
-                if (length < 10) {
-                    seoEl.innerHTML = '<span class="text-warning">📈 Слишком короткое для SEO</span>';
-                } else if (length <= 30) {
-                    seoEl.innerHTML = '<span class="text-success">✅ Хорошо для SEO</span>';
-                } else if (length <= 60) {
-                    seoEl.innerHTML = '<span class="text-success">🎯 Отлично для SEO</span>';
-                } else {
-                    seoEl.innerHTML = '<span class="text-danger">⚠️ Слишком длинное</span>';
-                }
-            }
-        });
-        nameField.dispatchEvent(new Event('input'));
-    }
-
-    const descField = document.getElementById('productDescription');
-    if (descField) {
-        descField.addEventListener('input', function() {
-            const text = this.value;
-            const length = text.length;
-            const words = text.split(' ').filter(word => word.length > 0).length;
-
-            const lengthEl = document.getElementById('descLength');
-            const readabilityEl = document.getElementById('readabilityScore');
-            const seoEl = document.getElementById('seoAnalysis');
-
-            if (lengthEl) lengthEl.textContent = length;
-
-            if (readabilityEl && seoEl) {
-                if (words < 30) {
-                    readabilityEl.textContent = 'Коротко';
-                    readabilityEl.className = 'fw-bold text-warning';
-                    seoEl.innerHTML = '<span class="text-danger">Нужно больше</span>';
-                } else if (words < 100) {
-                    readabilityEl.textContent = 'Хорошо';
-                    readabilityEl.className = 'fw-bold text-success';
-                    seoEl.innerHTML = '<span class="text-success">Хорошо</span>';
-                } else if (words < 200) {
-                    readabilityEl.textContent = 'Отлично';
-                    readabilityEl.className = 'fw-bold text-success';
-                    seoEl.innerHTML = '<span class="text-success">Отлично</span>';
-                } else {
-                    readabilityEl.textContent = 'Очень подробно';
-                    readabilityEl.className = 'fw-bold text-info';
-                    seoEl.innerHTML = '<span class="text-info">Очень подробно</span>';
-                }
-            }
-        });
-        descField.dispatchEvent(new Event('input'));
-    }
-
-    const shortDescField = document.getElementById('productShortDescription');
-    if (shortDescField) {
-        shortDescField.addEventListener('input', function() {
-            const lengthEl = document.getElementById('shortDescLength');
-            if (lengthEl) lengthEl.textContent = this.value.length;
-        });
-        shortDescField.dispatchEvent(new Event('input'));
-    }
-
-    ['productPrice', 'productOldPrice'].forEach(id => {
-        const field = document.getElementById(id);
-        if (field) field.addEventListener('input', calculateDiscount);
-    });
-
-    const metaTitleField = document.querySelector('[name="meta_title"]');
-    if (metaTitleField) {
-        metaTitleField.addEventListener('input', function() {
-            const lengthEl = document.getElementById('metaTitleLength');
-            if (lengthEl) lengthEl.textContent = this.value.length;
-        });
-        metaTitleField.dispatchEvent(new Event('input'));
-    }
-
-    const metaDescField = document.querySelector('[name="meta_description"]');
-    if (metaDescField) {
-        metaDescField.addEventListener('input', function() {
-            const lengthEl = document.getElementById('metaDescLength');
-            if (lengthEl) lengthEl.textContent = this.value.length;
-        });
-        metaDescField.dispatchEvent(new Event('input'));
-    }
-}
-
-function updateLivePreview() {
-    const name = document.getElementById('productName').value || 'Название товара';
-    const price = document.getElementById('productPrice').value || '0';
-    const oldPrice = document.getElementById('productOldPrice').value || '';
-    const description = document.getElementById('productDescription').value || 'Описание появится здесь...';
-    const shortDescription = document.getElementById('productShortDescription').value || description;
-    const categorySelect = document.getElementById('productCategory');
-    const categoryText = categorySelect.selectedOptions[0]?.text || 'Категория';
-
-    const nameEl = document.getElementById('previewName');
-    const priceEl = document.getElementById('previewPrice');
-    const oldPriceEl = document.getElementById('previewOldPrice');
-    const descEl = document.getElementById('previewDescription');
-    const categoryEl = document.getElementById('previewCategory');
-
-    if (nameEl) nameEl.textContent = name;
-    if (priceEl) priceEl.textContent = formatPrice(price);
-    if (categoryEl) categoryEl.textContent = categoryText;
-
-    if (descEl) {
-        const previewText = shortDescription || description;
-        descEl.textContent = previewText.length > 120 ?
-            previewText.substring(0, 120) + '...' : previewText;
-    }
-
-    if (oldPriceEl) {
-        if (oldPrice && parseFloat(oldPrice) > parseFloat(price)) {
-            oldPriceEl.textContent = formatPrice(oldPrice);
-            oldPriceEl.style.display = 'inline';
-        } else {
-            oldPriceEl.style.display = 'none';
-        }
-    }
-
-    const mainImage = document.getElementById('mainImagePath').value;
-    const previewImg = document.getElementById('previewImage');
-    const previewPlaceholder = document.getElementById('previewPlaceholder');
-
-    if (previewImg && previewPlaceholder) {
-        if (mainImage) {
-            previewImg.src = mainImage;
-            previewImg.style.display = 'block';
-            previewPlaceholder.style.display = 'none';
-        } else {
-            previewImg.style.display = 'none';
-            previewPlaceholder.style.display = 'block';
-        }
-    }
-
-    updatePreviewBadges();
-    updatePreviewSpecs();
-}
-
-function updatePreviewBadges() {
-    const badgesEl = document.getElementById('previewBadges');
-    if (!badgesEl) return;
-
-    const selectedBadges = JSON.parse(document.getElementById('selectedBadges').value || '[]');
-
-    const badgeColors = {
-        new: 'success', hit: 'danger', recommend: 'warning',
-        discount: 'info', premium: 'dark', eco: 'success'
-    };
-
-    const badgeTexts = {
-        new: '🆕 Новинка', hit: '🔥 Хит', recommend: '⭐ Рекомендуем',
-        discount: '💸 Скидка', premium: '💎 Премиум', eco: '🌿 Эко'
-    };
-
-    const badgesHtml = selectedBadges.map(badge => {
-        const color = badgeColors[badge] || 'secondary';
-        const text = badgeTexts[badge] || badge;
-        return `<span class='badge bg-${color} me-1 mb-1'>${text}</span>`;
-    }).join('');
-
-    badgesEl.innerHTML = badgesHtml;
-}
-
-function updatePreviewSpecs() {
-    const specsEl = document.getElementById('previewSpecs');
-    if (!specsEl) return;
-
-    const specs = [];
-
-    const specFields = [
-        { field: 'size', icon: '📏' },
-        { field: 'temperature', icon: '🌡️' },
-        { field: 'ph_level', icon: '💧' },
-        { field: 'lighting', icon: '💡' }
-    ];
-
-    specFields.forEach(({ field, icon }) => {
-        const value = document.querySelector(`[name='${field}']`)?.value;
-        if (value) {
-            specs.push(`${icon} ${value}`);
-        }
-    });
-
-    if (specs.length > 0) {
-        specsEl.innerHTML = `<small class='text-muted d-block mt-2'>${specs.join(' • ')}</small>`;
-    } else {
-        specsEl.innerHTML = '';
-    }
-}
-
-function calculateDiscount() {
-    const price = parseFloat(document.getElementById('productPrice').value) || 0;
-    const oldPrice = parseFloat(document.getElementById('productOldPrice').value) || 0;
-    const infoEl = document.getElementById('discountInfo');
-
-    if (!infoEl) return;
-
-    if (price > 0 && oldPrice > price) {
-        const discount = Math.round(((oldPrice - price) / oldPrice) * 100);
-        const savings = oldPrice - price;
-
-        infoEl.innerHTML = `<small class='text-success'>✨ Скидка: ${discount}% (экономия ${formatPrice(savings, false)})</small>`;
-
-        const discountBadge = document.getElementById('badge_discount');
-        if (discountBadge && !discountBadge.checked) {
-            discountBadge.checked = true;
-            updateBadges();
-        }
-    } else if (oldPrice > 0 && oldPrice <= price) {
-        infoEl.innerHTML = '<small class="text-warning">⚠️ Старая цена должна быть больше текущей</small>';
-    } else {
-        infoEl.innerHTML = '<small class="text-muted">Укажите старую цену для отображения скидки</small>';
-    }
-
-    updateLivePreview();
-}
-
-function updateBadges() {
-    const badges = [];
-    const checkboxes = document.querySelectorAll('.badges-container input[type="checkbox"]:checked');
-
-    checkboxes.forEach(checkbox => {
-        badges.push(checkbox.value);
-    });
-
-    document.getElementById('selectedBadges').value = JSON.stringify(badges);
-    updateLivePreview();
-}
-
-function formatPrice(price, withSymbol = true) {
-    const numPrice = parseFloat(price) || 0;
-
-    if (withSymbol) {
-        return new Intl.NumberFormat('ru-RU', {
-            style: 'currency',
-            currency: 'RUB',
-            minimumFractionDigits: 0
-        }).format(numPrice);
-    } else {
-        return new Intl.NumberFormat('ru-RU', {
-            minimumFractionDigits: 0
-        }).format(numPrice) + ' ₽';
-    }
-}
-
-function debounce(func, wait) {
-    let timeout;
-    return function executedFunction(...args) {
-        const later = () => {
-            clearTimeout(timeout);
-            func(...args);
-        };
-        clearTimeout(timeout);
-        timeout = setTimeout(later, wait);
-    };
-}
-
-function escapeHtml(text) {
-    const div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
-}
-
-function showNotification(message, type = 'success', duration = 5000) {
-    const alertClass = {
-        'success': 'alert-success',
-        'error': 'alert-danger',
-        'warning': 'alert-warning',
-        'info': 'alert-info'
-    }[type] || 'alert-info';
-
-    const icon = {
-        'success': 'check-circle',
-        'error': 'exclamation-triangle',
-        'warning': 'exclamation-circle',
-        'info': 'info-circle'
-    }[type] || 'info-circle';
-
-    const notification = document.createElement('div');
-    notification.className = `alert ${alertClass} alert-dismissible fade show notification`;
-    notification.style.cssText = 'position: fixed; top: 20px; right: 20px; z-index: 9999; min-width: 350px; border-radius: 12px;';
-    notification.innerHTML = `
-        <div class='d-flex align-items-center'>
-            <i class='fas fa-${icon} me-2'></i>
-            <span>${message}</span>
-        </div>
-        <button type='button' class='btn-close' onclick='this.parentElement.remove()'></button>
-    `;
-
-    document.body.appendChild(notification);
-
-    setTimeout(() => {
-        if (notification.parentNode) {
-            notification.classList.add('fade');
-            setTimeout(() => notification.remove(), 300);
-        }
-    }, duration);
-
-    return notification;
-}
-
-function generateSKU() {
-    const newSKU = 'PLT_' + Math.random().toString(36).substr(2, 6).toUpperCase();
-    document.getElementById('productSKU').value = newSKU;
-    showNotification('🔄 SKU сгенерирован!', 'success');
-}
-
-function previewProduct() {
-    const productData = {
-        name: document.getElementById('productName').value,
-        price: document.getElementById('productPrice').value,
-        old_price: document.getElementById('productOldPrice').value,
-        description: document.getElementById('productDescription').value,
-        main_image: document.getElementById('mainImagePath').value,
-        gallery: galleryImages.map(img => img.url || img),
-        badges: JSON.parse(document.getElementById('selectedBadges').value || '[]')
-    };
-
-    const modal = document.createElement('div');
-    modal.className = 'modal fade';
-    modal.innerHTML = `
-        <div class='modal-dialog modal-lg'>
-            <div class='modal-content'>
-                <div class='modal-header'>
-                    <h5 class='modal-title'>👁️ Предпросмотр товара</h5>
-                    <button type='button' class='btn-close' data-bs-dismiss='modal'></button>
-                </div>
-                <div class='modal-body'>
-                    <div class='row'>
-                        <div class='col-md-6'>
-                            <img src='${productData.main_image || 'https://via.placeholder.com/400x400?text=Нет+фото'}'
-                                 class='img-fluid rounded' alt='Товар'>
-                            <div class='gallery-preview mt-3'>
-                                ${productData.gallery.map(img => `
-                                    <img src='${img}' class='img-thumbnail me-2' style='width: 80px; height: 80px; object-fit: cover;'>
-                                `).join('')}
-                            </div>
-                        </div>
-                        <div class='col-md-6'>
-                            <div class='badges mb-2'>
-                                ${productData.badges.map(badge => {
-                                    const badgeColors = {new: 'success', hit: 'danger', recommend: 'warning', discount: 'info', premium: 'dark', eco: 'success'};
-                                    const badgeTexts = {new: '🆕 Новинка', hit: '🔥 Хит', recommend: '⭐ Рекомендуем', discount: '💸 Скидка', premium: '💎 Премиум', eco: '🌿 Эко'};
-                                    return `<span class='badge bg-${badgeColors[badge]} me-1'>${badgeTexts[badge]}</span>`;
-                                }).join('')}
-                            </div>
-                            <h4>${productData.name || 'Название товара'}</h4>
-                            <div class='price mb-3'>
-                                <span class='h4 text-success'>${formatPrice(productData.price)}</span>
-                                ${productData.old_price && parseFloat(productData.old_price) > parseFloat(productData.price) ?
-                                    `<span class='text-muted text-decoration-line-through ms-2'>${formatPrice(productData.old_price)}</span>` : ''}
-                            </div>
-                            <div class='description'>
-                                <p>${productData.description.replace(/\\n/g, '<br>') || 'Описание не указано'}</p>
-                            </div>
-                            <button class='btn btn-success btn-lg w-100'>
-                                <i class='fas fa-shopping-cart me-2'></i>Купить
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-    `;
-
-    document.body.appendChild(modal);
-    const bsModal = new bootstrap.Modal(modal);
-    bsModal.show();
-
-    modal.addEventListener('hidden.bs.modal', () => {
-        document.body.removeChild(modal);
-    });
-
-    showNotification('👁️ Открыт предпросмотр товара', 'info');
-}
-
-// ИИ функции генерации
-async function aiGenerateAll() {
-    const name = document.getElementById('productName').value;
-
-    if (!name) {
-        showNotification('❌ Сначала введите название товара!', 'warning');
-        return;
-    }
-
-    addAIMessage(`🚀 Запускаю полную ИИ-оптимизацию товара '${name}'! Пожалуйста, подождите...`, true);
-
-    setTimeout(async () => {
-        removeTemporaryMessages();
-
-        await aiGenerateDescription();
-        setTimeout(async () => {
-            await aiSuggestPrice();
-            setTimeout(async () => {
-                await aiGenerateTags();
-                setTimeout(async () => {
-                    await generateSEO();
-                    setTimeout(() => {
-                        const recommendBadge = document.getElementById('badge_recommend');
-                        const newBadge = document.getElementById('badge_new');
-
-                        if (recommendBadge) recommendBadge.checked = true;
-                        if (newBadge) newBadge.checked = true;
-                        updateBadges();
-
-                        addAIMessage('🎉 Полная ИИ-оптимизация завершена! Товар готов к публикации! 🚀');
-                        showNotification('🎉 ИИ оптимизация завершена!', 'success', 8000);
-
-                    }, 1000);
-                }, 1000);
-            }, 1000);
-        }, 1000);
-    }, 2000);
-}
-
-// Остальные ИИ функции (заглушки)
-async function aiGenerateDescription() {
-    addAIMessage('📝 Генерирую уникальное описание на основе ИИ-анализа...', true);
-    setTimeout(() => {
-        removeTemporaryMessages();
-        addAIMessage('✅ Описание сгенерировано! Создал продающее описание с ключевыми преимуществами и SEO-оптимизацией.');
-        showNotification('📝 Описание сгенерировано с помощью ИИ!', 'success');
-    }, 2500);
-}
-
-async function aiSuggestPrice() {
-    addAIMessage('💰 Анализирую рынок и конкурентов для определения оптимальной цены...', true);
-    setTimeout(() => {
-        removeTemporaryMessages();
-        addAIMessage('💰 Рекомендуемая цена определена на основе анализа рынка! Установил конкурентоспособную цену с привлекательной скидкой.');
-        showNotification('💰 Цена оптимизирована с помощью ИИ!', 'success');
-    }, 3000);
-}
-
-async function aiGenerateTags() {
-    addAIMessage('🏷️ Подбираю эффективные теги для поиска...', true);
-    setTimeout(() => {
-        removeTemporaryMessages();
-        addAIMessage('🏷️ Теги сгенерированы! Создал набор SEO-оптимизированных тегов для лучшей находимости товара.');
-        showNotification('🏷️ Теги созданы с помощью ИИ!', 'success');
-    }, 2000);
-}
-
-async function generateSEO() {
-    addAIMessage('🎯 Оптимизирую SEO параметры...', true);
-    setTimeout(() => {
-        removeTemporaryMessages();
-        addAIMessage('🎯 SEO оптимизация завершена! Создал мета-теги и оптимизировал контент для поисковых систем.');
-        showNotification('🎯 SEO оптимизирован!', 'success');
-    }, 2000);
-}
-
-function saveAsDraft() {
-    showNotification('💾 Черновик сохранен в локальном хранилище!', 'success');
-    addAIMessage('💾 Черновик сохранен! Можете продолжить редактирование позже.');
-}
-
-function aiValidateForm() {
-    const name = document.getElementById('productName').value;
-    const price = document.getElementById('productPrice').value;
-    const description = document.getElementById('productDescription').value;
-    const category = document.getElementById('productCategory').value;
-
-    if (!name || !price || !description || !category) {
-        showNotification('⚠️ Заполните обязательные поля!', 'warning');
-        addAIMessage('⚠️ Обнаружены незаполненные обязательные поля! Заполните название, категорию, цену и описание.');
-    } else {
-        showNotification('✅ Товар готов к публикации!', 'success');
-        addAIMessage('✅ Провел проверку - товар готов к публикации! Все ключевые поля заполнены.');
-    }
-}
-
-// Простые заглушки для остальных функций
-function aiImproveDescription() { addAIMessage('📝 Улучшаю описание... Добавил больше продающих элементов!'); }
-function aiAnalyzeDescription() { addAIMessage('📊 Анализ описания: отличная читабельность и SEO!'); }
-function aiOptimizeSEO() { addAIMessage('🎯 Углубленная SEO оптимизация завершена! Рост позиций ожидается.'); }
-function aiSuggestName() { addAIMessage('💡 Предлагаю название на основе категории!'); }
-function showTemplates() { addAIMessage('📋 Шаблоны находятся в боковой панели справа!'); }
-function aiGenerateImage() { addAIMessage('🎨 Генерация изображений ИИ скоро будет доступна!'); }
-function aiEnhanceImages() { addAIMessage('🖼️ Улучшение изображений завершено!'); }
-function aiOptimizeImages() { addAIMessage('🚀 Оптимизация изображений завершена!'); }
-function aiRemoveBackground() { addAIMessage('✂️ Удаление фона - премиум функция!'); }
-function aiEnhanceSpecificImage() { addAIMessage('✨ ИИ-улучшение изображения завершено! Качество повышено.'); }
-function cropImage() { addAIMessage('✂️ Редактор изображений в разработке!'); }
-function editImage() { addAIMessage('✂️ Редактор изображений в разработке!'); }
-
-console.log('🚀 ПОЛНАЯ версия мега крутого ИИ редактора товаров загружена!');
-console.log(`🔧 Товар ID: ${currentProductId || 'новый'}`);
-console.log('💡 Горячие клавиши: Ctrl+S (сохранить), Ctrl+Enter (ИИ чат)');
 </script>
-
-</body>
-</html>
