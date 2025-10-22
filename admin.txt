@@ -1,489 +1,320 @@
 <?php
-require_once '../functions.php';
-initSession();
+/**
+ * Файловая JSON база данных для конструктора визиток
+ * @author ART-FOTO Team
+ * @version 2.0 MEGA
+ */
 
-// Обработка AJAX запросов админки
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
-    header('Content-Type: application/json; charset=utf-8');
+class Database {
+    private $dataPath;
+    private $uploadsPath;
+    private $templatesPath;
+    private $projectsPath;
 
-    try {
-        switch ($_POST['action']) {
-            case 'delete_product':
-                $id = (int)($_POST['id'] ?? 0);
-                $result = deleteProduct($id);
-                echo json_encode([
-                    'success' => $result,
-                    'message' => $result ? 'Товар удален' : 'Ошибка удаления товара'
-                ]);
-                break;
+    public function __construct() {
+        $this->dataPath = __DIR__ . '/data/';
+        $this->uploadsPath = $this->dataPath . 'uploads/';
+        $this->templatesPath = $this->dataPath . 'templates/';
+        $this->projectsPath = $this->dataPath . 'projects/';
 
-            case 'update_order_status':
-                $id = (int)($_POST['id'] ?? 0);
-                $status = trim($_POST['status'] ?? '');
-                $result = updateOrderStatus($id, $status);
-                echo json_encode([
-                    'success' => $result,
-                    'message' => $result ? 'Статус заказа обновлен' : 'Ошибка обновления статуса'
-                ]);
-                break;
-
-            case 'delete_category':
-                $id = (int)($_POST['id'] ?? 0);
-                $result = deleteCategory($id);
-                echo json_encode([
-                    'success' => $result,
-                    'message' => $result ? 'Категория удалена' : 'Ошибка удаления категории'
-                ]);
-                break;
-
-            default:
-                echo json_encode(['success' => false, 'message' => 'Неизвестное действие']);
-                break;
-        }
-    } catch (Exception $e) {
-        error_log('Ошибка в админ панели: ' . $e->getMessage());
-        echo json_encode(['success' => false, 'message' => 'Внутренняя ошибка сервера']);
+        $this->initDirectories();
     }
-    exit;
-}
 
-// Получаем статистику и текущую страницу
-try {
-    $stats = getDashboardStats();
-    $page = trim($_GET['page'] ?? 'dashboard');
+    private function initDirectories() {
+        $dirs = [
+            $this->dataPath,
+            $this->uploadsPath,
+            $this->templatesPath,
+            $this->projectsPath,
+            __DIR__ . '/backups/'
+        ];
 
-    // Безопасность: разрешенные страницы
-    $allowedPages = [
-        'dashboard', 'products', 'add_product', 'product_editor', 'categories', 
-        'orders', 'statistics', 'settings', 'news_mega_system', 'reviews', 
-        'slider', 'plant_constructor', 'plant_library'
-    ];
+        foreach ($dirs as $dir) {
+            if (!is_dir($dir)) {
+                mkdir($dir, 0755, true);
+            }
+        }
 
-    if (!in_array($page, $allowedPages)) {
-        $page = 'dashboard';
+        $htaccess = $this->dataPath . '.htaccess';
+        if (!file_exists($htaccess)) {
+            file_put_contents($htaccess, "Options -Indexes\nDeny from all");
+        }
     }
-} catch (Exception $e) {
-    error_log('Ошибка загрузки админ данных: ' . $e->getMessage());
-    $stats = [
-        'total_products' => 0, 'total_categories' => 0, 'total_orders' => 0, 
-        'today_orders' => 0, 'month_orders' => 0, 'total_revenue' => 0, 'month_revenue' => 0
-    ];
-    $page = 'dashboard';
-}
-?>
-<!DOCTYPE html>
-<html lang='ru'>
-<head>
-    <meta charset='UTF-8'>
-    <meta name='viewport' content='width=device-width, initial-scale=1.0'>
-    <title>Админ панель - АкваСбор</title>
-    <link href='https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css' rel='stylesheet'>
-    <link href='https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css' rel='stylesheet'>
-    <link href='https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap' rel='stylesheet'>
 
-    <style>
-        * { font-family: 'Inter', sans-serif; }
+    // Сохранить проект
+    public function saveProject($userId, $projectData) {
+        $userId = $this->sanitize($userId);
+        $userDir = $this->projectsPath . $userId . '/';
 
-        .sidebar {
-            height: 100vh;
-            background: linear-gradient(135deg, #0EA5E9 0%, #10B981 100%);
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 250px;
-            overflow-y: auto;
-            z-index: 1000;
-            box-shadow: 2px 0 10px rgba(0,0,0,0.1);
+        if (!is_dir($userDir)) {
+            mkdir($userDir, 0755, true);
         }
 
-        .sidebar .nav-link {
-            color: rgba(255, 255, 255, 0.8);
-            padding: 12px 20px;
-            margin: 2px 10px;
-            border-radius: 8px;
-            transition: all 0.3s ease;
-            font-weight: 500;
-            text-decoration: none;
+        $projectId = $projectData['id'] ?? $this->generateId();
+        $projectData['id'] = $projectId;
+        $projectData['userId'] = $userId;
+        $projectData['updated'] = date('Y-m-d H:i:s');
+
+        if (!isset($projectData['created'])) {
+            $projectData['created'] = $projectData['updated'];
         }
 
-        .sidebar .nav-link:hover,
-        .sidebar .nav-link.active {
-            color: white;
-            background-color: rgba(255, 255, 255, 0.15);
-            transform: translateX(5px);
+        $file = $userDir . $projectId . '.json';
+        $result = file_put_contents($file, json_encode($projectData, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
+
+        return [
+            'success' => $result !== false,
+            'id' => $projectId,
+            'message' => 'Проект сохранён'
+        ];
+    }
+
+    // Получить проект
+    public function getProject($userId, $projectId) {
+        $userId = $this->sanitize($userId);
+        $projectId = $this->sanitize($projectId);
+        $file = $this->projectsPath . $userId . '/' . $projectId . '.json';
+
+        if (file_exists($file)) {
+            $data = json_decode(file_get_contents($file), true);
+            return [
+                'success' => true,
+                'data' => $data
+            ];
         }
 
-        .main-content {
-            margin-left: 250px;
-            padding: 2rem;
-            min-height: 100vh;
-            background: #F8FAFC;
+        return [
+            'success' => false,
+            'error' => 'Проект не найден'
+        ];
+    }
+
+    // Список проектов пользователя
+    public function getUserProjects($userId) {
+        $userId = $this->sanitize($userId);
+        $userDir = $this->projectsPath . $userId . '/';
+
+        if (!is_dir($userDir)) {
+            return [
+                'success' => true,
+                'data' => []
+            ];
         }
 
-        .logo {
-            color: white;
-            font-size: 1.25rem;
-            font-weight: 700;
-            padding: 1.5rem;
-            text-align: center;
-            border-bottom: 1px solid rgba(255, 255, 255, 0.2);
-            margin-bottom: 1rem;
+        $projects = [];
+        foreach (glob($userDir . '*.json') as $file) {
+            $data = json_decode(file_get_contents($file), true);
+            $projects[] = [
+                'id' => $data['id'],
+                'name' => $data['name'] ?? 'Без названия',
+                'preview' => $data['preview'] ?? null,
+                'created' => $data['created'] ?? null,
+                'updated' => $data['updated'] ?? null,
+                'category' => $data['category'] ?? 'other'
+            ];
         }
 
-        .stat-card {
-            border: none;
-            border-radius: 12px;
-            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.08);
-            transition: all 0.3s ease;
-            overflow: hidden;
-        }
-
-        .stat-card:hover {
-            transform: translateY(-5px);
-            box-shadow: 0 8px 25px rgba(0, 0, 0, 0.15);
-        }
-
-        .stat-icon {
-            width: 60px;
-            height: 60px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 1.5rem;
-            color: white;
-            margin-bottom: 1rem;
-        }
-
-        .bg-gradient-primary { background: linear-gradient(135deg, #0EA5E9 0%, #0284C7 100%); }
-        .bg-gradient-success { background: linear-gradient(135deg, #10B981 0%, #059669 100%); }
-        .bg-gradient-info { background: linear-gradient(135deg, #06B6D4 0%, #0891B2 100%); }
-        .bg-gradient-warning { background: linear-gradient(135deg, #F59E0B 0%, #D97706 100%); }
-        .bg-gradient-danger { background: linear-gradient(135deg, #EF4444 0%, #DC2626 100%); }
-
-        .table-hover tbody tr:hover {
-            background-color: rgba(14, 165, 233, 0.05);
-        }
-
-        .btn { border-radius: 8px; }
-        .btn-action { padding: 5px 10px; margin: 2px; }
-
-        .page-header {
-            background: white;
-            border-radius: 12px;
-            padding: 1.5rem;
-            margin-bottom: 2rem;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
-        }
-
-        .content-card {
-            background: white;
-            border-radius: 12px;
-            padding: 1.5rem;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
-            border: 1px solid #E2E8F0;
-        }
-
-        /* Responsive */
-        @media (max-width: 768px) {
-            .sidebar {
-                transform: translateX(-100%);
-                transition: transform 0.3s ease;
-            }
-            .sidebar.show {
-                transform: translateX(0);
-            }
-            .main-content {
-                margin-left: 0;
-                padding: 1rem;
-            }
-        }
-    </style>
-</head>
-<body>
-    <!-- Sidebar -->
-    <div class='sidebar' id='sidebar'>
-        <div class='logo'>
-            <i class='fas fa-fish'></i> АкваАдмин
-        </div>
-        <nav class='nav flex-column'>
-            <a class='nav-link <?= $page == 'dashboard' ? 'active' : '' ?>' href='?page=dashboard'>
-                <i class='fas fa-tachometer-alt me-2'></i> Дашборд
-            </a>
-            <a class='nav-link <?= $page == 'products' ? 'active' : '' ?>' href='?page=products'>
-                <i class='fas fa-fish me-2'></i> Товары
-            </a>
-            <a class='nav-link <?= $page == 'add_product' ? 'active' : '' ?>' href='?page=add_product'>
-                <i class='fas fa-plus me-2'></i> Добавить товар
-            </a>
-            <a class='nav-link <?= $page == 'product_editor' ? 'active' : '' ?>' href='?page=product_editor'>
-                <i class='fas fa-edit me-2'></i> Редактор товаров
-            </a>
-            <a class='nav-link <?= $page == 'categories' ? 'active' : '' ?>' href='?page=categories'>
-                <i class='fas fa-tags me-2'></i> Категории
-            </a>
-            <a class='nav-link <?= $page == 'orders' ? 'active' : '' ?>' href='?page=orders'>
-                <i class='fas fa-shopping-cart me-2'></i> Заказы
-            </a>
-            <a class='nav-link <?= $page == 'news_mega_system' ? 'active' : '' ?>' href='/admin/pages/news_mega_system.php'>
-                <i class='fas fa-newspaper me-2'></i> Новости
-            </a>
-            <a class='nav-link <?= $page == 'reviews' ? 'active' : '' ?>' href='?page=reviews'>
-                <i class='fas fa-star me-2'></i> Отзывы
-            </a>
-            <a class='nav-link <?= $page == 'slider' ? 'active' : '' ?>' href='?page=slider'>
-                <i class='fas fa-images me-2'></i> Слайдер
-            </a>
-            <a class='nav-link <?= $page == 'statistics' ? 'active' : '' ?>' href='?page=statistics'>
-                <i class='fas fa-chart-bar me-2'></i> Статистика
-            </a>
-            <a class='nav-link <?= $page == 'plant_constructor' ? 'active' : '' ?>' href='?page=plant_constructor'>
-                <i class='fas fa-seedling me-2'></i> Конструктор наборов растений
-            </a>
-            <a class='nav-link <?= $page == 'plant_library' ? 'active' : '' ?>' href='?page=plant_library'>
-                <i class='fas fa-leaf me-2'></i> Библиотека растений
-            </a>
-            <a class='nav-link <?= $page == 'settings' ? 'active' : '' ?>' href='?page=settings'>
-                <i class='fas fa-cog me-2'></i> Настройки
-            </a>
-            <hr style='border-color: rgba(255, 255, 255, 0.2); margin: 1rem;'>
-            <a class='nav-link' href='../index.php' target='_blank'>
-                <i class='fas fa-external-link-alt me-2'></i> Посмотреть сайт
-            </a>
-        </nav>
-    </div>
-
-    <!-- Main Content -->
-    <div class='main-content'>
-        <!-- Mobile menu toggle -->
-        <button class='btn btn-primary d-md-none mb-3' type='button' onclick='toggleSidebar()'>
-            <i class='fas fa-bars'></i> Меню
-        </button>
-
-        <?php
-        // Подключаем страницы
-        $pageFile = "pages/{$page}.php";
-
-        if (file_exists($pageFile)) {
-            include $pageFile;
-        } else {
-            // Показываем базовый дашборд если файл страницы не найден
-            ?>
-            <div class='page-header'>
-                <h1><i class='fas fa-tachometer-alt me-2 text-primary'></i>Панель управления АкваСбор</h1>
-                <p class='text-muted mb-0'>Добро пожаловать в административную панель</p>
-            </div>
-
-            <!-- Quick Stats -->
-            <div class='row mb-4'>
-                <div class='col-xl-3 col-md-6 mb-4'>
-                    <div class='card stat-card h-100'>
-                        <div class='card-body text-center'>
-                            <div class='stat-icon bg-gradient-primary mx-auto'>
-                                <i class='fas fa-fish'></i>
-                            </div>
-                            <h3 class='text-dark'><?= $stats['total_products'] ?></h3>
-                            <p class='text-muted mb-0'>Товаров</p>
-                        </div>
-                    </div>
-                </div>
-                <div class='col-xl-3 col-md-6 mb-4'>
-                    <div class='card stat-card h-100'>
-                        <div class='card-body text-center'>
-                            <div class='stat-icon bg-gradient-success mx-auto'>
-                                <i class='fas fa-tags'></i>
-                            </div>
-                            <h3 class='text-dark'><?= $stats['total_categories'] ?></h3>
-                            <p class='text-muted mb-0'>Категорий</p>
-                        </div>
-                    </div>
-                </div>
-                <div class='col-xl-3 col-md-6 mb-4'>
-                    <div class='card stat-card h-100'>
-                        <div class='card-body text-center'>
-                            <div class='stat-icon bg-gradient-info mx-auto'>
-                                <i class='fas fa-shopping-cart'></i>
-                            </div>
-                            <h3 class='text-dark'><?= $stats['total_orders'] ?></h3>
-                            <p class='text-muted mb-0'>Заказов</p>
-                        </div>
-                    </div>
-                </div>
-                <div class='col-xl-3 col-md-6 mb-4'>
-                    <div class='card stat-card h-100'>
-                        <div class='card-body text-center'>
-                            <div class='stat-icon bg-gradient-warning mx-auto'>
-                                <i class='fas fa-ruble-sign'></i>
-                            </div>
-                            <h3 class='text-dark'><?= formatPrice($stats['total_revenue']) ?></h3>
-                            <p class='text-muted mb-0'>Выручка</p>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Actions -->
-            <div class='content-card'>
-                <h4 class='mb-4'>Быстрые действия</h4>
-                <div class='row'>
-                    <div class='col-md-3 mb-3'>
-                        <a href='?page=add_product' class='btn btn-primary w-100 py-3'>
-                            <i class='fas fa-plus d-block mb-2' style='font-size: 2rem;'></i>
-                            Добавить товар
-                        </a>
-                    </div>
-                    <div class='col-md-3 mb-3'>
-                        <a href='?page=product_editor' class='btn btn-success w-100 py-3'>
-                            <i class='fas fa-edit d-block mb-2' style='font-size: 2rem;'></i>
-                            Редактор товаров
-                        </a>
-                    </div>
-                    <div class='col-md-3 mb-3'>
-                        <a href='?page=orders' class='btn btn-info w-100 py-3'>
-                            <i class='fas fa-list d-block mb-2' style='font-size: 2rem;'></i>
-                            Заказы
-                        </a>
-                    </div>
-                    <div class='col-md-3 mb-3'>
-                        <a href='?page=products' class='btn btn-warning w-100 py-3'>
-                            <i class='fas fa-fish d-block mb-2' style='font-size: 2rem;'></i>
-                            Все товары
-                        </a>
-                    </div>
-                </div>
-            </div>
-
-            <?php if ($page !== 'dashboard'): ?>
-                <div class='alert alert-warning mt-4'>
-                    <i class='fas fa-exclamation-triangle me-2'></i>
-                    <strong>Страница не найдена:</strong> Файл <code><?= htmlspecialchars($pageFile) ?></code> не существует.
-                    <br>Создайте файл в папке <code>admin/pages/</code> для отображения этой страницы.
-                </div>
-            <?php endif; ?>
-            <?php
-        }
-        ?>
-    </div>
-
-    <script src='https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js'></script>
-    <script>
-        // Переключение сайдбара на мобильных
-        function toggleSidebar() {
-            const sidebar = document.getElementById('sidebar');
-            sidebar.classList.toggle('show');
-        }
-
-        // Закрытие сайдбара при клике вне его на мобильных
-        document.addEventListener('click', function(event) {
-            const sidebar = document.getElementById('sidebar');
-            const toggleBtn = event.target.closest('[onclick="toggleSidebar()"]');
-
-            if (!sidebar.contains(event.target) && !toggleBtn && window.innerWidth <= 768) {
-                sidebar.classList.remove('show');
-            }
+        usort($projects, function($a, $b) {
+            return strtotime($b['updated']) - strtotime($a['updated']);
         });
 
-        // Универсальные функции для админки
-        async function deleteItem(type, id) {
-            const messages = {
-                product: 'товар',
-                category: 'категорию',
-                order: 'заказ'
-            };
+        return [
+            'success' => true,
+            'data' => $projects
+        ];
+    }
 
-            if (!confirm(`Вы уверены, что хотите удалить этот ${messages[type] || 'элемент'}?`)) {
-                return;
+    // Удалить проект
+    public function deleteProject($userId, $projectId) {
+        $userId = $this->sanitize($userId);
+        $projectId = $this->sanitize($projectId);
+        $file = $this->projectsPath . $userId . '/' . $projectId . '.json';
+
+        if (file_exists($file)) {
+            $result = unlink($file);
+            return [
+                'success' => $result,
+                'message' => 'Проект удалён'
+            ];
+        }
+
+        return [
+            'success' => false,
+            'error' => 'Проект не найден'
+        ];
+    }
+
+    // Загрузить изображение
+    public function uploadImage($userId, $file) {
+        $userId = $this->sanitize($userId);
+        $userDir = $this->uploadsPath . $userId . '/';
+
+        if (!is_dir($userDir)) {
+            mkdir($userDir, 0755, true);
+        }
+
+        // Проверка типа файла
+        $allowedTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/svg+xml'];
+        if (!in_array($file['type'], $allowedTypes)) {
+            return [
+                'success' => false,
+                'error' => 'Недопустимый тип файла'
+            ];
+        }
+
+        // Проверка размера (макс 10MB)
+        if ($file['size'] > 10485760) {
+            return [
+                'success' => false,
+                'error' => 'Файл слишком большой (макс 10MB)'
+            ];
+        }
+
+        $hash = md5_file($file['tmp_name']);
+        $ext = pathinfo($file['name'], PATHINFO_EXTENSION);
+        $filename = $hash . '.' . $ext;
+        $filepath = $userDir . $filename;
+
+        if (move_uploaded_file($file['tmp_name'], $filepath)) {
+            return [
+                'success' => true,
+                'url' => '/data/uploads/' . $userId . '/' . $filename,
+                'filename' => $filename
+            ];
+        }
+
+        return [
+            'success' => false,
+            'error' => 'Ошибка загрузки'
+        ];
+    }
+
+    // Получить шаблоны
+    public function getTemplates($category = null) {
+        if ($category) {
+            $file = $this->templatesPath . $category . '.json';
+            if (file_exists($file)) {
+                $data = json_decode(file_get_contents($file), true);
+                return [
+                    'success' => true,
+                    'data' => $data
+                ];
+            }
+            return [
+                'success' => false,
+                'error' => 'Категория не найдена'
+            ];
+        }
+
+        // Все категории
+        $templates = [];
+        foreach (glob($this->templatesPath . '*.json') as $file) {
+            $categoryName = basename($file, '.json');
+            $data = json_decode(file_get_contents($file), true);
+            $templates[$categoryName] = $data;
+        }
+
+        return [
+            'success' => true,
+            'data' => $templates
+        ];
+    }
+
+    // Получить все категории
+    public function getCategories() {
+        $categories = [
+            'medical' => [
+                'name' => 'Медицина',
+                'icon' => '⚕️',
+                'description' => 'Врачи, клиники, медицинские центры'
+            ],
+            'business' => [
+                'name' => 'Бизнес',
+                'icon' => '💼',
+                'description' => 'Корпоративные визитки для бизнеса'
+            ],
+            'creative' => [
+                'name' => 'Креатив',
+                'icon' => '🎨',
+                'description' => 'Дизайнеры, фотографы, художники'
+            ],
+            'restaurant' => [
+                'name' => 'Рестораны',
+                'icon' => '🍽️',
+                'description' => 'Кафе, рестораны, доставка еды'
+            ],
+            'realty' => [
+                'name' => 'Недвижимость',
+                'icon' => '🏠',
+                'description' => 'Риелторы, агентства недвижимости'
+            ],
+            'beauty' => [
+                'name' => 'Красота',
+                'icon' => '💅',
+                'description' => 'Салоны красоты, мастера'
+            ]
+        ];
+
+        return [
+            'success' => true,
+            'data' => $categories
+        ];
+    }
+
+    // Создать резервную копию
+    public function createBackup() {
+        $backupDir = __DIR__ . '/backups/';
+        $date = date('Y-m-d_H-i-s');
+        $zipFile = $backupDir . "backup_{$date}.zip";
+
+        $zip = new ZipArchive();
+        if ($zip->open($zipFile, ZipArchive::CREATE | ZipArchive::OVERWRITE) === TRUE) {
+
+            $files = new RecursiveIteratorIterator(
+                new RecursiveDirectoryIterator($this->dataPath),
+                RecursiveIteratorIterator::LEAVES_ONLY
+            );
+
+            foreach ($files as $file) {
+                if (!$file->isDir()) {
+                    $filePath = $file->getRealPath();
+                    $relativePath = 'data/' . substr($filePath, strlen($this->dataPath));
+                    $zip->addFile($filePath, $relativePath);
+                }
             }
 
-            try {
-                const formData = new FormData();
-                formData.append('action', `delete_${type}`);
-                formData.append('id', id);
+            $zip->close();
 
-                const response = await fetch('', {
-                    method: 'POST',
-                    body: formData
+            // Удалить старые бэкапы (оставить последние 10)
+            $backups = glob($backupDir . 'backup_*.zip');
+            if (count($backups) > 10) {
+                usort($backups, function($a, $b) {
+                    return filemtime($a) - filemtime($b);
                 });
-
-                const result = await response.json();
-
-                if (result.success) {
-                    showNotification(result.message, 'success');
-                    setTimeout(() => location.reload(), 1000);
-                } else {
-                    showNotification(result.message, 'error');
+                foreach (array_slice($backups, 0, -10) as $old) {
+                    unlink($old);
                 }
-
-            } catch (error) {
-                console.error('Ошибка удаления:', error);
-                showNotification('Ошибка удаления', 'error');
             }
+
+            return [
+                'success' => true,
+                'file' => $zipFile,
+                'size' => filesize($zipFile)
+            ];
         }
 
-        // Удаление товара
-        function deleteProduct(id) {
-            deleteItem('product', id);
-        }
+        return [
+            'success' => false,
+            'error' => 'Ошибка создания бэкапа'
+        ];
+    }
 
-        // Удаление категории
-        function deleteCategory(id) {
-            deleteItem('category', id);
-        }
+    // Вспомогательные методы
+    private function sanitize($string) {
+        return preg_replace('/[^a-zA-Z0-9_-]/', '', $string);
+    }
 
-        // Обновление статуса заказа
-        async function updateOrderStatus(id, status) {
-            try {
-                const formData = new FormData();
-                formData.append('action', 'update_order_status');
-                formData.append('id', id);
-                formData.append('status', status);
-
-                const response = await fetch('', {
-                    method: 'POST',
-                    body: formData
-                });
-
-                const result = await response.json();
-
-                if (result.success) {
-                    showNotification(result.message, 'success');
-                    setTimeout(() => location.reload(), 1000);
-                } else {
-                    showNotification(result.message, 'error');
-                }
-
-            } catch (error) {
-                console.error('Ошибка обновления статуса:', error);
-                showNotification('Ошибка обновления статуса', 'error');
-            }
-        }
-
-        // Показать уведомление
-        function showNotification(message, type = 'success') {
-            const alertClass = type === 'success' ? 'alert-success' : 'alert-danger';
-            const icon = type === 'success' ? 'fas fa-check-circle' : 'fas fa-exclamation-circle';
-
-            const notification = document.createElement('div');
-            notification.className = `alert ${alertClass} alert-dismissible fade show position-fixed`;
-            notification.style.cssText = 'top: 20px; right: 20px; z-index: 9999; min-width: 300px; box-shadow: 0 4px 15px rgba(0,0,0,0.2);';
-            notification.innerHTML = `
-                <i class='${icon} me-2'></i>${message}
-                <button type='button' class='btn-close' data-bs-dismiss='alert'></button>
-            `;
-
-            document.body.appendChild(notification);
-
-            setTimeout(() => {
-                if (notification.parentNode) {
-                    notification.remove();
-                }
-            }, 5000);
-        }
-
-        // Инициализация при загрузке
-        document.addEventListener('DOMContentLoaded', function() {
-            console.log('Админ панель АкваСбор загружена');
-        });
-    </script>
-</body>
-</html>
+    private function generateId() {
+        return uniqid('card_', true);
+    }
+}
